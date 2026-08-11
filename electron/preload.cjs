@@ -9,7 +9,7 @@ contextBridge.exposeInMainWorld("novelAPI", {
   getAppState: () => ipcRenderer.invoke("app:get-state"),
   createProject: (payload) => ipcRenderer.invoke("project:create", payload),
   openProject: () => ipcRenderer.invoke("project:open"),
-  importDocument: () => ipcRenderer.invoke("document:import"),
+  importDocument: (payload) => ipcRenderer.invoke("document:import", payload),
   exportChapterDocx: (chapterId) => ipcRenderer.invoke("chapter:export-docx", chapterId),
   openOriginalDocument: (chapterId) => ipcRenderer.invoke("chapter:open-original", chapterId),
   refreshChapterFromOriginal: (chapterId) => ipcRenderer.invoke("chapter:refresh-original", chapterId),

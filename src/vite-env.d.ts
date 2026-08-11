@@ -9,7 +9,7 @@ declare global {
       getAppState: () => Promise<AppState>;
       createProject: (payload: { title: string }) => Promise<AppState | { canceled: true }>;
       openProject: () => Promise<AppState | { canceled: true }>;
-      importDocument: () => Promise<
+      importDocument: (payload?: { volume?: string }) => Promise<
         | (AppState & {
             importSummary?: {
               total: number;
