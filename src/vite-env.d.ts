@@ -5,10 +5,16 @@ import type {
   ChapterVersion,
   ChapterVersionCompare,
   ConsistencyIssue,
+  ExtractedWorldCandidate,
   GlobalSearchResult,
+  AppearanceStat,
+  MaterialItem,
+  ProgressState,
   RelationshipEdge,
   RelationshipNode,
   TimelineEvent,
+  WorldMapEdge,
+  WorldMapNode,
   CharacterCard,
   WorldDoc,
 } from "./types";
@@ -17,6 +23,8 @@ declare global {
   interface Window {
     novelAPI: {
       onMenuAction: (callback: (action: string) => void) => () => void;
+      onImportProgress: (callback: (progress: ProgressState) => void) => () => void;
+      onIndexProgress: (callback: (progress: ProgressState) => void) => () => void;
       getAppState: () => Promise<AppState>;
       createProject: (payload: { title: string }) => Promise<AppState | { canceled: true }>;
       openProject: () => Promise<AppState | { canceled: true }>;
@@ -26,11 +34,13 @@ declare global {
               total: number;
               imported: number;
               failed: number;
+              canceled?: boolean;
               failures: Array<{ filePath: string; message: string }>;
             };
           })
         | { canceled: true; message?: string }
       >;
+      cancelImport: () => Promise<{ ok: true }>;
       exportChapterDocx: (chapterId: string) => Promise<{ filePath?: string; canceled?: true }>;
       openOriginalDocument: (chapterId: string) => Promise<{ filePath?: string; error?: string }>;
       refreshChapterFromOriginal: (chapterId: string) => Promise<{
@@ -42,11 +52,17 @@ declare global {
       }>;
       saveProjectSettings: (payload: Partial<AppState["config"]> & { selectedChapterId?: string }) => Promise<AppState>;
       exportBackup: () => Promise<{ filePath?: string; canceled?: true }>;
-      exportBookDocx: () => Promise<{ filePath?: string; canceled?: true }>;
+      exportBookDocx: (payload?: { includeOutline?: boolean; includeCharacters?: boolean; includeWorld?: boolean }) => Promise<{ filePath?: string; canceled?: true }>;
       globalSearch: (payload: { query: string }) => Promise<{ query: string; results: GlobalSearchResult[] }>;
-      buildTimeline: () => Promise<{ events: TimelineEvent[] }>;
-      buildRelationshipGraph: () => Promise<{ nodes: RelationshipNode[]; edges: RelationshipEdge[] }>;
+      buildTimeline: (payload?: { mode?: "local" | "ai" }) => Promise<{ events: TimelineEvent[]; contextCount?: number; apiError?: string }>;
+      buildRelationshipGraph: (payload?: { characterNames?: string[]; relationTypes?: string[] }) => Promise<{ nodes: RelationshipNode[]; edges: RelationshipEdge[] }>;
       analyzeConsistency: () => Promise<{ issues: ConsistencyIssue[]; contextCount: number; apiError?: string }>;
+      updateIssueStatus: (payload: { issueId: string; status: ConsistencyIssue["status"] }) => Promise<{ issueId: string; status: string; updatedAt: string }>;
+      getAppearanceStats: () => Promise<{ stats: AppearanceStat[] }>;
+      getWorldMap: () => Promise<{ nodes: WorldMapNode[]; edges: WorldMapEdge[] }>;
+      listMaterials: () => Promise<{ materials: MaterialItem[] }>;
+      saveMaterial: (payload: Partial<MaterialItem>) => Promise<{ material: MaterialItem; materials: MaterialItem[] }>;
+      deleteMaterial: (materialId: string) => Promise<{ materials: MaterialItem[] }>;
       createChapter: (payload: { title: string; volume?: string }) => Promise<AppState>;
       loadChapter: (chapterId: string) => Promise<{ chapter: AppState["selectedChapter"]; content: string }>;
       saveChapter: (payload: { chapterId: string; title: string; volume: string; content: string }) => Promise<{
@@ -71,6 +87,7 @@ declare global {
         embeddingWarning?: string;
         apiError?: string;
       }>;
+      editSelection: (payload: { action: "改写" | "润色" | "扩写" | "总结"; text: string }) => Promise<{ answer: string }>;
       generateCharactersFromOutline: () => Promise<{
         state: AppState;
         created: number;
@@ -87,13 +104,17 @@ declare global {
         titles: string[];
         contextCount: number;
       }>;
-      extractWorldCardsFromOutline: () => Promise<{
+      extractWorldCardsFromOutline: (payload?: { scope?: "book" | "chapter"; chapterId?: string }) => Promise<{
+        candidates: ExtractedWorldCandidate[];
+        contextCount: number;
+        scope: "book" | "chapter";
+      }>;
+      saveWorldCardCandidates: (payload: { candidates: ExtractedWorldCandidate[] }) => Promise<{
         state: AppState;
         created: number;
         updated: number;
         count: number;
         titles: string[];
-        contextCount: number;
       }>;
       rebuildIndex: () => Promise<{ chunks: number; state: AppState }>;
     };

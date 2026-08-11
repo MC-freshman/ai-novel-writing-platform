@@ -170,6 +170,8 @@ export interface ConsistencyIssue {
   detail: string;
   suggestion: string;
   evidence: string[];
+  status?: "待处理" | "已确认" | "已忽略" | "已修复";
+  statusUpdatedAt?: string;
 }
 
 export interface ChapterVersion {
@@ -195,4 +197,57 @@ export interface ChapterVersionCompare {
   removed: number;
   diff: VersionDiffLine[];
   truncated?: boolean;
+}
+
+export interface ProgressState {
+  active: boolean;
+  phase: string;
+  current: number;
+  total: number;
+  fileName?: string;
+  detail?: string;
+  cancellable?: boolean;
+}
+
+export interface ExtractedWorldCandidate {
+  id: string;
+  title: string;
+  category: string;
+  content: string;
+  selected: boolean;
+  action: "create" | "merge";
+  matchedDocId?: string;
+  matchedTitle?: string;
+}
+
+export interface AppearanceStat {
+  id: string;
+  name: string;
+  category: string;
+  total: number;
+  chapters: Array<{ chapterId: string; chapterTitle: string; volume: string; count: number }>;
+}
+
+export interface WorldMapNode {
+  id: string;
+  title: string;
+  category: string;
+  type: "地点" | "势力" | "物品" | "设定";
+  summary: string;
+}
+
+export interface WorldMapEdge {
+  id: string;
+  source: string;
+  target: string;
+  label: string;
+}
+
+export interface MaterialItem {
+  id: string;
+  title: string;
+  category: string;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
 }
