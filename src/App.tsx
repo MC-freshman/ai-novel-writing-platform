@@ -475,16 +475,28 @@ export default function App() {
     applyAppState(next);
   }
 
-  async function reorderChapter(targetId: string) {
-    if (!state || !draggingChapterId || draggingChapterId === targetId) return;
-    const ids = state.chapters.map((item) => item.id);
-    const from = ids.indexOf(draggingChapterId);
-    const to = ids.indexOf(targetId);
-    ids.splice(from, 1);
-    ids.splice(to, 0, draggingChapterId);
-    const result = await window.novelAPI.reorderChapters(ids);
-    setState({ ...state, chapters: result.chapters, config: { ...state.config, chapters: result.chapters } });
-    setDraggingChapterId(null);
+  async function moveDraggingChapter(volume: string, beforeChapterId = "") {
+    if (!state || !draggingChapterId) return;
+    if (beforeChapterId && draggingChapterId === beforeChapterId) {
+      setDraggingChapterId(null);
+      return;
+    }
+    if (dirty) await saveChapter();
+    const targetVolume = volume.trim() || "未分卷";
+    try {
+      const next = await window.novelAPI.moveChapterToVolume({
+        chapterId: draggingChapterId,
+        volume: targetVolume,
+        beforeChapterId,
+      });
+      applyAppState(next);
+      setView("chapters");
+      setStatus(`已移动到分组：${targetVolume}`);
+    } catch (error) {
+      setStatus(`移动失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setDraggingChapterId(null);
+    }
   }
 
   async function adjustOutlineLevel(chapterId: string, lineOrIndex: number, currentLevel: number, delta: number) {
@@ -579,10 +591,17 @@ export default function App() {
         setStatus(result.message || "已取消导入文档");
         return;
       }
+      const summary = result.importSummary;
       applyAppState(result);
       setView("chapters");
       setPreview(false);
-      setStatus("文档已导入为章节，并已加入知识库");
+      if (summary?.failed) {
+        setStatus(`已导入 ${summary.imported}/${summary.total} 个文档，${summary.failed} 个失败；成功导入的文档已加入知识库`);
+      } else if (summary?.imported && summary.imported > 1) {
+        setStatus(`已批量导入 ${summary.imported} 个文档，并已加入知识库`);
+      } else {
+        setStatus("文档已导入为章节，并已加入知识库");
+      }
     } catch (error) {
       setStatus(`导入失败：${error instanceof Error ? error.message : String(error)}`);
     }
@@ -926,7 +945,9 @@ export default function App() {
               onCreate={() => void createChapter()}
               onDelete={(id) => void deleteChapter(id)}
               onDragStart={setDraggingChapterId}
-              onDrop={(id) => void reorderChapter(id)}
+              onDragEnd={() => setDraggingChapterId(null)}
+              onDropToVolume={(volume) => void moveDraggingChapter(volume)}
+              onDropOnChapter={(chapter) => void moveDraggingChapter(chapter.volume || "未分卷", chapter.id)}
               onAdjustLevel={(chapterId, line, level, delta) => void adjustOutlineLevel(chapterId, line, level, delta)}
             />
             <div className="project-path" title={state.projectPath}>
@@ -1307,7 +1328,9 @@ function ChapterTree({
   onCreate,
   onDelete,
   onDragStart,
-  onDrop,
+  onDragEnd,
+  onDropToVolume,
+  onDropOnChapter,
   onAdjustLevel,
 }: {
   chapters: Chapter[];
@@ -1316,12 +1339,15 @@ function ChapterTree({
   onCreate: () => void;
   onDelete: (id: string) => void;
   onDragStart: (id: string) => void;
-  onDrop: (id: string) => void;
+  onDragEnd: () => void;
+  onDropToVolume: (volume: string) => void;
+  onDropOnChapter: (chapter: Chapter) => void;
   onAdjustLevel: (chapterId: string, line: number, level: number, delta: number) => void;
 }) {
   const [collapsedVolumes, setCollapsedVolumes] = useState<Set<string>>(() => new Set());
   const [collapsedChapters, setCollapsedChapters] = useState<Set<string>>(() => new Set());
   const [collapsedHeadings, setCollapsedHeadings] = useState<Set<string>>(() => new Set());
+  const [dragOverVolume, setDragOverVolume] = useState("");
   const grouped = useMemo(() => {
     const map = new Map<string, Chapter[]>();
     for (const chapter of chapters) {
@@ -1418,7 +1444,23 @@ function ChapterTree({
       </div>
       {grouped.map(([volume, items]) => (
         <div className="volume" key={volume}>
-          <button className="volume-title" onClick={() => toggleSet(setCollapsedVolumes, volume)} title={collapsedVolumes.has(volume) ? "展开分组" : "折叠分组"}>
+          <button
+            className={`volume-title ${dragOverVolume === volume ? "drag-over" : ""}`}
+            onClick={() => toggleSet(setCollapsedVolumes, volume)}
+            title={collapsedVolumes.has(volume) ? "展开分组" : "折叠分组"}
+            onDragOver={(event) => {
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "move";
+              setDragOverVolume(volume);
+            }}
+            onDragLeave={() => setDragOverVolume((current) => (current === volume ? "" : current))}
+            onDrop={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setDragOverVolume("");
+              onDropToVolume(volume);
+            }}
+          >
             {collapsedVolumes.has(volume) ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
             {volume}
           </button>
@@ -1431,9 +1473,21 @@ function ChapterTree({
                   <div
                     className={`chapter-item ${selectedId === chapter.id ? "active" : ""}`}
                     draggable
-                    onDragStart={() => onDragStart(chapter.id)}
-                    onDragOver={(event) => event.preventDefault()}
-                    onDrop={() => onDrop(chapter.id)}
+                    onDragStart={(event) => {
+                      event.dataTransfer.effectAllowed = "move";
+                      event.dataTransfer.setData("text/plain", chapter.id);
+                      onDragStart(chapter.id);
+                    }}
+                    onDragEnd={onDragEnd}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      event.dataTransfer.dropEffect = "move";
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onDropOnChapter(chapter);
+                    }}
                     onClick={() => onSelect(chapter.id)}
                   >
                     {outlineTree.length > 0 ? (

@@ -1715,8 +1715,8 @@ function registerIpcHandlers() {
   ipcMain.handle("document:import", async () => {
     const projectPath = await ensureCurrentProject();
     const result = await dialog.showOpenDialog(mainWindow, {
-      title: "导入文档为章节",
-      properties: ["openFile"],
+      title: "导入一个或多个文档为章节",
+      properties: ["openFile", "multiSelections"],
       filters: [
         { name: "支持的文档", extensions: ["docx", "txt", "md"] },
         { name: "Word 文档", extensions: ["docx"] },
@@ -1724,8 +1724,28 @@ function registerIpcHandlers() {
       ],
     });
     if (result.canceled || !result.filePaths[0]) return { canceled: true };
-    const imported = await importDocumentIntoProject(projectPath, result.filePaths[0]);
-    return buildAppState(projectPath, imported[0]?.chapter.id);
+    const imported = [];
+    const failures = [];
+    for (const filePath of result.filePaths) {
+      try {
+        imported.push(...(await importDocumentIntoProject(projectPath, filePath)));
+      } catch (error) {
+        failures.push({ filePath, message: error.message || String(error) });
+      }
+    }
+    if (!imported.length && failures.length) {
+      throw new Error(`导入失败：${failures.map((item) => `${path.basename(item.filePath)}：${item.message}`).join("；")}`);
+    }
+    const state = await buildAppState(projectPath, imported[imported.length - 1]?.chapter.id);
+    return {
+      ...state,
+      importSummary: {
+        total: result.filePaths.length,
+        imported: imported.length,
+        failed: failures.length,
+        failures,
+      },
+    };
   });
 
   ipcMain.handle("project:save-settings", async (_event, payload) => {
@@ -1874,6 +1894,32 @@ function registerIpcHandlers() {
       .map((item, index) => ({ ...item, order: index }));
     await saveConfig(projectPath, config);
     return { chapters: config.chapters };
+  });
+
+  ipcMain.handle("chapter:move-to-volume", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    const config = await loadConfig(projectPath);
+    const chapterId = String(payload?.chapterId || "");
+    const targetVolume = String(payload?.volume || "未分卷").trim() || "未分卷";
+    const beforeChapterId = String(payload?.beforeChapterId || "");
+    const chapter = config.chapters.find((item) => item.id === chapterId);
+    if (!chapter) throw new Error("文档不存在，无法移动。");
+
+    const ordered = config.chapters.slice().sort((a, b) => a.order - b.order);
+    const moving = { ...chapter, volume: targetVolume, updatedAt: nowIso() };
+    const rest = ordered.filter((item) => item.id !== chapterId);
+    let insertIndex = -1;
+    if (beforeChapterId && beforeChapterId !== chapterId) {
+      insertIndex = rest.findIndex((item) => item.id === beforeChapterId);
+    }
+    if (insertIndex < 0) {
+      const lastInVolume = rest.reduce((last, item, index) => ((item.volume || "未分卷") === targetVolume ? index : last), -1);
+      insertIndex = lastInVolume >= 0 ? lastInVolume + 1 : rest.length;
+    }
+    rest.splice(insertIndex, 0, moving);
+    config.chapters = rest.map((item, index) => ({ ...item, order: index }));
+    await saveConfig(projectPath, config);
+    return buildAppState(projectPath, chapterId);
   });
 
   ipcMain.handle("character:save", async (_event, payload) => {

@@ -9,7 +9,17 @@ declare global {
       getAppState: () => Promise<AppState>;
       createProject: (payload: { title: string }) => Promise<AppState | { canceled: true }>;
       openProject: () => Promise<AppState | { canceled: true }>;
-      importDocument: () => Promise<AppState | { canceled: true; message?: string }>;
+      importDocument: () => Promise<
+        | (AppState & {
+            importSummary?: {
+              total: number;
+              imported: number;
+              failed: number;
+              failures: Array<{ filePath: string; message: string }>;
+            };
+          })
+        | { canceled: true; message?: string }
+      >;
       exportChapterDocx: (chapterId: string) => Promise<{ filePath?: string; canceled?: true }>;
       openOriginalDocument: (chapterId: string) => Promise<{ filePath?: string; error?: string }>;
       refreshChapterFromOriginal: (chapterId: string) => Promise<{
@@ -31,6 +41,7 @@ declare global {
       }>;
       deleteChapter: (chapterId: string) => Promise<AppState>;
       reorderChapters: (chapterIds: string[]) => Promise<{ chapters: AppState["chapters"] }>;
+      moveChapterToVolume: (payload: { chapterId: string; volume: string; beforeChapterId?: string }) => Promise<AppState>;
       saveCharacter: (payload: Partial<CharacterCard>) => Promise<AppState>;
       deleteCharacter: (characterId: string) => Promise<AppState>;
       saveWorldDoc: (payload: Partial<WorldDoc>) => Promise<AppState>;
