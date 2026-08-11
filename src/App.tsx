@@ -64,6 +64,7 @@ import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import type {
   AppState,
+  AnalysisSnapshot,
   Chapter,
   ChapterVersion,
   ChapterVersionCompare,
@@ -76,6 +77,8 @@ import type {
   MaterialItem,
   ProgressState,
   Provider,
+  KnowledgeItem,
+  KnowledgeRole,
   RelationshipEdge,
   RelationshipNode,
   TimelineEvent,
@@ -346,7 +349,7 @@ export default function App() {
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState("正在打开项目...");
-  const [view, setView] = useState<"chapters" | "characters" | "world" | "analysis">("chapters");
+  const [view, setView] = useState<"chapters" | "characters" | "world" | "knowledge" | "analysis">("chapters");
   const [showSettings, setShowSettings] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   const [preview, setPreview] = useState(false);
@@ -1025,6 +1028,10 @@ export default function App() {
             <Upload size={16} />
             导入文档
           </button>
+          <button onClick={() => setView("knowledge")} title="整理文档在知识库中的归属">
+            <ListTree size={16} />
+            知识库
+          </button>
           <button onClick={exportChapterDocx} title="导出当前章节为 Word 文档">
             <FileDown size={16} />
             导出DOCX
@@ -1080,6 +1087,9 @@ export default function App() {
               </button>
               <button className={view === "world" ? "active" : ""} onClick={() => setView("world")}>
                 <Boxes size={16} /> 世界
+              </button>
+              <button className={view === "knowledge" ? "active" : ""} onClick={() => setView("knowledge")}>
+                <ListTree size={16} /> 知识库
               </button>
               <button className={view === "analysis" ? "active" : ""} onClick={() => setView("analysis")}>
                 <Search size={16} /> 分析
@@ -1210,6 +1220,8 @@ export default function App() {
               onGenerate={() => void generateWorldFromOutline()}
             />
           )}
+
+          {view === "knowledge" && <KnowledgeOrganizer state={state} onApplyState={applyAppState} onStatus={setStatus} />}
 
           {view === "analysis" && (
             <AnalysisPanel
@@ -1854,6 +1866,141 @@ function ChatPanel({
   );
 }
 
+function KnowledgeOrganizer({
+  state,
+  onApplyState,
+  onStatus,
+}: {
+  state: AppState;
+  onApplyState: (state: AppState) => void;
+  onStatus: (message: string) => void;
+}) {
+  const [items, setItems] = useState<KnowledgeItem[]>(() =>
+    state.chapters.map((chapter) => ({
+      id: chapter.id,
+      sourceId: chapter.id,
+      sourceType: "chapter",
+      title: chapter.title,
+      volume: chapter.volume || "未分卷",
+      knowledgeRole: chapter.knowledgeRole || "正文",
+      order: chapter.order,
+      wordCount: chapter.wordCount,
+      updatedAt: chapter.updatedAt,
+    })),
+  );
+  const [filter, setFilter] = useState("");
+  const [roleFilter, setRoleFilter] = useState<KnowledgeRole | "全部">("全部");
+  const [saving, setSaving] = useState(false);
+  const volumes = useMemo(() => [...new Set(items.map((item) => item.volume || "未分卷"))].sort((a, b) => a.localeCompare(b, "zh-CN")), [items]);
+  const visibleItems = useMemo(() => {
+    const keyword = filter.trim().toLowerCase();
+    return items.filter((item) => {
+      const roleMatched = roleFilter === "全部" || item.knowledgeRole === roleFilter;
+      const keywordMatched = !keyword || item.title.toLowerCase().includes(keyword) || item.volume.toLowerCase().includes(keyword);
+      return roleMatched && keywordMatched;
+    });
+  }, [filter, items, roleFilter]);
+  const groupedItems = useMemo(() => {
+    const map = new Map<string, KnowledgeItem[]>();
+    for (const item of visibleItems) map.set(item.volume || "未分卷", [...(map.get(item.volume || "未分卷") || []), item]);
+    return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0], "zh-CN"));
+  }, [visibleItems]);
+
+  useEffect(() => {
+    window.novelAPI
+      .listKnowledgeItems()
+      .then((result) => setItems(result.items))
+      .catch((error) => onStatus(`读取知识库整理信息失败：${error instanceof Error ? error.message : String(error)}`));
+  }, [state.projectPath]);
+
+  function updateItem(id: string, patch: Partial<KnowledgeItem>) {
+    setItems((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+  }
+
+  function applyRoleToVisible(role: KnowledgeRole) {
+    const ids = new Set(visibleItems.map((item) => item.id));
+    setItems((current) => current.map((item) => (ids.has(item.id) ? { ...item, knowledgeRole: role } : item)));
+  }
+
+  async function saveKnowledgeItems() {
+    setSaving(true);
+    onStatus("正在保存知识库分类...");
+    try {
+      const result = await window.novelAPI.updateKnowledgeItems({ items });
+      setItems(result.items);
+      onApplyState(result.state);
+      onStatus(`知识库整理完成：${result.items.length} 个文档已同步到目录树`);
+    } catch (error) {
+      onStatus(`保存知识库分类失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="knowledge-panel">
+      <header className="knowledge-header">
+        <div>
+          <ListTree size={20} />
+          <strong>知识库整理</strong>
+        </div>
+        <button className="primary" onClick={() => void saveKnowledgeItems()} disabled={saving}>
+          <Save size={16} />
+          保存整理
+        </button>
+      </header>
+      <div className="knowledge-toolbar">
+        <input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="搜索文档或分卷" />
+        <select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value as KnowledgeRole | "全部")}>
+          <option value="全部">全部类型</option>
+          <option value="大纲">大纲</option>
+          <option value="正文">正文</option>
+          <option value="补充材料">补充材料</option>
+        </select>
+        <button onClick={() => applyRoleToVisible("大纲")}>当前列表设为大纲</button>
+        <button onClick={() => applyRoleToVisible("正文")}>当前列表设为正文</button>
+        <button onClick={() => applyRoleToVisible("补充材料")}>当前列表设为补充材料</button>
+      </div>
+      <div className="knowledge-list">
+        {groupedItems.map(([volume, groupItems]) => (
+          <section key={volume} className="knowledge-group">
+            <header>
+              <strong>{volume}</strong>
+              <span>{groupItems.length} 个文档</span>
+            </header>
+            {groupItems.map((item) => (
+              <article key={item.id} className="knowledge-row">
+                <div>
+                  <strong>{item.title}</strong>
+                  <small>{item.wordCount.toLocaleString()} 字 / {formatDateTime(item.updatedAt)}</small>
+                </div>
+                <label>
+                  资料类型
+                  <select value={item.knowledgeRole} onChange={(event) => updateItem(item.id, { knowledgeRole: event.target.value as KnowledgeRole })}>
+                    <option value="大纲">大纲</option>
+                    <option value="正文">正文</option>
+                    <option value="补充材料">补充材料</option>
+                  </select>
+                </label>
+                <label>
+                  所属目录
+                  <input list="knowledge-volumes" value={item.volume} onChange={(event) => updateItem(item.id, { volume: event.target.value })} />
+                </label>
+              </article>
+            ))}
+          </section>
+        ))}
+        {!groupedItems.length && <div className="analysis-empty">没有匹配的文档。</div>}
+      </div>
+      <datalist id="knowledge-volumes">
+        {volumes.map((volume) => (
+          <option key={volume} value={volume} />
+        ))}
+      </datalist>
+    </section>
+  );
+}
+
 function AnalysisPanel({
   state,
   selectedChapterId,
@@ -1898,7 +2045,154 @@ function AnalysisPanel({
   const [materials, setMaterials] = useState<MaterialItem[]>([]);
   const [materialDraft, setMaterialDraft] = useState<Partial<MaterialItem>>({ title: "", category: "灵感", content: "" });
   const [busy, setBusy] = useState("");
+  const [analysisLoaded, setAnalysisLoaded] = useState(false);
+  const [relationSearch, setRelationSearch] = useState("");
+  const [relationCategoryFilter, setRelationCategoryFilter] = useState("");
+  const [graphScale, setGraphScale] = useState(1);
+  const [graphOffset, setGraphOffset] = useState({ x: 0, y: 0 });
+  const [graphDragStart, setGraphDragStart] = useState<{ x: number; y: number; offsetX: number; offsetY: number } | null>(null);
+  const [consistencyChapterIds, setConsistencyChapterIds] = useState<string[]>([]);
+  const [consistencySourceIds, setConsistencySourceIds] = useState<string[]>([]);
+  const [scopeOpen, setScopeOpen] = useState(false);
   const selectedChapter = state.chapters.find((chapter) => chapter.id === selectedChapterId) || state.selectedChapter;
+  const relationCategories = useMemo(() => [...new Set(state.characters.map((card) => normalizeCategoryLabel(card.category)))].sort((a, b) => a.localeCompare(b, "zh-CN")), [state.characters]);
+  const relationVisibleCards = useMemo(() => {
+    const keyword = relationSearch.trim().toLowerCase();
+    return state.characters.filter((card) => {
+      const category = normalizeCategoryLabel(card.category);
+      const categoryMatched = !relationCategoryFilter || category === relationCategoryFilter || category.startsWith(`${relationCategoryFilter}/`);
+      const keywordMatched =
+        !keyword ||
+        card.name.toLowerCase().includes(keyword) ||
+        category.toLowerCase().includes(keyword) ||
+        String(card.relationships || "").toLowerCase().includes(keyword);
+      return categoryMatched && keywordMatched;
+    });
+  }, [relationCategoryFilter, relationSearch, state.characters]);
+  const relationGroupedCards = useMemo(() => groupByCategory(relationVisibleCards), [relationVisibleCards]);
+  const knowledgeSources = useMemo(
+    () => [
+      ...state.chapters.map((chapter) => ({
+        id: chapter.id,
+        sourceType: "chapter" as const,
+        title: chapter.title,
+        group: chapter.volume || "未分卷",
+        role: chapter.knowledgeRole || "正文",
+      })),
+      ...state.characters.map((card) => ({
+        id: card.id,
+        sourceType: "character" as const,
+        title: card.name,
+        group: normalizeCategoryLabel(card.category),
+        role: "角色卡",
+      })),
+      ...state.worldDocs.map((doc) => ({
+        id: doc.id,
+        sourceType: "world" as const,
+        title: doc.title,
+        group: normalizeCategoryLabel(doc.category),
+        role: "世界观",
+      })),
+    ],
+    [state.chapters, state.characters, state.worldDocs],
+  );
+
+  function saveAnalysisDraft(patch: Partial<AnalysisSnapshot>) {
+    void window.novelAPI.saveAnalysisState(patch).catch(() => null);
+  }
+
+  function restoreAnalysisSnapshot(snapshot: AnalysisSnapshot) {
+    if (snapshot.tab && ["search", "timeline", "relations", "consistency", "versions", "export"].includes(snapshot.tab)) {
+      setTab(snapshot.tab as typeof tab);
+    }
+    if (typeof snapshot.query === "string") setQuery(snapshot.query);
+    if (Array.isArray(snapshot.searchResults)) setSearchResults(snapshot.searchResults);
+    if (snapshot.timeline?.events) setTimelineEvents(snapshot.timeline.events);
+    if (snapshot.timelineOptions?.mode === "local" || snapshot.timelineOptions?.mode === "ai") setTimelineMode(snapshot.timelineOptions.mode);
+    if (snapshot.relationships?.nodes) setRelationshipNodes(snapshot.relationships.nodes);
+    if (snapshot.relationships?.edges) setRelationshipEdges(snapshot.relationships.edges);
+    if (Array.isArray(snapshot.relationshipOptions?.characterNames)) setSelectedRelationNames(snapshot.relationshipOptions.characterNames);
+    if (typeof snapshot.relationshipOptions?.categoryFilter === "string") setRelationCategoryFilter(snapshot.relationshipOptions.categoryFilter);
+    if (Array.isArray(snapshot.relationshipOptions?.relationTypes) && snapshot.relationshipOptions.relationTypes.length) setRelationTypes(snapshot.relationshipOptions.relationTypes);
+    if (snapshot.consistency?.issues) setIssues(snapshot.consistency.issues);
+    if (snapshot.consistency?.notice || snapshot.consistency?.apiError) setConsistencyNotice(snapshot.consistency.notice || `AI 暂时不可用，已显示本地检查结果：${snapshot.consistency.apiError}`);
+    if (Array.isArray(snapshot.consistencyOptions?.chapterIds)) setConsistencyChapterIds(snapshot.consistencyOptions.chapterIds);
+    if (Array.isArray(snapshot.consistencyOptions?.knowledgeSourceIds)) setConsistencySourceIds(snapshot.consistencyOptions.knowledgeSourceIds);
+    if (snapshot.exportOptions) setExportOptions({ includeOutline: false, includeCharacters: false, includeWorld: false, ...snapshot.exportOptions });
+    if (snapshot.extractScope === "book" || snapshot.extractScope === "chapter") setExtractScope(snapshot.extractScope);
+    if (Array.isArray(snapshot.worldCandidates)) setWorldCandidates(snapshot.worldCandidates);
+    if (Array.isArray(snapshot.appearanceStats)) setAppearanceStats(snapshot.appearanceStats);
+    if (Array.isArray(snapshot.worldMapNodes)) setWorldMapNodes(snapshot.worldMapNodes);
+    if (Array.isArray(snapshot.worldMapEdges)) setWorldMapEdges(snapshot.worldMapEdges);
+    if (Array.isArray(snapshot.materials)) setMaterials(snapshot.materials);
+    if (snapshot.materialDraft) setMaterialDraft(snapshot.materialDraft);
+  }
+
+  useEffect(() => {
+    setAnalysisLoaded(false);
+    window.novelAPI
+      .getAnalysisState()
+      .then((snapshot) => restoreAnalysisSnapshot(snapshot || {}))
+      .catch(() => null)
+      .finally(() => setAnalysisLoaded(true));
+  }, [state.projectPath]);
+
+  useEffect(() => {
+    if (!analysisLoaded) return;
+    const timer = window.setTimeout(() => {
+      saveAnalysisDraft({
+        tab,
+        query,
+        searchResults,
+        timeline: { events: timelineEvents },
+        timelineOptions: { mode: timelineMode },
+        relationships: { nodes: relationshipNodes, edges: relationshipEdges },
+        relationshipOptions: {
+          characterNames: selectedRelationNames,
+          categoryFilter: relationCategoryFilter,
+          relationTypes,
+        },
+        consistency: { issues, notice: consistencyNotice },
+        consistencyOptions: {
+          chapterIds: consistencyChapterIds,
+          knowledgeSourceIds: consistencySourceIds,
+        },
+        exportOptions,
+        extractScope,
+        worldCandidates,
+        appearanceStats,
+        worldMapNodes,
+        worldMapEdges,
+        materials,
+        materialDraft,
+      });
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [
+    analysisLoaded,
+    tab,
+    query,
+    searchResults,
+    timelineEvents,
+    timelineMode,
+    relationshipNodes,
+    relationshipEdges,
+    selectedRelationNames,
+    relationCategoryFilter,
+    relationTypes,
+    issues,
+    consistencyNotice,
+    consistencyChapterIds,
+    consistencySourceIds,
+    exportOptions,
+    extractScope,
+    worldCandidates,
+    appearanceStats,
+    worldMapNodes,
+    worldMapEdges,
+    materials,
+    materialDraft,
+  ]);
 
   async function runSearch() {
     const trimmed = query.trim();
@@ -1908,6 +2202,7 @@ function AnalysisPanel({
     try {
       const result = await window.novelAPI.globalSearch({ query: trimmed });
       setSearchResults(result.results);
+      saveAnalysisDraft({ query: trimmed, searchResults: result.results });
       onStatus(`搜索完成：找到 ${result.results.length} 条结果`);
     } catch (error) {
       onStatus(`搜索失败：${error instanceof Error ? error.message : String(error)}`);
@@ -1920,8 +2215,9 @@ function AnalysisPanel({
     setBusy("timeline");
     onStatus(timelineMode === "ai" ? "正在让 AI 识别真实剧情事件..." : "正在整理时间线...");
     try {
-      const result = await window.novelAPI.buildTimeline({ mode: timelineMode });
+      const result = await window.novelAPI.buildTimeline({ mode: timelineMode, refresh: true });
       setTimelineEvents(result.events);
+      saveAnalysisDraft({ timeline: result, timelineOptions: { mode: timelineMode } });
       onStatus(result.apiError ? `AI 时间线失败，已使用本地结果：${result.apiError}` : `时间线已整理：${result.events.length} 个事件`);
     } catch (error) {
       onStatus(`整理时间线失败：${error instanceof Error ? error.message : String(error)}`);
@@ -1938,7 +2234,9 @@ function AnalysisPanel({
       const rest = items.filter((item) => item.id !== draggingEventId);
       const targetIndex = rest.findIndex((item) => item.id === targetId);
       rest.splice(targetIndex < 0 ? rest.length : targetIndex, 0, moving);
-      return rest.map((item, index) => ({ ...item, order: index }));
+      const next = rest.map((item, index) => ({ ...item, order: index }));
+      saveAnalysisDraft({ timeline: { events: next }, timelineOptions: { mode: timelineMode } });
+      return next;
     });
     setDraggingEventId("");
     onStatus("已手动调整时间线顺序");
@@ -1948,9 +2246,22 @@ function AnalysisPanel({
     setBusy("relations");
     onStatus("正在生成角色关系网...");
     try {
-      const result = await window.novelAPI.buildRelationshipGraph({ characterNames: selectedRelationNames, relationTypes });
+      const result = await window.novelAPI.buildRelationshipGraph({
+        characterNames: selectedRelationNames,
+        categoryFilter: relationCategoryFilter,
+        relationTypes,
+        refresh: true,
+      });
       setRelationshipNodes(result.nodes);
       setRelationshipEdges(result.edges);
+      saveAnalysisDraft({
+        relationships: result,
+        relationshipOptions: {
+          characterNames: selectedRelationNames,
+          categoryFilter: relationCategoryFilter,
+          relationTypes,
+        },
+      });
       onStatus(`关系网已生成：${result.nodes.length} 个角色，${result.edges.length} 条关系`);
     } catch (error) {
       onStatus(`生成关系网失败：${error instanceof Error ? error.message : String(error)}`);
@@ -1975,9 +2286,21 @@ function AnalysisPanel({
     setConsistencyNotice("");
     onStatus("正在检查设定一致性...");
     try {
-      const result = await window.novelAPI.analyzeConsistency();
+      const result = await window.novelAPI.analyzeConsistency({
+        refresh: true,
+        chapterIds: consistencyChapterIds,
+        knowledgeSourceIds: consistencySourceIds,
+      });
       setIssues(result.issues);
-      setConsistencyNotice(result.apiError ? `AI 暂时不可用，已显示本地检查结果：${result.apiError}` : `AI 检查完成，引用检索片段 ${result.contextCount} 条`);
+      const notice = result.apiError ? `AI 暂时不可用，已显示本地检查结果：${result.apiError}` : `AI 检查完成，引用检索片段 ${result.contextCount} 条`;
+      setConsistencyNotice(notice);
+      saveAnalysisDraft({
+        consistency: { ...result, notice },
+        consistencyOptions: {
+          chapterIds: consistencyChapterIds,
+          knowledgeSourceIds: consistencySourceIds,
+        },
+      });
       onStatus(`设定检查完成：发现 ${result.issues.length} 条待确认问题`);
     } catch (error) {
       onStatus(`设定检查失败：${error instanceof Error ? error.message : String(error)}`);
@@ -1990,7 +2313,11 @@ function AnalysisPanel({
     if (!status) return;
     try {
       await window.novelAPI.updateIssueStatus({ issueId, status });
-      setIssues((items) => items.map((item) => (item.id === issueId ? { ...item, status } : item)));
+      setIssues((items) => {
+        const next = items.map((item) => (item.id === issueId ? { ...item, status } : item));
+        saveAnalysisDraft({ consistency: { issues: next, notice: consistencyNotice } });
+        return next;
+      });
       onStatus(`问题已标记为：${status}`);
     } catch (error) {
       onStatus(`更新问题状态失败：${error instanceof Error ? error.message : String(error)}`);
@@ -2035,6 +2362,7 @@ function AnalysisPanel({
     try {
       const result = await window.novelAPI.extractWorldCardsFromOutline({ scope: extractScope, chapterId: selectedChapterId });
       setWorldCandidates(result.candidates);
+      saveAnalysisDraft({ extractScope, worldCandidates: result.candidates });
       onStatus(`已提取 ${result.candidates.length} 个候选；请勾选后写入世界观`);
     } catch (error) {
       onStatus(`提取候选失败：${error instanceof Error ? error.message : String(error)}`);
@@ -2050,6 +2378,7 @@ function AnalysisPanel({
       const result = await window.novelAPI.saveWorldCardCandidates({ candidates: worldCandidates });
       onApplyState(result.state);
       setWorldCandidates([]);
+      saveAnalysisDraft({ worldCandidates: [] });
       onStatus(`已写入资料条目：新增 ${result.created} 条，合并 ${result.updated} 条`);
     } catch (error) {
       onStatus(`写入资料失败：${error instanceof Error ? error.message : String(error)}`);
@@ -2063,6 +2392,7 @@ function AnalysisPanel({
     try {
       const result = await window.novelAPI.getAppearanceStats();
       setAppearanceStats(result.stats);
+      saveAnalysisDraft({ appearanceStats: result.stats });
       onStatus(`人物出场统计完成：${result.stats.length} 个角色`);
     } catch (error) {
       onStatus(`人物出场统计失败：${error instanceof Error ? error.message : String(error)}`);
@@ -2077,6 +2407,7 @@ function AnalysisPanel({
       const result = await window.novelAPI.getWorldMap();
       setWorldMapNodes(result.nodes);
       setWorldMapEdges(result.edges);
+      saveAnalysisDraft({ worldMapNodes: result.nodes, worldMapEdges: result.edges });
       onStatus(`地点/势力版图已整理：${result.nodes.length} 个节点，${result.edges.length} 条关联`);
     } catch (error) {
       onStatus(`整理版图失败：${error instanceof Error ? error.message : String(error)}`);
@@ -2088,24 +2419,25 @@ function AnalysisPanel({
   async function loadMaterials() {
     const result = await window.novelAPI.listMaterials();
     setMaterials(result.materials);
+    saveAnalysisDraft({ materials: result.materials });
   }
 
   async function saveMaterialDraft() {
     const result = await window.novelAPI.saveMaterial(materialDraft);
     setMaterials(result.materials);
     setMaterialDraft({ title: "", category: "灵感", content: "" });
+    saveAnalysisDraft({ materials: result.materials, materialDraft: { title: "", category: "灵感", content: "" } });
     onStatus(`素材已保存：${result.material.title}`);
   }
 
   async function deleteMaterialItem(materialId: string) {
     const result = await window.novelAPI.deleteMaterial(materialId);
     setMaterials(result.materials);
+    saveAnalysisDraft({ materials: result.materials });
     onStatus("素材已删除");
   }
 
   useEffect(() => {
-    if (tab === "timeline" && !timelineEvents.length) void loadTimeline();
-    if (tab === "relations" && !relationshipNodes.length) void loadRelationships();
     if (tab === "versions" && selectedChapterId) void loadVersions();
   }, [tab, selectedChapterId]);
 
@@ -2125,6 +2457,61 @@ function AnalysisPanel({
     });
     return { width, height, positions };
   }, [relationshipNodes]);
+
+  function resetGraphView() {
+    setGraphScale(1);
+    setGraphOffset({ x: 0, y: 0 });
+  }
+
+  function zoomGraph(event: React.WheelEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const factor = event.deltaY < 0 ? 1.12 : 0.88;
+    setGraphScale((value) => Math.min(3.2, Math.max(0.35, Number((value * factor).toFixed(3)))));
+  }
+
+  function startGraphPan(event: React.MouseEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    setGraphDragStart({ x: event.clientX, y: event.clientY, offsetX: graphOffset.x, offsetY: graphOffset.y });
+  }
+
+  function moveGraphPan(event: React.MouseEvent<HTMLDivElement>) {
+    if (!graphDragStart) return;
+    setGraphOffset({
+      x: graphDragStart.offsetX + event.clientX - graphDragStart.x,
+      y: graphDragStart.offsetY + event.clientY - graphDragStart.y,
+    });
+  }
+
+  function toggleConsistencyChapter(chapterId: string) {
+    setConsistencyChapterIds((items) => (items.includes(chapterId) ? items.filter((id) => id !== chapterId) : [...items, chapterId]));
+  }
+
+  function toggleConsistencySource(sourceId: string) {
+    setConsistencySourceIds((items) => (items.includes(sourceId) ? items.filter((id) => id !== sourceId) : [...items, sourceId]));
+  }
+
+  function selectVisibleRelationCards() {
+    const names = relationVisibleCards.map((card) => card.name).filter(Boolean);
+    setSelectedRelationNames((items) => [...new Set([...items, ...names])]);
+  }
+
+  function renderRelationGroup(group: CategoryGroup<CharacterCard>, depth = 0) {
+    return (
+      <div className="relation-category-group" key={group.key}>
+        <div className="relation-category-title" style={{ paddingLeft: 8 + depth * 14 }}>
+          <span>{group.category}</span>
+          <small>{group.count}</small>
+        </div>
+        {group.children.map((child) => renderRelationGroup(child, depth + 1))}
+        {group.items.map((card) => (
+          <label key={card.id} style={{ paddingLeft: 24 + depth * 14 }}>
+            <input type="checkbox" checked={selectedRelationNames.includes(card.name)} onChange={() => toggleRelationName(card.name)} />
+            <span>{card.name}</span>
+          </label>
+        ))}
+      </div>
+    );
+  }
 
   return (
     <section className="analysis-panel">
@@ -2232,15 +2619,25 @@ function AnalysisPanel({
           <div className="relation-controls">
             <details>
               <summary>选择角色卡</summary>
-              <div className="check-grid">
-                {state.characters.map((card) => (
-                  <label key={card.id}>
-                    <input type="checkbox" checked={selectedRelationNames.includes(card.name)} onChange={() => toggleRelationName(card.name)} />
-                    {card.name}
-                  </label>
-                ))}
+              <div className="relation-filter-row">
+                <input value={relationSearch} onChange={(event) => setRelationSearch(event.target.value)} placeholder="搜索角色、分类或关系" />
+                <select value={relationCategoryFilter} onChange={(event) => setRelationCategoryFilter(event.target.value)}>
+                  <option value="">全部分类</option>
+                  {relationCategories.map((category) => (
+                    <option key={category} value={category}>
+                      {category}
+                    </option>
+                  ))}
+                </select>
               </div>
-              <button onClick={() => setSelectedRelationNames([])}>显示全部角色</button>
+              <div className="relation-tree-select">
+                {relationGroupedCards.map((group) => renderRelationGroup(group))}
+                {!relationGroupedCards.length && <p>没有匹配的角色卡。</p>}
+              </div>
+              <div className="relation-filter-actions">
+                <button onClick={selectVisibleRelationCards}>勾选当前筛选</button>
+                <button onClick={() => setSelectedRelationNames([])}>显示全部角色</button>
+              </div>
             </details>
             <details>
               <summary>关系类型</summary>
@@ -2265,26 +2662,51 @@ function AnalysisPanel({
           </div>
           {relationshipNodes.length ? (
             <>
-              <svg className="relationship-graph" viewBox={`0 0 ${graph.width} ${graph.height}`} role="img">
-                {relationshipEdges.map((edge) => {
-                  const source = graph.positions.get(edge.source);
-                  const target = graph.positions.get(edge.target);
-                  if (!source || !target) return null;
-                  return <line key={edge.id} x1={source.x} y1={source.y} x2={target.x} y2={target.y} strokeWidth={Math.max(1.5, edge.weight / 2)} />;
-                })}
-                {relationshipNodes.map((node) => {
-                  const position = graph.positions.get(node.id);
-                  if (!position) return null;
-                  return (
-                    <g key={node.id}>
-                      <circle cx={position.x} cy={position.y} r={node.size} />
-                      <text x={position.x} y={position.y + node.size + 15} textAnchor="middle">
-                        {node.name}
-                      </text>
-                    </g>
-                  );
-                })}
-              </svg>
+              <div
+                className={`relationship-graph-shell ${graphDragStart ? "dragging" : ""}`}
+                onWheel={zoomGraph}
+                onMouseDown={startGraphPan}
+                onMouseMove={moveGraphPan}
+                onMouseUp={() => setGraphDragStart(null)}
+                onMouseLeave={() => setGraphDragStart(null)}
+              >
+                <div className="relationship-graph-tools">
+                  <span>{Math.round(graphScale * 100)}%</span>
+                  <button onMouseDown={(event) => event.stopPropagation()} onClick={resetGraphView}>重置视图</button>
+                </div>
+                <svg className="relationship-graph" viewBox={`0 0 ${graph.width} ${graph.height}`} role="img">
+                  <g transform={`translate(${graphOffset.x} ${graphOffset.y}) scale(${graphScale})`}>
+                    {relationshipEdges.map((edge) => {
+                      const source = graph.positions.get(edge.source);
+                      const target = graph.positions.get(edge.target);
+                      if (!source || !target) return null;
+                      const labelX = edge.labelX ?? (source.x + target.x) / 2;
+                      const labelY = edge.labelY ?? (source.y + target.y) / 2;
+                      return (
+                        <g key={edge.id}>
+                          <line x1={source.x} y1={source.y} x2={target.x} y2={target.y} strokeWidth={Math.max(1.5, edge.weight / 2)} />
+                          <text className="relationship-edge-label" x={labelX} y={labelY - 6} textAnchor="middle">
+                            {edge.label || "关系"}
+                          </text>
+                          <title>{edge.evidence[0] || "来自角色关系或正文同场统计"}</title>
+                        </g>
+                      );
+                    })}
+                    {relationshipNodes.map((node) => {
+                      const position = graph.positions.get(node.id);
+                      if (!position) return null;
+                      return (
+                        <g key={node.id}>
+                          <circle cx={position.x} cy={position.y} r={node.size} />
+                          <text x={position.x} y={position.y + node.size + 15} textAnchor="middle">
+                            {node.name}
+                          </text>
+                        </g>
+                      );
+                    })}
+                  </g>
+                </svg>
+              </div>
               <div className="relationship-edges">
                 {relationshipEdges.slice(0, 24).map((edge) => (
                   <div key={edge.id}>
@@ -2303,6 +2725,45 @@ function AnalysisPanel({
 
       {tab === "consistency" && (
         <div className="analysis-section">
+          <details className="scope-panel" open={scopeOpen} onToggle={(event) => setScopeOpen(event.currentTarget.open)}>
+            <summary>审查范围</summary>
+            <div className="scope-grid">
+              <section>
+                <header>
+                  <strong>审查哪些章节</strong>
+                  <div>
+                    <button onClick={() => setConsistencyChapterIds(state.chapters.map((chapter) => chapter.id))}>全选</button>
+                    <button onClick={() => setConsistencyChapterIds([])}>全书</button>
+                  </div>
+                </header>
+                <div className="scope-check-list">
+                  {state.chapters.map((chapter) => (
+                    <label key={chapter.id}>
+                      <input type="checkbox" checked={consistencyChapterIds.includes(chapter.id)} onChange={() => toggleConsistencyChapter(chapter.id)} />
+                      <span>{chapter.volume || "未分卷"} / {chapter.title}</span>
+                    </label>
+                  ))}
+                </div>
+              </section>
+              <section>
+                <header>
+                  <strong>依据哪些资料</strong>
+                  <div>
+                    <button onClick={() => setConsistencySourceIds(knowledgeSources.map((source) => source.id))}>全选</button>
+                    <button onClick={() => setConsistencySourceIds([])}>全项目</button>
+                  </div>
+                </header>
+                <div className="scope-check-list">
+                  {knowledgeSources.map((source) => (
+                    <label key={`${source.sourceType}_${source.id}`}>
+                      <input type="checkbox" checked={consistencySourceIds.includes(source.id)} onChange={() => toggleConsistencySource(source.id)} />
+                      <span>{source.role} / {source.group} / {source.title}</span>
+                    </label>
+                  ))}
+                </div>
+              </section>
+            </div>
+          </details>
           <div className="analysis-actions">
             <button onClick={() => void runConsistencyCheck()} disabled={busy === "consistency"}>
               <RefreshCcw size={16} />

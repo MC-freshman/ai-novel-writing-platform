@@ -52,6 +52,7 @@ export interface Chapter {
   imageCount?: number;
   originalDocxFile?: string;
   contentFormat?: "markdown" | "html";
+  knowledgeRole?: KnowledgeRole;
   outline?: Array<{
     id: string;
     level: number;
@@ -160,6 +161,8 @@ export interface RelationshipEdge {
   label: string;
   weight: number;
   evidence: string[];
+  labelX?: number;
+  labelY?: number;
 }
 
 export interface ConsistencyIssue {
@@ -250,4 +253,39 @@ export interface MaterialItem {
   content: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export type KnowledgeRole = "大纲" | "正文" | "补充材料";
+
+export interface KnowledgeItem {
+  id: string;
+  sourceId: string;
+  sourceType: "chapter";
+  title: string;
+  volume: string;
+  knowledgeRole: KnowledgeRole;
+  order: number;
+  wordCount: number;
+  updatedAt: string;
+}
+
+export interface AnalysisSnapshot {
+  updatedAt?: string;
+  tab?: string;
+  query?: string;
+  searchResults?: GlobalSearchResult[];
+  timeline?: { events: TimelineEvent[]; contextCount?: number; apiError?: string };
+  timelineOptions?: { mode?: "local" | "ai"; chapterIds?: string[]; knowledgeSourceIds?: string[] };
+  relationships?: { nodes: RelationshipNode[]; edges: RelationshipEdge[] };
+  relationshipOptions?: { characterNames?: string[]; categoryFilter?: string; relationTypes?: string[] };
+  consistency?: { issues: ConsistencyIssue[]; contextCount?: number; apiError?: string; notice?: string };
+  consistencyOptions?: { chapterIds?: string[]; knowledgeSourceIds?: string[] };
+  exportOptions?: { includeOutline?: boolean; includeCharacters?: boolean; includeWorld?: boolean };
+  extractScope?: "book" | "chapter";
+  worldCandidates?: ExtractedWorldCandidate[];
+  appearanceStats?: AppearanceStat[];
+  worldMapNodes?: WorldMapNode[];
+  worldMapEdges?: WorldMapEdge[];
+  materials?: MaterialItem[];
+  materialDraft?: Partial<MaterialItem>;
 }
