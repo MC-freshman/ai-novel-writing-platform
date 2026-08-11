@@ -1,3 +1,3 @@
 @echo off
 chcp 65001 >nul
-start "" "%~dp0release\AI小说创作平台 0.1.15.exe"
+start "" "%~dp0release\AI小说创作平台 0.1.16.exe"

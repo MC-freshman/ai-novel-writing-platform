@@ -6,9 +6,9 @@
 
 请到 GitHub Release 页面下载最新版：
 
-- [AI小说创作平台 v0.1.15](https://github.com/MC-freshman/ai-novel-writing-platform/releases/tag/v0.1.15)
+- [AI小说创作平台 v0.1.16](https://github.com/MC-freshman/ai-novel-writing-platform/releases/tag/v0.1.16)
 
-下载 `AI-Novel-Platform-0.1.15-clean-package.zip` 后解压，双击 `打开AI小说创作平台_新版.bat`，或直接运行 `release/AI小说创作平台 0.1.15.exe`。
+下载 `AI-Novel-Platform-0.1.16-clean-package.zip` 后解压，双击 `打开AI小说创作平台_新版.bat`，或直接运行 `release/AI小说创作平台 0.1.16.exe`。
 
 > 当前 Windows 可执行文件未做代码签名，首次运行时系统可能出现安全提醒。请只从本仓库 Release 页面下载。
 
