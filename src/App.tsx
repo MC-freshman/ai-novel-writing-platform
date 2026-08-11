@@ -582,11 +582,12 @@ export default function App() {
     if (!("canceled" in result)) applyAppState(result);
   }
 
-  async function importDocument() {
+  async function importDocument(volume = "") {
     if (dirty) await saveChapter();
-    setStatus("正在导入文档并建立知识库...");
+    const targetVolume = volume.trim();
+    setStatus(targetVolume ? `正在导入文档到「${targetVolume}」并建立知识库...` : "正在导入文档并建立知识库...");
     try {
-      const result = await window.novelAPI.importDocument();
+      const result = await window.novelAPI.importDocument(targetVolume ? { volume: targetVolume } : undefined);
       if ("canceled" in result) {
         setStatus(result.message || "已取消导入文档");
         return;
@@ -596,11 +597,11 @@ export default function App() {
       setView("chapters");
       setPreview(false);
       if (summary?.failed) {
-        setStatus(`已导入 ${summary.imported}/${summary.total} 个文档，${summary.failed} 个失败；成功导入的文档已加入知识库`);
+        setStatus(`已导入 ${summary.imported}/${summary.total} 个文档${targetVolume ? `到「${targetVolume}」` : ""}，${summary.failed} 个失败；成功导入的文档已加入知识库`);
       } else if (summary?.imported && summary.imported > 1) {
-        setStatus(`已批量导入 ${summary.imported} 个文档，并已加入知识库`);
+        setStatus(`已批量导入 ${summary.imported} 个文档${targetVolume ? `到「${targetVolume}」` : ""}，并已加入知识库`);
       } else {
-        setStatus("文档已导入为章节，并已加入知识库");
+        setStatus(`文档已导入${targetVolume ? `到「${targetVolume}」` : "为章节"}，并已加入知识库`);
       }
     } catch (error) {
       setStatus(`导入失败：${error instanceof Error ? error.message : String(error)}`);
@@ -881,7 +882,7 @@ export default function App() {
             <FolderOpen size={16} />
             打开
           </button>
-          <button onClick={importDocument} title="导入文档（.docx、.txt、.md）">
+          <button onClick={() => void importDocument()} title="导入文档（.docx、.txt、.md）">
             <Upload size={16} />
             导入文档
           </button>
@@ -948,6 +949,7 @@ export default function App() {
               onDragEnd={() => setDraggingChapterId(null)}
               onDropToVolume={(volume) => void moveDraggingChapter(volume)}
               onDropOnChapter={(chapter) => void moveDraggingChapter(chapter.volume || "未分卷", chapter.id)}
+              onImportToVolume={(volume) => void importDocument(volume)}
               onAdjustLevel={(chapterId, line, level, delta) => void adjustOutlineLevel(chapterId, line, level, delta)}
             />
             <div className="project-path" title={state.projectPath}>
@@ -1331,6 +1333,7 @@ function ChapterTree({
   onDragEnd,
   onDropToVolume,
   onDropOnChapter,
+  onImportToVolume,
   onAdjustLevel,
 }: {
   chapters: Chapter[];
@@ -1342,6 +1345,7 @@ function ChapterTree({
   onDragEnd: () => void;
   onDropToVolume: (volume: string) => void;
   onDropOnChapter: (chapter: Chapter) => void;
+  onImportToVolume: (volume: string) => void;
   onAdjustLevel: (chapterId: string, line: number, level: number, delta: number) => void;
 }) {
   const [collapsedVolumes, setCollapsedVolumes] = useState<Set<string>>(() => new Set());
@@ -1444,10 +1448,8 @@ function ChapterTree({
       </div>
       {grouped.map(([volume, items]) => (
         <div className="volume" key={volume}>
-          <button
-            className={`volume-title ${dragOverVolume === volume ? "drag-over" : ""}`}
-            onClick={() => toggleSet(setCollapsedVolumes, volume)}
-            title={collapsedVolumes.has(volume) ? "展开分组" : "折叠分组"}
+          <div
+            className={`volume-header ${dragOverVolume === volume ? "drag-over" : ""}`}
             onDragOver={(event) => {
               event.preventDefault();
               event.dataTransfer.dropEffect = "move";
@@ -1461,9 +1463,21 @@ function ChapterTree({
               onDropToVolume(volume);
             }}
           >
-            {collapsedVolumes.has(volume) ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
-            {volume}
-          </button>
+            <button className="volume-title" onClick={() => toggleSet(setCollapsedVolumes, volume)} title={collapsedVolumes.has(volume) ? "展开分组" : "折叠分组"}>
+              {collapsedVolumes.has(volume) ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
+              <span>{volume}</span>
+            </button>
+            <button
+              className="volume-import-button"
+              title={`导入文档到「${volume}」`}
+              onClick={(event) => {
+                event.stopPropagation();
+                onImportToVolume(volume);
+              }}
+            >
+              <Upload size={14} />
+            </button>
+          </div>
           {!collapsedVolumes.has(volume) &&
             items.map((chapter) => {
               const outlineTree = buildOutlineTree((chapter.outline || []).slice(1), chapter.id);
@@ -1635,6 +1649,8 @@ function CharacterManager({
   const blankCard = { name: "", category: DEFAULT_CATEGORY_LABEL, appearance: "", personality: "", background: "", relationships: "", notes: "" };
   const [active, setActive] = useState<Partial<CharacterCard>>(cards[0] || blankCard);
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
+  const [draggingCardId, setDraggingCardId] = useState("");
+  const [dragOverCategory, setDragOverCategory] = useState("");
   const groupedCards = useMemo(() => groupByCategory(cards), [cards]);
 
   useEffect(() => {
@@ -1654,11 +1670,37 @@ function CharacterManager({
     });
   }
 
+  function moveCardToCategory(category: string) {
+    if (!draggingCardId) return;
+    const card = cards.find((item) => item.id === draggingCardId);
+    if (!card) return;
+    const next = { ...card, category };
+    setActive(next);
+    onSave(next);
+    setDraggingCardId("");
+    setDragOverCategory("");
+  }
+
   function renderCategoryGroup(group: CategoryGroup<CharacterCard>, depth = 0) {
     const collapsed = collapsedCategories.has(group.key);
     return (
       <div className="manager-group" key={group.key}>
-        <button className="manager-group-header" style={{ paddingLeft: 8 + depth * 14 }} onClick={() => toggleCategory(group.key)}>
+        <button
+          className={`manager-group-header ${dragOverCategory === group.key ? "drag-over" : ""}`}
+          style={{ paddingLeft: 8 + depth * 14 }}
+          onClick={() => toggleCategory(group.key)}
+          onDragOver={(event) => {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "move";
+            setDragOverCategory(group.key);
+          }}
+          onDragLeave={() => setDragOverCategory((current) => (current === group.key ? "" : current))}
+          onDrop={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            moveCardToCategory(group.key);
+          }}
+        >
           {collapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
           <span>{group.category}</span>
           <small>{group.count}</small>
@@ -1670,7 +1712,17 @@ function CharacterManager({
               <button
                 key={card.id}
                 className={`manager-item ${active.id === card.id ? "active" : ""}`}
+                draggable
                 style={{ paddingLeft: 28 + depth * 14 }}
+                onDragStart={(event) => {
+                  event.dataTransfer.effectAllowed = "move";
+                  event.dataTransfer.setData("text/plain", card.id);
+                  setDraggingCardId(card.id);
+                }}
+                onDragEnd={() => {
+                  setDraggingCardId("");
+                  setDragOverCategory("");
+                }}
                 onClick={() => setActive(card)}
               >
                 <UserRound size={15} />
@@ -1760,6 +1812,8 @@ function WorldManager({
   const blankDoc = { title: "", category: DEFAULT_CATEGORY_LABEL, content: "# 新设定\n\n" };
   const [active, setActive] = useState<Partial<WorldDoc>>(docs[0] || blankDoc);
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
+  const [draggingDocId, setDraggingDocId] = useState("");
+  const [dragOverCategory, setDragOverCategory] = useState("");
   const groupedDocs = useMemo(() => groupByCategory(docs), [docs]);
 
   useEffect(() => {
@@ -1775,11 +1829,37 @@ function WorldManager({
     });
   }
 
+  function moveDocToCategory(category: string) {
+    if (!draggingDocId) return;
+    const doc = docs.find((item) => item.id === draggingDocId);
+    if (!doc) return;
+    const next = { ...doc, category };
+    setActive(next);
+    onSave(next);
+    setDraggingDocId("");
+    setDragOverCategory("");
+  }
+
   function renderCategoryGroup(group: CategoryGroup<WorldDoc>, depth = 0) {
     const collapsed = collapsedCategories.has(group.key);
     return (
       <div className="manager-group" key={group.key}>
-        <button className="manager-group-header" style={{ paddingLeft: 8 + depth * 14 }} onClick={() => toggleCategory(group.key)}>
+        <button
+          className={`manager-group-header ${dragOverCategory === group.key ? "drag-over" : ""}`}
+          style={{ paddingLeft: 8 + depth * 14 }}
+          onClick={() => toggleCategory(group.key)}
+          onDragOver={(event) => {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "move";
+            setDragOverCategory(group.key);
+          }}
+          onDragLeave={() => setDragOverCategory((current) => (current === group.key ? "" : current))}
+          onDrop={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            moveDocToCategory(group.key);
+          }}
+        >
           {collapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
           <span>{group.category}</span>
           <small>{group.count}</small>
@@ -1791,7 +1871,17 @@ function WorldManager({
               <button
                 key={doc.id}
                 className={`manager-item ${active.id === doc.id ? "active" : ""}`}
+                draggable
                 style={{ paddingLeft: 28 + depth * 14 }}
+                onDragStart={(event) => {
+                  event.dataTransfer.effectAllowed = "move";
+                  event.dataTransfer.setData("text/plain", doc.id);
+                  setDraggingDocId(doc.id);
+                }}
+                onDragEnd={() => {
+                  setDraggingDocId("");
+                  setDragOverCategory("");
+                }}
                 onClick={() => setActive(doc)}
               >
                 <Boxes size={15} />

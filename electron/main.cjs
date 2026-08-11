@@ -30,6 +30,7 @@ const DEFAULT_PROJECT_NAME = "默认小说项目";
 const MAX_CHAT_TOKENS = 393216;
 const MAX_RETRIEVAL_TOP_K = 250;
 const DEFAULT_CATEGORY = "未分类";
+const EMBEDDING_INDEX_CONCURRENCY = 4;
 
 let mainWindow;
 let currentProjectPath = "";
@@ -78,6 +79,22 @@ function clampNumber(value, min, max, fallback) {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
   return Math.min(max, Math.max(min, number));
+}
+
+async function mapWithConcurrency(items, limit, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, Math.floor(limit)), items.length || 1);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        results[index] = await mapper(items[index], index);
+      }
+    }),
+  );
+  return results;
 }
 
 function countWords(text) {
@@ -517,18 +534,19 @@ async function convertDocumentToRichContent(projectPath, filePath, importId) {
   throw new Error("暂时只支持导入 .docx、.txt、.md 文件。");
 }
 
-async function importDocumentIntoProject(projectPath, filePath) {
-  const config = await loadConfig(projectPath);
+async function importDocumentIntoProject(projectPath, filePath, options = {}) {
+  const config = options.config || (await loadConfig(projectPath));
   const importId = makeId("import");
   const converted = await convertDocumentToRichContent(projectPath, filePath, importId);
   if (!converted.content.trim()) throw new Error("文档中没有可导入的正文内容。");
   const chapterDir = path.join(projectPath, "chapters");
   const order = config.chapters.length;
   const fileName = await uniqueFileName(chapterDir, `document_${String(order + 1).padStart(3, "0")}_${converted.title}`, ".html");
+  const volume = String(options.volume || "").trim() || "导入文档";
   const chapter = {
     id: makeId("chapter"),
     title: converted.title,
-    volume: "导入文档",
+    volume,
     order,
     fileName,
     wordCount: countWords(converted.content),
@@ -544,17 +562,27 @@ async function importDocumentIntoProject(projectPath, filePath) {
   await fs.writeFile(getChapterPath(projectPath, chapter), converted.content, "utf8");
   config.chapters.push(chapter);
 
+  const imported = {
+    chapter,
+    content: converted.content,
+    imageCount: converted.imageCount,
+    warnings: converted.warnings,
+    source: {
+      id: chapter.id,
+      type: "chapter",
+      title: chapter.title,
+      content: converted.content,
+    },
+  };
+
+  if (options.skipFinalize) return [imported];
+
   await calculateTotalWords(projectPath, config);
   await saveConfig(projectPath, config);
 
-  await indexSource(projectPath, {
-    id: chapter.id,
-    type: "chapter",
-    title: chapter.title,
-    content: converted.content,
-  });
+  await indexSource(projectPath, imported.source);
 
-  return [{ chapter, content: converted.content, imageCount: converted.imageCount, warnings: converted.warnings }];
+  return [imported];
 }
 
 async function refreshChapterFromOriginalDocument(projectPath, chapterId) {
@@ -706,10 +734,15 @@ function localEmbedding(text) {
 }
 
 async function remoteEmbedding(text, apiConfig) {
-  const apiKey = decodeSecret(apiConfig.embeddingApiKey) || decodeSecret(apiConfig.apiKey);
+  const embeddingKey = decodeSecret(apiConfig.embeddingApiKey);
+  const chatKey = decodeSecret(apiConfig.apiKey);
   const baseUrl = (apiConfig.embeddingBaseUrl || apiConfig.baseUrl || "").replace(/\/$/, "");
+  const chatBaseUrl = (apiConfig.baseUrl || "").replace(/\/$/, "");
   const model = apiConfig.embeddingModel || "text-embedding-3-small";
-  if (!baseUrl || !model || (!apiKey && !baseUrl.includes("localhost") && !baseUrl.includes("127.0.0.1"))) {
+  const isLocal = baseUrl.includes("localhost") || baseUrl.includes("127.0.0.1");
+  const canReuseChatKey = chatKey && baseUrl && chatBaseUrl && baseUrl === chatBaseUrl;
+  const apiKey = embeddingKey || (canReuseChatKey ? chatKey : "");
+  if (!baseUrl || !model || (!apiKey && !isLocal)) {
     return null;
   }
 
@@ -791,18 +824,16 @@ async function saveVectorStore(projectPath, store) {
 }
 
 async function indexSource(projectPath, source) {
-  const config = await loadConfig(projectPath);
-  const characters = await loadCharacters(projectPath);
-  const characterNames = characters.map((item) => item.name).filter(Boolean);
-  const store = await loadVectorStore(projectPath);
-  store.vectors = store.vectors.filter((item) => item.sourceId !== source.id);
+  return indexSources(projectPath, [source]);
+}
 
+async function buildIndexEntries(source, config, characterNames) {
   const indexContent = contentToPlainText(source.content);
   const chunks = chunkText(indexContent);
-  for (let index = 0; index < chunks.length; index += 1) {
-    const chunk = chunks[index];
-    const embedding = await getEmbedding(chunk.text, config.api);
-    store.vectors.push({
+  const embeddings = await mapWithConcurrency(chunks, EMBEDDING_INDEX_CONCURRENCY, (chunk) => getEmbedding(chunk.text, config.api));
+  return chunks.map((chunk, index) => {
+    const embedding = embeddings[index];
+    return {
       id: `${source.id}_${index}`,
       projectTitle: config.title,
       sourceId: source.id,
@@ -815,11 +846,32 @@ async function indexSource(projectPath, source) {
       embeddingWarning: embedding.warning,
       metadata: extractMetadata(chunk.text, characterNames),
       updatedAt: nowIso(),
-    });
+    };
+  });
+}
+
+async function indexSources(projectPath, sources) {
+  const safeSources = Array.isArray(sources) ? sources.filter(Boolean) : [];
+  if (!safeSources.length) {
+    const store = await loadVectorStore(projectPath);
+    return { chunks: 0, totalChunks: store.vectors.length };
+  }
+  const config = await loadConfig(projectPath);
+  const characters = await loadCharacters(projectPath);
+  const characterNames = characters.map((item) => item.name).filter(Boolean);
+  const store = await loadVectorStore(projectPath);
+  const sourceIds = new Set(safeSources.map((source) => source.id));
+  store.vectors = store.vectors.filter((item) => !sourceIds.has(item.sourceId));
+
+  let indexedChunks = 0;
+  for (const source of safeSources) {
+    const entries = await buildIndexEntries(source, config, characterNames);
+    indexedChunks += entries.length;
+    store.vectors.push(...entries);
   }
 
   await saveVectorStore(projectPath, store);
-  return { chunks: chunks.length, totalChunks: store.vectors.length };
+  return { chunks: indexedChunks, totalChunks: store.vectors.length };
 }
 
 async function removeSourceFromIndex(projectPath, sourceId) {
@@ -830,11 +882,11 @@ async function removeSourceFromIndex(projectPath, sourceId) {
 
 async function rebuildIndex(projectPath) {
   const config = await loadConfig(projectPath);
-  await saveVectorStore(projectPath, { version: 1, updatedAt: nowIso(), vectors: [] });
+  const sources = [];
 
   for (const chapter of config.chapters) {
     const content = await fs.readFile(getChapterPath(projectPath, chapter), "utf8").catch(() => "");
-    await indexSource(projectPath, {
+    sources.push({
       id: chapter.id,
       type: "chapter",
       title: chapter.title,
@@ -845,7 +897,7 @@ async function rebuildIndex(projectPath) {
   const characters = await loadCharacters(projectPath);
   for (const card of characters) {
     const content = characterToMarkdown(card);
-    await indexSource(projectPath, {
+    sources.push({
       id: card.id,
       type: "character",
       title: card.name,
@@ -855,7 +907,7 @@ async function rebuildIndex(projectPath) {
 
   const worldDocs = await loadWorldDocs(projectPath);
   for (const doc of worldDocs) {
-    await indexSource(projectPath, {
+    sources.push({
       id: doc.id,
       type: "world",
       title: doc.title,
@@ -863,8 +915,9 @@ async function rebuildIndex(projectPath) {
     });
   }
 
-  const store = await loadVectorStore(projectPath);
-  return { chunks: store.vectors.length };
+  await saveVectorStore(projectPath, { version: 1, updatedAt: nowIso(), vectors: [] });
+  const result = await indexSources(projectPath, sources);
+  return { chunks: result.totalChunks };
 }
 
 async function searchRelevantChunks(projectPath, question, topK) {
@@ -1712,10 +1765,11 @@ function registerIpcHandlers() {
     return buildAppState(currentProjectPath);
   });
 
-  ipcMain.handle("document:import", async () => {
+  ipcMain.handle("document:import", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
+    const targetVolume = String(payload?.volume || "").trim();
     const result = await dialog.showOpenDialog(mainWindow, {
-      title: "导入一个或多个文档为章节",
+      title: targetVolume ? `导入一个或多个文档到「${targetVolume}」` : "导入一个或多个文档为章节",
       properties: ["openFile", "multiSelections"],
       filters: [
         { name: "支持的文档", extensions: ["docx", "txt", "md"] },
@@ -1726,15 +1780,24 @@ function registerIpcHandlers() {
     if (result.canceled || !result.filePaths[0]) return { canceled: true };
     const imported = [];
     const failures = [];
+    const config = await loadConfig(projectPath);
     for (const filePath of result.filePaths) {
       try {
-        imported.push(...(await importDocumentIntoProject(projectPath, filePath)));
+        imported.push(...(await importDocumentIntoProject(projectPath, filePath, { volume: targetVolume || "导入文档", config, skipFinalize: true })));
       } catch (error) {
         failures.push({ filePath, message: error.message || String(error) });
       }
     }
     if (!imported.length && failures.length) {
       throw new Error(`导入失败：${failures.map((item) => `${path.basename(item.filePath)}：${item.message}`).join("；")}`);
+    }
+    if (imported.length) {
+      await calculateTotalWords(projectPath, config);
+      await saveConfig(projectPath, config);
+      await indexSources(
+        projectPath,
+        imported.map((item) => item.source),
+      );
     }
     const state = await buildAppState(projectPath, imported[imported.length - 1]?.chapter.id);
     return {
