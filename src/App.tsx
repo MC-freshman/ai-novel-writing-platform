@@ -2051,6 +2051,7 @@ function AnalysisPanel({
   const [graphScale, setGraphScale] = useState(1);
   const [graphOffset, setGraphOffset] = useState({ x: 0, y: 0 });
   const [graphDragStart, setGraphDragStart] = useState<{ x: number; y: number; offsetX: number; offsetY: number } | null>(null);
+  const graphShellRef = useRef<HTMLDivElement | null>(null);
   const [consistencyChapterIds, setConsistencyChapterIds] = useState<string[]>([]);
   const [consistencySourceIds, setConsistencySourceIds] = useState<string[]>([]);
   const [scopeOpen, setScopeOpen] = useState(false);
@@ -2463,23 +2464,48 @@ function AnalysisPanel({
     setGraphOffset({ x: 0, y: 0 });
   }
 
-  function zoomGraph(event: React.WheelEvent<HTMLDivElement>) {
-    event.preventDefault();
-    const factor = event.deltaY < 0 ? 1.12 : 0.88;
+  function zoomGraphByWheel(deltaY: number) {
+    const factor = deltaY < 0 ? 1.12 : 0.88;
     setGraphScale((value) => Math.min(3.2, Math.max(0.35, Number((value * factor).toFixed(3)))));
   }
 
+  function zoomGraph(event: React.WheelEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    zoomGraphByWheel(event.deltaY);
+  }
+
+  useEffect(() => {
+    const shell = graphShellRef.current;
+    if (!shell) return undefined;
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      zoomGraphByWheel(event.deltaY);
+    };
+    shell.addEventListener("wheel", handleWheel, { passive: false });
+    return () => shell.removeEventListener("wheel", handleWheel);
+  }, [relationshipNodes.length, tab]);
+
   function startGraphPan(event: React.MouseEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
     if (event.button !== 0) return;
     setGraphDragStart({ x: event.clientX, y: event.clientY, offsetX: graphOffset.x, offsetY: graphOffset.y });
   }
 
   function moveGraphPan(event: React.MouseEvent<HTMLDivElement>) {
     if (!graphDragStart) return;
+    event.preventDefault();
+    event.stopPropagation();
     setGraphOffset({
       x: graphDragStart.offsetX + event.clientX - graphDragStart.x,
       y: graphDragStart.offsetY + event.clientY - graphDragStart.y,
     });
+  }
+
+  function stopGraphPan() {
+    setGraphDragStart(null);
   }
 
   function toggleConsistencyChapter(chapterId: string) {
@@ -2663,12 +2689,13 @@ function AnalysisPanel({
           {relationshipNodes.length ? (
             <>
               <div
+                ref={graphShellRef}
                 className={`relationship-graph-shell ${graphDragStart ? "dragging" : ""}`}
                 onWheel={zoomGraph}
                 onMouseDown={startGraphPan}
                 onMouseMove={moveGraphPan}
-                onMouseUp={() => setGraphDragStart(null)}
-                onMouseLeave={() => setGraphDragStart(null)}
+                onMouseUp={stopGraphPan}
+                onMouseLeave={stopGraphPan}
               >
                 <div className="relationship-graph-tools">
                   <span>{Math.round(graphScale * 100)}%</span>
