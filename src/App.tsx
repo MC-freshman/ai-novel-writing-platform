@@ -36,6 +36,7 @@ import {
   RefreshCcw,
   Redo2,
   Save,
+  Search,
   Send,
   Settings,
   Sparkles,
@@ -61,7 +62,21 @@ import Underline from "@tiptap/extension-underline";
 import StarterKit from "@tiptap/starter-kit";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
-import type { AppState, CharacterCard, Chapter, ChatMessage, Provider, WorldDoc } from "./types";
+import type {
+  AppState,
+  Chapter,
+  ChapterVersion,
+  ChapterVersionCompare,
+  CharacterCard,
+  ChatMessage,
+  ConsistencyIssue,
+  GlobalSearchResult,
+  Provider,
+  RelationshipEdge,
+  RelationshipNode,
+  TimelineEvent,
+  WorldDoc,
+} from "./types";
 
 const PROVIDER_DEFAULTS: Record<Provider, { baseUrl: string; model: string; label: string }> = {
   deepseek: { label: "DeepSeek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat" },
@@ -309,6 +324,13 @@ function sourceLabel(sourceType: string) {
   return "世界观";
 }
 
+function formatDateTime(value?: string) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("zh-CN", { hour12: false });
+}
+
 export default function App() {
   const [state, setState] = useState<AppState | null>(null);
   const [selectedChapter, setSelectedChapter] = useState<Chapter | null>(null);
@@ -318,7 +340,7 @@ export default function App() {
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState("正在打开项目...");
-  const [view, setView] = useState<"chapters" | "characters" | "world">("chapters");
+  const [view, setView] = useState<"chapters" | "characters" | "world" | "analysis">("chapters");
   const [showSettings, setShowSettings] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   const [preview, setPreview] = useState(false);
@@ -624,6 +646,21 @@ export default function App() {
     }
   }
 
+  async function exportBookDocx() {
+    if (dirty) await saveChapter();
+    setStatus("正在导出整本小说 Word 文档...");
+    try {
+      const result = await window.novelAPI.exportBookDocx();
+      if (result.canceled) {
+        setStatus("已取消导出整书");
+        return;
+      }
+      if (result.filePath) setStatus(`整书 Word 文档已导出：${result.filePath}`);
+    } catch (error) {
+      setStatus(`导出整书失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   async function openOriginalDocument() {
     if (!selectedChapter) return;
     const result = await window.novelAPI.openOriginalDocument(selectedChapter.id);
@@ -841,6 +878,19 @@ export default function App() {
     }
   }
 
+  async function extractWorldCardsFromOutline() {
+    if (!window.confirm("将调用 AI 从大纲和正文中提取地点、势力、物品，并直接写入“世界”界面。继续吗？")) return;
+    setStatus("正在提取地点、势力、物品条目...");
+    try {
+      const result = await window.novelAPI.extractWorldCardsFromOutline();
+      applyAppState(result.state);
+      setView("world");
+      setStatus(`已提取资料条目：新增 ${result.created} 条，更新 ${result.updated} 条；使用检索片段 ${result.contextCount} 条`);
+    } catch (error) {
+      setStatus(`提取资料条目失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   useEffect(() => {
     if (!state) return undefined;
     return window.novelAPI.onMenuAction((action) => {
@@ -848,6 +898,7 @@ export default function App() {
       if (action === "openProject") void openProject();
       if (action === "importDocument") void importDocument();
       if (action === "exportChapterDocx") void exportChapterDocx();
+      if (action === "exportBookDocx") void exportBookDocx();
       if (action === "exportBackup") void exportBackup();
       if (action === "saveChapter") void saveChapter();
       if (action === "rebuildIndex") void rebuildIndex();
@@ -889,6 +940,10 @@ export default function App() {
           <button onClick={exportChapterDocx} title="导出当前章节为 Word 文档">
             <FileDown size={16} />
             导出DOCX
+          </button>
+          <button onClick={() => void exportBookDocx()} title="导出整本小说为 Word 文档">
+            <BookOpen size={16} />
+            导出整书
           </button>
           <button onClick={saveChapter} title="保存当前章节，快捷键 Ctrl+S">
             <Save size={16} />
@@ -937,6 +992,9 @@ export default function App() {
               </button>
               <button className={view === "world" ? "active" : ""} onClick={() => setView("world")}>
                 <Boxes size={16} /> 世界
+              </button>
+              <button className={view === "analysis" ? "active" : ""} onClick={() => setView("analysis")}>
+                <Search size={16} /> 分析
               </button>
             </div>
             <ChapterTree
@@ -1050,6 +1108,22 @@ export default function App() {
               onSave={(doc) => void saveWorldDoc(doc)}
               onDelete={(id) => void deleteWorldDoc(id)}
               onGenerate={() => void generateWorldFromOutline()}
+            />
+          )}
+
+          {view === "analysis" && (
+            <AnalysisPanel
+              state={state}
+              selectedChapterId={selectedChapter?.id || ""}
+              onSelectChapter={(chapterId) => void selectChapter(chapterId)}
+              onOpenSource={(result) => {
+                if (result.sourceType === "chapter") void selectChapter(result.sourceId);
+                if (result.sourceType === "character") setView("characters");
+                if (result.sourceType === "world") setView("world");
+              }}
+              onExportBook={() => void exportBookDocx()}
+              onExtractWorldCards={() => void extractWorldCardsFromOutline()}
+              onStatus={setStatus}
             />
           )}
         </section>
@@ -1632,6 +1706,365 @@ function ChatPanel({
         </button>
       </div>
     </aside>
+  );
+}
+
+function AnalysisPanel({
+  state,
+  selectedChapterId,
+  onSelectChapter,
+  onOpenSource,
+  onExportBook,
+  onExtractWorldCards,
+  onStatus,
+}: {
+  state: AppState;
+  selectedChapterId: string;
+  onSelectChapter: (chapterId: string) => void;
+  onOpenSource: (result: GlobalSearchResult) => void;
+  onExportBook: () => void;
+  onExtractWorldCards: () => void;
+  onStatus: (message: string) => void;
+}) {
+  const [tab, setTab] = useState<"search" | "timeline" | "relations" | "consistency" | "versions" | "export">("search");
+  const [query, setQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<GlobalSearchResult[]>([]);
+  const [timelineEvents, setTimelineEvents] = useState<TimelineEvent[]>([]);
+  const [relationshipNodes, setRelationshipNodes] = useState<RelationshipNode[]>([]);
+  const [relationshipEdges, setRelationshipEdges] = useState<RelationshipEdge[]>([]);
+  const [issues, setIssues] = useState<ConsistencyIssue[]>([]);
+  const [consistencyNotice, setConsistencyNotice] = useState("");
+  const [versions, setVersions] = useState<ChapterVersion[]>([]);
+  const [selectedVersionId, setSelectedVersionId] = useState("");
+  const [versionCompare, setVersionCompare] = useState<ChapterVersionCompare | null>(null);
+  const [busy, setBusy] = useState("");
+  const selectedChapter = state.chapters.find((chapter) => chapter.id === selectedChapterId) || state.selectedChapter;
+
+  async function runSearch() {
+    const trimmed = query.trim();
+    if (!trimmed) return;
+    setBusy("search");
+    onStatus("正在全局搜索...");
+    try {
+      const result = await window.novelAPI.globalSearch({ query: trimmed });
+      setSearchResults(result.results);
+      onStatus(`搜索完成：找到 ${result.results.length} 条结果`);
+    } catch (error) {
+      onStatus(`搜索失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function loadTimeline() {
+    setBusy("timeline");
+    onStatus("正在整理时间线...");
+    try {
+      const result = await window.novelAPI.buildTimeline();
+      setTimelineEvents(result.events);
+      onStatus(`时间线已整理：${result.events.length} 个事件`);
+    } catch (error) {
+      onStatus(`整理时间线失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function loadRelationships() {
+    setBusy("relations");
+    onStatus("正在生成角色关系网...");
+    try {
+      const result = await window.novelAPI.buildRelationshipGraph();
+      setRelationshipNodes(result.nodes);
+      setRelationshipEdges(result.edges);
+      onStatus(`关系网已生成：${result.nodes.length} 个角色，${result.edges.length} 条关系`);
+    } catch (error) {
+      onStatus(`生成关系网失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function runConsistencyCheck() {
+    setBusy("consistency");
+    setConsistencyNotice("");
+    onStatus("正在检查设定一致性...");
+    try {
+      const result = await window.novelAPI.analyzeConsistency();
+      setIssues(result.issues);
+      setConsistencyNotice(result.apiError ? `AI 暂时不可用，已显示本地检查结果：${result.apiError}` : `AI 检查完成，引用检索片段 ${result.contextCount} 条`);
+      onStatus(`设定检查完成：发现 ${result.issues.length} 条待确认问题`);
+    } catch (error) {
+      onStatus(`设定检查失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function loadVersions() {
+    if (!selectedChapterId) return;
+    setBusy("versions");
+    setVersionCompare(null);
+    onStatus("正在读取章节历史版本...");
+    try {
+      const result = await window.novelAPI.listChapterVersions(selectedChapterId);
+      setVersions(result.versions);
+      setSelectedVersionId(result.versions[0]?.id || "");
+      onStatus(result.versions.length ? `已读取 ${result.versions.length} 个历史版本` : "当前章节还没有历史版本；保存修改后会开始记录");
+    } catch (error) {
+      onStatus(`读取历史版本失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function compareVersion() {
+    if (!selectedChapterId || !selectedVersionId) return;
+    setBusy("compare");
+    onStatus("正在对比版本...");
+    try {
+      const result = await window.novelAPI.compareChapterVersion({ chapterId: selectedChapterId, versionId: selectedVersionId });
+      setVersionCompare(result);
+      onStatus(`版本对比完成：新增 ${result.added} 行，删除 ${result.removed} 行`);
+    } catch (error) {
+      onStatus(`版本对比失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  useEffect(() => {
+    if (tab === "timeline" && !timelineEvents.length) void loadTimeline();
+    if (tab === "relations" && !relationshipNodes.length) void loadRelationships();
+    if (tab === "versions" && selectedChapterId) void loadVersions();
+  }, [tab, selectedChapterId]);
+
+  const graph = useMemo(() => {
+    const width = 920;
+    const height = 460;
+    const centerX = width / 2;
+    const centerY = height / 2;
+    const radius = Math.max(120, Math.min(190, 34 + relationshipNodes.length * 8));
+    const positions = new Map<string, { x: number; y: number }>();
+    relationshipNodes.forEach((node, index) => {
+      const angle = (Math.PI * 2 * index) / Math.max(1, relationshipNodes.length) - Math.PI / 2;
+      positions.set(node.id, {
+        x: centerX + Math.cos(angle) * radius,
+        y: centerY + Math.sin(angle) * radius,
+      });
+    });
+    return { width, height, positions };
+  }, [relationshipNodes]);
+
+  return (
+    <section className="analysis-panel">
+      <div className="analysis-tabs">
+        <button className={tab === "search" ? "active" : ""} onClick={() => setTab("search")}>
+          <Search size={16} />
+          全局搜索
+        </button>
+        <button className={tab === "timeline" ? "active" : ""} onClick={() => setTab("timeline")}>
+          <ListTree size={16} />
+          时间线
+        </button>
+        <button className={tab === "relations" ? "active" : ""} onClick={() => setTab("relations")}>
+          <UserRound size={16} />
+          关系网
+        </button>
+        <button className={tab === "consistency" ? "active" : ""} onClick={() => setTab("consistency")}>
+          <RefreshCcw size={16} />
+          一致性
+        </button>
+        <button className={tab === "versions" ? "active" : ""} onClick={() => setTab("versions")}>
+          <FileText size={16} />
+          版本对比
+        </button>
+        <button className={tab === "export" ? "active" : ""} onClick={() => setTab("export")}>
+          <FileDown size={16} />
+          导出/提取
+        </button>
+      </div>
+
+      {tab === "search" && (
+        <div className="analysis-section">
+          <form
+            className="analysis-search"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void runSearch();
+            }}
+          >
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索章节、角色、世界观" />
+            <button disabled={busy === "search"}>
+              <Search size={16} />
+              搜索
+            </button>
+          </form>
+          <div className="search-results">
+            {searchResults.map((result) => (
+              <button key={result.id} className="search-result" onClick={() => onOpenSource(result)}>
+                <strong>{result.title}</strong>
+                <span>{sourceLabel(result.sourceType)}{result.volume ? ` / ${result.volume}` : result.category ? ` / ${result.category}` : ""}</span>
+                <p>{result.snippet || "匹配标题或分类"}</p>
+              </button>
+            ))}
+            {!searchResults.length && <div className="analysis-empty">输入关键词后可搜索章节正文、角色卡片和世界观条目。</div>}
+          </div>
+        </div>
+      )}
+
+      {tab === "timeline" && (
+        <div className="analysis-section">
+          <div className="analysis-actions">
+            <button onClick={() => void loadTimeline()} disabled={busy === "timeline"}>
+              <RefreshCcw size={16} />
+              刷新时间线
+            </button>
+          </div>
+          <div className="timeline-list">
+            {timelineEvents.map((event) => (
+              <button key={event.id} className="timeline-item" onClick={() => onSelectChapter(event.chapterId)}>
+                <span className="timeline-dot" />
+                <div>
+                  <strong>{event.timeHint || event.title}</strong>
+                  <small>{event.volume} / {event.chapterTitle}</small>
+                  <p>{event.summary}</p>
+                  {!!event.characters.length && <em>{event.characters.join("、")}</em>}
+                </div>
+              </button>
+            ))}
+            {!timelineEvents.length && <div className="analysis-empty">时间线会从章节顺序、时间词和小标题中整理事件。</div>}
+          </div>
+        </div>
+      )}
+
+      {tab === "relations" && (
+        <div className="analysis-section">
+          <div className="analysis-actions">
+            <button onClick={() => void loadRelationships()} disabled={busy === "relations"}>
+              <RefreshCcw size={16} />
+              刷新关系网
+            </button>
+          </div>
+          {relationshipNodes.length ? (
+            <>
+              <svg className="relationship-graph" viewBox={`0 0 ${graph.width} ${graph.height}`} role="img">
+                {relationshipEdges.map((edge) => {
+                  const source = graph.positions.get(edge.source);
+                  const target = graph.positions.get(edge.target);
+                  if (!source || !target) return null;
+                  return <line key={edge.id} x1={source.x} y1={source.y} x2={target.x} y2={target.y} strokeWidth={Math.max(1.5, edge.weight / 2)} />;
+                })}
+                {relationshipNodes.map((node) => {
+                  const position = graph.positions.get(node.id);
+                  if (!position) return null;
+                  return (
+                    <g key={node.id}>
+                      <circle cx={position.x} cy={position.y} r={node.size} />
+                      <text x={position.x} y={position.y + node.size + 15} textAnchor="middle">
+                        {node.name}
+                      </text>
+                    </g>
+                  );
+                })}
+              </svg>
+              <div className="relationship-edges">
+                {relationshipEdges.slice(0, 24).map((edge) => (
+                  <div key={edge.id}>
+                    <strong>{edge.source} - {edge.target}</strong>
+                    <span>{edge.label} / 强度 {edge.weight}</span>
+                    <p>{edge.evidence[0] || "来自角色关系或正文同场统计"}</p>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="analysis-empty">角色卡片越完整，关系网越清晰。正文中同场出现也会形成关系线。</div>
+          )}
+        </div>
+      )}
+
+      {tab === "consistency" && (
+        <div className="analysis-section">
+          <div className="analysis-actions">
+            <button onClick={() => void runConsistencyCheck()} disabled={busy === "consistency"}>
+              <RefreshCcw size={16} />
+              开始检查
+            </button>
+            {consistencyNotice && <span>{consistencyNotice}</span>}
+          </div>
+          <div className="issue-list">
+            {issues.map((issue) => (
+              <article key={issue.id} className={`issue-card severity-${issue.severity}`}>
+                <header>
+                  <strong>{issue.title}</strong>
+                  <span>{issue.severity} / {issue.category}</span>
+                </header>
+                <p>{issue.detail}</p>
+                {issue.suggestion && <em>{issue.suggestion}</em>}
+                {!!issue.evidence.length && <small>{issue.evidence.join("；")}</small>}
+              </article>
+            ))}
+            {!issues.length && <div className="analysis-empty">点击“开始检查”后，会结合 AI 和本地规则查找前后矛盾。</div>}
+          </div>
+        </div>
+      )}
+
+      {tab === "versions" && (
+        <div className="analysis-section">
+          <div className="analysis-actions">
+            <button onClick={() => void loadVersions()} disabled={!selectedChapterId || busy === "versions"}>
+              <RefreshCcw size={16} />
+              读取版本
+            </button>
+            <span>{selectedChapter ? `当前章节：${selectedChapter.title}` : "请选择一个章节"}</span>
+          </div>
+          <div className="version-tools">
+            <select value={selectedVersionId} onChange={(event) => setSelectedVersionId(event.target.value)} disabled={!versions.length}>
+              {versions.map((version) => (
+                <option key={version.id} value={version.id}>
+                  {formatDateTime(version.createdAt)} / {version.wordCount} 字
+                </option>
+              ))}
+            </select>
+            <button onClick={() => void compareVersion()} disabled={!selectedVersionId || busy === "compare"}>
+              对比当前版本
+            </button>
+          </div>
+          {versionCompare ? (
+            <div className="diff-view">
+              <div className="diff-summary">
+                <strong>{formatDateTime(versionCompare.version.createdAt)} 对比当前</strong>
+                <span>新增 {versionCompare.added} 行 / 删除 {versionCompare.removed} 行{versionCompare.truncated ? " / 已截断显示" : ""}</span>
+              </div>
+              {versionCompare.diff.map((line, index) => (
+                <p key={`${line.type}_${index}`} className={`diff-line ${line.type}`}>
+                  <span>{line.type === "added" ? "+" : line.type === "removed" ? "-" : " "}</span>
+                  {line.text}
+                </p>
+              ))}
+            </div>
+          ) : (
+            <div className="analysis-empty">修改并保存章节后，软件会自动保留保存前版本；这里可以和当前内容对比。</div>
+          )}
+        </div>
+      )}
+
+      {tab === "export" && (
+        <div className="analysis-section tool-grid">
+          <button className="tool-card" onClick={onExportBook}>
+            <FileDown size={22} />
+            <strong>导出整书 DOCX</strong>
+            <span>按分卷和章节合并为一个 Word 文档。</span>
+          </button>
+          <button className="tool-card" onClick={onExtractWorldCards}>
+            <Wand2 size={22} />
+            <strong>提取地点/势力/物品</strong>
+            <span>调用 AI 生成世界观条目，并直接写入“世界”界面。</span>
+          </button>
+        </div>
+      )}
+    </section>
   );
 }
 

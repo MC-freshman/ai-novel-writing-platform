@@ -1051,6 +1051,305 @@ body.resizing {
   padding: 0 12px;
 }
 
+/* Analysis workspace */
+.analysis-panel {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  background: var(--bg);
+}
+
+.analysis-tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 86%, var(--bg));
+}
+
+.analysis-tabs button,
+.analysis-actions button,
+.analysis-search button,
+.version-tools button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
+.analysis-tabs button.active {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+}
+
+.analysis-section {
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+}
+
+.analysis-search {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.analysis-search input,
+.version-tools select {
+  min-height: 38px;
+  padding: 0 12px;
+}
+
+.search-results,
+.issue-list,
+.relationship-edges {
+  display: grid;
+  gap: 10px;
+}
+
+.search-result {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  padding: 12px;
+  text-align: left;
+  border-radius: 8px;
+}
+
+.search-result span,
+.timeline-item small,
+.relationship-edges span,
+.diff-summary span,
+.analysis-actions span,
+.tool-card span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.search-result p,
+.timeline-item p,
+.relationship-edges p,
+.issue-card p {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.analysis-empty {
+  display: grid;
+  place-items: center;
+  min-height: 160px;
+  padding: 18px;
+  color: var(--muted);
+  text-align: center;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 68%, transparent);
+}
+
+.analysis-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.timeline-list {
+  position: relative;
+  display: grid;
+  gap: 10px;
+  padding-left: 10px;
+}
+
+.timeline-list::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 18px;
+  width: 1px;
+  background: var(--line);
+}
+
+.timeline-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px 10px 0;
+  text-align: left;
+  border: 0;
+  background: transparent;
+}
+
+.timeline-dot {
+  z-index: 1;
+  width: 12px;
+  height: 12px;
+  margin: 8px 0 0 2px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  background: var(--panel);
+}
+
+.timeline-item div {
+  display: grid;
+  gap: 5px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.timeline-item em,
+.issue-card em {
+  color: var(--accent-strong);
+  font-style: normal;
+  font-size: 12px;
+}
+
+.relationship-graph {
+  width: 100%;
+  max-height: 480px;
+  margin-bottom: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.relationship-graph line {
+  stroke: color-mix(in srgb, var(--accent) 38%, var(--line));
+}
+
+.relationship-graph circle {
+  fill: color-mix(in srgb, var(--accent) 18%, var(--panel));
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.relationship-graph text {
+  fill: var(--text);
+  font-size: 13px;
+}
+
+.relationship-edges {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.relationship-edges div,
+.issue-card,
+.diff-view,
+.tool-card {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.issue-card {
+  display: grid;
+  gap: 8px;
+}
+
+.issue-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.issue-card header span {
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.issue-card.severity-高 {
+  border-color: color-mix(in srgb, var(--danger) 58%, var(--line));
+}
+
+.issue-card.severity-中 {
+  border-color: color-mix(in srgb, #c28a2e 58%, var(--line));
+}
+
+.issue-card small {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.version-tools {
+  display: grid;
+  grid-template-columns: minmax(180px, 320px) auto;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.diff-view {
+  display: grid;
+  gap: 4px;
+  overflow: auto;
+}
+
+.diff-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.diff-line {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 8px;
+  margin: 0;
+  padding: 5px 8px;
+  border-radius: 6px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.diff-line.added {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.diff-line.removed {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.diff-line span {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.tool-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 14px;
+  align-content: start;
+}
+
+.tool-card {
+  min-height: 130px;
+  display: grid;
+  justify-items: start;
+  align-content: start;
+  gap: 10px;
+  text-align: left;
+}
+
 button.danger {
   border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
   color: var(--danger);
