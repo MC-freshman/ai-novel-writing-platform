@@ -15,6 +15,11 @@ contextBridge.exposeInMainWorld("novelAPI", {
   refreshChapterFromOriginal: (chapterId) => ipcRenderer.invoke("chapter:refresh-original", chapterId),
   saveProjectSettings: (payload) => ipcRenderer.invoke("project:save-settings", payload),
   exportBackup: () => ipcRenderer.invoke("project:export-backup"),
+  exportBookDocx: () => ipcRenderer.invoke("project:export-book-docx"),
+  globalSearch: (payload) => ipcRenderer.invoke("global:search", payload),
+  buildTimeline: () => ipcRenderer.invoke("analysis:timeline"),
+  buildRelationshipGraph: () => ipcRenderer.invoke("analysis:relationships"),
+  analyzeConsistency: () => ipcRenderer.invoke("analysis:consistency"),
 
   createChapter: (payload) => ipcRenderer.invoke("chapter:create", payload),
   loadChapter: (chapterId) => ipcRenderer.invoke("chapter:load", chapterId),
@@ -22,6 +27,8 @@ contextBridge.exposeInMainWorld("novelAPI", {
   deleteChapter: (chapterId) => ipcRenderer.invoke("chapter:delete", chapterId),
   reorderChapters: (chapterIds) => ipcRenderer.invoke("chapter:reorder", chapterIds),
   moveChapterToVolume: (payload) => ipcRenderer.invoke("chapter:move-to-volume", payload),
+  listChapterVersions: (chapterId) => ipcRenderer.invoke("chapter:list-versions", chapterId),
+  compareChapterVersion: (payload) => ipcRenderer.invoke("chapter:compare-version", payload),
 
   saveCharacter: (payload) => ipcRenderer.invoke("character:save", payload),
   deleteCharacter: (characterId) => ipcRenderer.invoke("character:delete", characterId),
@@ -32,5 +39,6 @@ contextBridge.exposeInMainWorld("novelAPI", {
   askAI: (payload) => ipcRenderer.invoke("ai:ask", payload),
   generateCharactersFromOutline: () => ipcRenderer.invoke("ai:generate-characters"),
   generateWorldFromOutline: () => ipcRenderer.invoke("ai:generate-world"),
+  extractWorldCardsFromOutline: () => ipcRenderer.invoke("ai:extract-world-cards"),
   rebuildIndex: () => ipcRenderer.invoke("index:rebuild"),
 });

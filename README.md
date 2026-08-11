@@ -6,9 +6,9 @@
 
 请到 GitHub Release 页面下载最新版：
 
-- [AI小说创作平台 v0.1.12](https://github.com/MC-freshman/ai-novel-writing-platform/releases/tag/v0.1.12)
+- [AI小说创作平台 v0.1.13](https://github.com/MC-freshman/ai-novel-writing-platform/releases/tag/v0.1.13)
 
-下载 `AI-Novel-Platform-0.1.12-clean-package.zip` 后解压，双击 `打开AI小说创作平台_新版.bat`，或直接运行 `release/AI小说创作平台 0.1.12.exe`。
+下载 `AI-Novel-Platform-0.1.13-clean-package.zip` 后解压，双击 `打开AI小说创作平台_新版.bat`，或直接运行 `release/AI小说创作平台 0.1.13.exe`。
 
 > 当前 Windows 可执行文件未做代码签名，首次运行时系统可能出现安全提醒。请只从本仓库 Release 页面下载。
 
@@ -20,9 +20,10 @@
 - Word/语雀式编辑体验：正文标题旁支持折叠/展开，适合长大纲和长章节整理。
 - 本地知识库：保存或导入内容后自动建立本地检索索引。
 - AI 对话：提问时先检索本地小说资料，再调用已配置的大模型接口回答。
-- AI 资料生成：可从大纲生成角色卡片和世界观条目，并直接写入对应界面。
+- AI 资料生成：可从大纲生成角色卡片、世界观条目，并可提取地点、势力、物品资料，直接写入对应界面。
 - 分类管理：角色卡片和世界观条目支持多级分类折叠，例如 `阵营/主角团`、`世界/地理`，并可拖动到其他分类中。
-- 导出与备份：当前章节可导出为 `.docx`，项目可导出 ZIP 备份。
+- 分析工作台：支持全局搜索、时间线、角色关系网、设定一致性检查和章节版本对比。
+- 导出与备份：当前章节和整本小说都可导出为 `.docx`，项目可导出 ZIP 备份。
 
 ## 隐私与数据
 
