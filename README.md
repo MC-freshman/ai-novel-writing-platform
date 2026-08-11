@@ -6,17 +6,17 @@
 
 请到 GitHub Release 页面下载最新版：
 
-- [AI小说创作平台 v0.1.10](https://github.com/MC-freshman/ai-novel-writing-platform/releases/tag/v0.1.10)
+- [AI小说创作平台 v0.1.11](https://github.com/MC-freshman/ai-novel-writing-platform/releases/tag/v0.1.11)
 
-下载 `AI-Novel-Platform-0.1.10-clean-package.zip` 后解压，双击 `打开AI小说创作平台_新版.bat`，或直接运行 `release/AI小说创作平台 0.1.10.exe`。
+下载 `AI-Novel-Platform-0.1.11-clean-package.zip` 后解压，双击 `打开AI小说创作平台_新版.bat`，或直接运行 `release/AI小说创作平台 0.1.11.exe`。
 
 > 当前 Windows 可执行文件未做代码签名，首次运行时系统可能出现安全提醒。请只从本仓库 Release 页面下载。
 
 ## 主要功能
 
 - 富文档写作：标题、正文、粗体、斜体、下划线、引用、列表、对齐、撤销/重做、表格插入。
-- Word 文档导入：支持 `.docx`、`.txt`、`.md`，导入 `.docx` 后尽量保留图片、表格和标题结构。
-- 可折叠目录树：章节、文档、小标题可分级折叠；小标题可升降级。
+- Word 文档导入：支持一次选择多个 `.docx`、`.txt`、`.md` 文件，导入 `.docx` 后尽量保留图片、表格和标题结构。
+- 可折叠目录树：章节、文档、小标题可分级折叠；小标题可升降级，文档可直接拖动到分组标题或其他文档上完成分类和排序。
 - Word/语雀式编辑体验：正文标题旁支持折叠/展开，适合长大纲和长章节整理。
 - 本地知识库：保存或导入内容后自动建立本地检索索引。
 - AI 对话：提问时先检索本地小说资料，再调用已配置的大模型接口回答。

@@ -1,6 +1,6 @@
 {
   "name": "ai-novel-writing-platform",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "private": true,
   "description": "本地 AI 小说创作平台，支持 Markdown 写作、本地知识库和 RAG 对话。",
   "main": "electron/main.cjs",

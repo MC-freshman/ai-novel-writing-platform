@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld("novelAPI", {
   saveChapter: (payload) => ipcRenderer.invoke("chapter:save", payload),
   deleteChapter: (chapterId) => ipcRenderer.invoke("chapter:delete", chapterId),
   reorderChapters: (chapterIds) => ipcRenderer.invoke("chapter:reorder", chapterIds),
+  moveChapterToVolume: (payload) => ipcRenderer.invoke("chapter:move-to-volume", payload),
 
   saveCharacter: (payload) => ipcRenderer.invoke("character:save", payload),
   deleteCharacter: (characterId) => ipcRenderer.invoke("character:delete", characterId),
