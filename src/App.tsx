@@ -940,9 +940,9 @@ export default function App() {
 
   function updateCurrentChat(nextMessages: ChatMessage[]) {
     const now = new Date().toISOString();
-    const activeId = activeChatSessionId || chatSessions[0]?.id || makeChatSession().id;
-    const sessionExists = chatSessions.some((session) => session.id === activeId);
-    const baseSession = sessionExists ? chatSessions.find((session) => session.id === activeId)! : makeChatSession();
+    const existingSession = chatSessions.find((session) => session.id === activeChatSessionId) || chatSessions[0];
+    const baseSession = existingSession || makeChatSession();
+    const activeId = baseSession.id;
     const nextSession = {
       ...baseSession,
       id: activeId,
