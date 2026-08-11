@@ -2,6 +2,7 @@
 
 import type {
   AppState,
+  AnalysisSnapshot,
   ChapterVersion,
   ChapterVersionCompare,
   ConsistencyIssue,
@@ -10,6 +11,7 @@ import type {
   AppearanceStat,
   MaterialItem,
   ProgressState,
+  KnowledgeItem,
   RelationshipEdge,
   RelationshipNode,
   TimelineEvent,
@@ -54,10 +56,14 @@ declare global {
       exportBackup: () => Promise<{ filePath?: string; canceled?: true }>;
       exportBookDocx: (payload?: { includeOutline?: boolean; includeCharacters?: boolean; includeWorld?: boolean }) => Promise<{ filePath?: string; canceled?: true }>;
       globalSearch: (payload: { query: string }) => Promise<{ query: string; results: GlobalSearchResult[] }>;
-      buildTimeline: (payload?: { mode?: "local" | "ai" }) => Promise<{ events: TimelineEvent[]; contextCount?: number; apiError?: string }>;
-      buildRelationshipGraph: (payload?: { characterNames?: string[]; relationTypes?: string[] }) => Promise<{ nodes: RelationshipNode[]; edges: RelationshipEdge[] }>;
-      analyzeConsistency: () => Promise<{ issues: ConsistencyIssue[]; contextCount: number; apiError?: string }>;
+      getAnalysisState: () => Promise<AnalysisSnapshot>;
+      saveAnalysisState: (payload: Partial<AnalysisSnapshot>) => Promise<AnalysisSnapshot>;
+      buildTimeline: (payload?: { mode?: "local" | "ai"; refresh?: boolean; chapterIds?: string[]; knowledgeSourceIds?: string[] }) => Promise<{ events: TimelineEvent[]; contextCount?: number; apiError?: string }>;
+      buildRelationshipGraph: (payload?: { characterNames?: string[]; categoryFilter?: string; relationTypes?: string[]; refresh?: boolean }) => Promise<{ nodes: RelationshipNode[]; edges: RelationshipEdge[] }>;
+      analyzeConsistency: (payload?: { refresh?: boolean; chapterIds?: string[]; knowledgeSourceIds?: string[] }) => Promise<{ issues: ConsistencyIssue[]; contextCount: number; apiError?: string }>;
       updateIssueStatus: (payload: { issueId: string; status: ConsistencyIssue["status"] }) => Promise<{ issueId: string; status: string; updatedAt: string }>;
+      listKnowledgeItems: () => Promise<{ items: KnowledgeItem[] }>;
+      updateKnowledgeItems: (payload: { items: KnowledgeItem[] }) => Promise<{ items: KnowledgeItem[]; state: AppState }>;
       getAppearanceStats: () => Promise<{ stats: AppearanceStat[] }>;
       getWorldMap: () => Promise<{ nodes: WorldMapNode[]; edges: WorldMapEdge[] }>;
       listMaterials: () => Promise<{ materials: MaterialItem[] }>;

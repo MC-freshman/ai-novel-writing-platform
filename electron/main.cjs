@@ -141,6 +141,10 @@ function getAnalysisDir(projectPath) {
   return path.join(projectPath, "analysis");
 }
 
+function getAnalysisStatePath(projectPath) {
+  return path.join(getAnalysisDir(projectPath), "snapshot.json");
+}
+
 function getIssueStatusPath(projectPath) {
   return path.join(getAnalysisDir(projectPath), "issue-status.json");
 }
@@ -348,6 +352,7 @@ async function loadProjectSources(projectPath) {
       title: chapter.title,
       volume: chapter.volume || "未分卷",
       category: chapter.volume || "未分卷",
+      knowledgeRole: getKnowledgeRole(chapter),
       order: chapter.order,
       updatedAt: chapter.updatedAt,
       rawContent: content,
@@ -421,12 +426,57 @@ async function saveIssueStatuses(projectPath, statuses) {
   await writeJson(getIssueStatusPath(projectPath), statuses || {});
 }
 
+async function loadAnalysisState(projectPath) {
+  const data = await readJson(getAnalysisStatePath(projectPath), {});
+  return data && typeof data === "object" && !Array.isArray(data) ? data : {};
+}
+
+async function saveAnalysisState(projectPath, patch) {
+  const previous = await loadAnalysisState(projectPath);
+  const next = {
+    ...previous,
+    ...(patch || {}),
+    updatedAt: nowIso(),
+  };
+  await writeJson(getAnalysisStatePath(projectPath), next);
+  return next;
+}
+
 function applyIssueStatuses(issues, statuses) {
   return issues.map((issue) => ({
     ...issue,
     status: statuses[issue.id]?.status || "待处理",
     statusUpdatedAt: statuses[issue.id]?.updatedAt || "",
   }));
+}
+
+function normalizeKnowledgeRole(value) {
+  return ["大纲", "正文", "补充材料"].includes(String(value || "")) ? String(value) : "正文";
+}
+
+function knowledgeRoleLabel(role) {
+  const normalized = normalizeKnowledgeRole(role);
+  if (normalized === "大纲") return "大纲";
+  if (normalized === "补充材料") return "补充材料";
+  return "正文";
+}
+
+function getKnowledgeRole(chapter) {
+  return normalizeKnowledgeRole(chapter?.knowledgeRole || "正文");
+}
+
+function chapterToKnowledgeItem(chapter) {
+  return {
+    id: chapter.id,
+    sourceId: chapter.id,
+    sourceType: "chapter",
+    title: chapter.title,
+    volume: chapter.volume || "未分卷",
+    knowledgeRole: getKnowledgeRole(chapter),
+    order: chapter.order,
+    wordCount: chapter.wordCount || 0,
+    updatedAt: chapter.updatedAt || "",
+  };
 }
 
 async function loadMaterials(projectPath) {
@@ -456,6 +506,60 @@ async function saveMaterial(projectPath, payload) {
 
 async function deleteMaterial(projectPath, materialId) {
   await fs.rm(path.join(getMaterialsDir(projectPath), `${materialId}.json`), { force: true });
+}
+
+async function listKnowledgeItems(projectPath) {
+  const config = await loadConfig(projectPath);
+  return config.chapters.slice().sort((a, b) => a.order - b.order).map(chapterToKnowledgeItem);
+}
+
+async function updateVectorKnowledgeMetadata(projectPath, chapters) {
+  const byId = new Map(chapters.map((chapter) => [chapter.id, chapter]));
+  const store = await loadVectorStore(projectPath);
+  let changed = false;
+  store.vectors = store.vectors.map((entry) => {
+    const chapter = byId.get(entry.sourceId);
+    if (!chapter) return entry;
+    changed = true;
+    return {
+      ...entry,
+      title: chapter.title,
+      volume: chapter.volume || "未分卷",
+      category: chapter.volume || "未分卷",
+      knowledgeRole: getKnowledgeRole(chapter),
+      updatedAt: nowIso(),
+    };
+  });
+  if (changed) await saveVectorStore(projectPath, store);
+}
+
+async function updateKnowledgeItems(projectPath, items) {
+  const updates = new Map((Array.isArray(items) ? items : []).map((item) => [String(item.id || item.sourceId || ""), item]));
+  const config = await loadConfig(projectPath);
+  let changed = false;
+  config.chapters = config.chapters.map((chapter) => {
+    const patch = updates.get(chapter.id);
+    if (!patch) return chapter;
+    const nextVolume = String(patch.volume || chapter.volume || "未分卷").trim() || "未分卷";
+    const nextRole = normalizeKnowledgeRole(patch.knowledgeRole || chapter.knowledgeRole);
+    if (nextVolume === chapter.volume && nextRole === getKnowledgeRole(chapter)) return chapter;
+    changed = true;
+    return {
+      ...chapter,
+      volume: nextVolume,
+      knowledgeRole: nextRole,
+      updatedAt: nowIso(),
+    };
+  });
+  if (changed) {
+    await calculateTotalWords(projectPath, config);
+    await saveConfig(projectPath, config);
+    await updateVectorKnowledgeMetadata(projectPath, config.chapters);
+  }
+  return {
+    items: await listKnowledgeItems(projectPath),
+    state: await buildAppState(projectPath),
+  };
 }
 
 function defaultConfig(title = DEFAULT_PROJECT_NAME) {
@@ -501,6 +605,7 @@ function defaultConfig(title = DEFAULT_PROJECT_NAME) {
         order: 0,
         fileName: "chapter_001_开篇.md",
         wordCount: 0,
+        knowledgeRole: "正文",
         createdAt: nowIso(),
         updatedAt: nowIso(),
       },
@@ -742,6 +847,7 @@ async function importDocumentIntoProject(projectPath, filePath, options = {}) {
     order,
     fileName,
     wordCount: countWords(converted.content),
+    knowledgeRole: "正文",
     createdAt: nowIso(),
     updatedAt: nowIso(),
     importedFrom: filePath,
@@ -763,6 +869,9 @@ async function importDocumentIntoProject(projectPath, filePath, options = {}) {
       id: chapter.id,
       type: "chapter",
       title: chapter.title,
+      volume: chapter.volume || "未分卷",
+      category: chapter.volume || "未分卷",
+      knowledgeRole: getKnowledgeRole(chapter),
       content: converted.content,
     },
   };
@@ -824,6 +933,9 @@ async function refreshChapterFromOriginalDocument(projectPath, chapterId) {
     id: chapter.id,
     type: "chapter",
     title: chapter.title,
+    volume: chapter.volume || "未分卷",
+    category: chapter.volume || "未分卷",
+    knowledgeRole: getKnowledgeRole(chapter),
     content: converted.content,
   });
 
@@ -1031,6 +1143,9 @@ async function buildIndexEntries(source, config, characterNames) {
       sourceId: source.id,
       sourceType: source.type,
       title: source.title,
+      volume: source.volume || source.category || "",
+      category: source.category || source.volume || "",
+      knowledgeRole: normalizeKnowledgeRole(source.knowledgeRole || "正文"),
       chunkIndex: index,
       text: chunk.text,
       embedding: embedding.vector,
@@ -1085,6 +1200,9 @@ async function rebuildIndex(projectPath) {
       id: chapter.id,
       type: "chapter",
       title: chapter.title,
+      volume: chapter.volume || "未分卷",
+      category: chapter.volume || "未分卷",
+      knowledgeRole: getKnowledgeRole(chapter),
       content,
     });
   }
@@ -1118,13 +1236,15 @@ async function rebuildIndex(projectPath) {
   return { chunks: result.totalChunks };
 }
 
-async function searchRelevantChunks(projectPath, question, topK) {
+async function searchRelevantChunks(projectPath, question, topK, options = {}) {
   const config = await loadConfig(projectPath);
   const store = await loadVectorStore(projectPath);
   const embedding = await getEmbedding(question, config.api);
   const safeTopK = Math.floor(clampNumber(topK, 1, MAX_RETRIEVAL_TOP_K, 5));
+  const sourceIds = new Set((Array.isArray(options.sourceIds) ? options.sourceIds : []).map((id) => String(id || "")).filter(Boolean));
   const scored = store.vectors
     .map((item) => ({ ...item, score: cosineSimilarity(embedding.vector, item.embedding || []) }))
+    .filter((item) => !sourceIds.size || sourceIds.has(item.sourceId))
     .sort((a, b) => b.score - a.score)
     .slice(0, safeTopK);
   return { chunks: scored, embeddingSource: embedding.source, embeddingWarning: embedding.warning };
@@ -1258,14 +1378,20 @@ function extractJsonFromModelText(text) {
   }
 }
 
-async function collectOutlineCorpus(projectPath, maxChars = 80000) {
+function makeIdSet(values) {
+  return new Set((Array.isArray(values) ? values : []).map((id) => String(id || "")).filter(Boolean));
+}
+
+async function collectOutlineCorpus(projectPath, maxChars = 80000, options = {}) {
   const config = await loadConfig(projectPath);
+  const chapterIds = makeIdSet(options.chapterIds);
   const parts = [];
   for (const chapter of config.chapters.slice().sort((a, b) => a.order - b.order)) {
+    if (chapterIds.size && !chapterIds.has(chapter.id)) continue;
     const content = await fs.readFile(getChapterPath(projectPath, chapter), "utf8").catch(() => "");
     const plain = contentToPlainText(content);
     if (!plain) continue;
-    parts.push(`【${chapter.volume || "未分卷"}｜${chapter.title}】\n${plain}`);
+    parts.push(`【${knowledgeRoleLabel(getKnowledgeRole(chapter))}｜${chapter.volume || "未分卷"}｜${chapter.title}】\n${plain}`);
   }
   const full = parts.join("\n\n");
   if (full.length <= maxChars) return full;
@@ -1274,12 +1400,39 @@ async function collectOutlineCorpus(projectPath, maxChars = 80000) {
   return `${head}\n\n【中间内容过长，已截断，以下为文档后段】\n\n${tail}`;
 }
 
-async function buildStructuringMaterials(projectPath, query) {
+async function collectKnowledgeSourceCorpus(projectPath, sourceIds, maxChars = 60000) {
+  const selectedIds = makeIdSet(sourceIds);
+  if (!selectedIds.size) return "";
+  const { sources } = await loadProjectSources(projectPath);
+  const parts = [];
+  for (const source of sources) {
+    if (!selectedIds.has(source.id)) continue;
+    const typeLabel = source.sourceType === "chapter" ? knowledgeRoleLabel(source.knowledgeRole) : source.sourceType === "character" ? "角色卡" : "世界观";
+    const group = source.volume || source.category || "未分类";
+    const plain = contentToPlainText(source.rawContent || source.text || "");
+    if (!plain) continue;
+    parts.push(`【${typeLabel}｜${group}｜${source.title}】\n${plain}`);
+  }
+  const full = parts.join("\n\n");
+  if (full.length <= maxChars) return full;
+  return `${full.slice(0, Math.floor(maxChars * 0.7))}\n\n【参考资料过长，已截断，以下为后段】\n\n${full.slice(-Math.floor(maxChars * 0.3))}`;
+}
+
+async function buildStructuringMaterials(projectPath, query, options = {}) {
   const config = await loadConfig(projectPath);
   const topK = Math.floor(clampNumber(config.api.topK || 20, 1, MAX_RETRIEVAL_TOP_K, 20));
-  const search = await searchRelevantChunks(projectPath, query, topK);
-  const retrieved = search.chunks.map((item, index) => `【检索片段${index + 1}｜${item.title}】\n${item.text}`).join("\n\n");
-  const corpus = await collectOutlineCorpus(projectPath);
+  const knowledgeSourceIds = Array.isArray(options.knowledgeSourceIds) ? options.knowledgeSourceIds : [];
+  const search = await searchRelevantChunks(projectPath, query, topK, { sourceIds: knowledgeSourceIds });
+  const retrieved = search.chunks
+    .map((item, index) => {
+      const role = item.sourceType === "chapter" ? knowledgeRoleLabel(item.knowledgeRole) : item.sourceType === "character" ? "角色卡" : "世界观";
+      const group = item.volume || item.category || "";
+      return `【检索片段${index + 1}｜${role}${group ? `｜${group}` : ""}｜${item.title}】\n${item.text}`;
+    })
+    .join("\n\n");
+  const inspectedCorpus = await collectOutlineCorpus(projectPath, 80000, { chapterIds: options.chapterIds });
+  const knowledgeCorpus = await collectKnowledgeSourceCorpus(projectPath, knowledgeSourceIds, 60000);
+  const corpus = [inspectedCorpus ? `【审查/整理对象】\n${inspectedCorpus}` : "", knowledgeCorpus ? `【指定参考资料】\n${knowledgeCorpus}` : ""].filter(Boolean).join("\n\n");
   return { config, search, retrieved, corpus };
 }
 
@@ -1504,13 +1657,15 @@ function extractTimeHints(text) {
   return [...new Set(matches || [])].slice(0, 4);
 }
 
-async function buildTimelineEvents(projectPath) {
+async function buildTimelineEvents(projectPath, options = {}) {
   const { chapters, characters } = await loadProjectSources(projectPath);
+  const chapterIds = makeIdSet(options.chapterIds);
+  const visibleChapters = chapterIds.size ? chapters.filter((chapter) => chapterIds.has(chapter.id)) : chapters;
   const characterNames = characters.map((item) => item.name).filter(Boolean);
   const events = [];
   let order = 0;
 
-  for (const chapter of chapters) {
+  for (const chapter of visibleChapters) {
     const content = await fs.readFile(getChapterPath(projectPath, chapter), "utf8").catch(() => "");
     const plain = contentToPlainText(content);
     const paragraphs = plain
@@ -1551,7 +1706,7 @@ async function buildTimelineEvents(projectPath) {
     }
   }
 
-  return { events: events.slice(0, 300) };
+  return { events: events.slice(0, 300), options: { mode: "local", chapterIds: [...chapterIds], knowledgeSourceIds: Array.isArray(options.knowledgeSourceIds) ? options.knowledgeSourceIds : [] } };
 }
 
 function normalizeTimelinePayload(payload, chapters, characterNames) {
@@ -1585,8 +1740,8 @@ function normalizeTimelinePayload(payload, chapters, characterNames) {
     .map((item, index) => ({ ...item, order: index }));
 }
 
-async function buildAiTimelineEvents(projectPath) {
-  const materials = await buildStructuringMaterials(projectPath, "时间线 事件 起因 结果 转折 冲突 章节顺序");
+async function buildAiTimelineEvents(projectPath, options = {}) {
+  const materials = await buildStructuringMaterials(projectPath, "时间线 事件 起因 结果 转折 冲突 章节顺序", options);
   const { chapters, characters } = await loadProjectSources(projectPath);
   const characterNames = characters.map((item) => item.name).filter(Boolean);
   const systemPrompt = `你是长篇小说剧情时间线整理助手。请只基于用户提供的材料，提取真实剧情事件，不要把目录标题当作事件。只输出 JSON，不要解释。
@@ -1608,7 +1763,7 @@ ${materials.corpus}`;
   const answer = await callChatApi(materials.config, systemPrompt, question, []);
   const events = normalizeTimelinePayload(extractJsonFromModelText(answer), chapters, characterNames);
   if (!events.length) throw new Error("AI 没有返回可识别的剧情事件。");
-  return { events, contextCount: materials.search.chunks.length, apiError: "" };
+  return { events, contextCount: materials.search.chunks.length, apiError: "", options: { mode: "ai", chapterIds: Array.isArray(options.chapterIds) ? options.chapterIds : [], knowledgeSourceIds: Array.isArray(options.knowledgeSourceIds) ? options.knowledgeSourceIds : [] } };
 }
 
 function addRelationEdge(edgeMap, source, target, weight, label, evidence) {
@@ -1625,11 +1780,19 @@ function addRelationEdge(edgeMap, source, target, weight, label, evidence) {
 async function buildRelationshipGraph(projectPath, options = {}) {
   const { chapters, characters } = await loadProjectSources(projectPath);
   const selectedNames = new Set(Array.isArray(options.characterNames) ? options.characterNames.filter(Boolean) : []);
+  const categoryFilter = normalizeCategory(options.categoryFilter || "");
   const customTypes = (Array.isArray(options.relationTypes) ? options.relationTypes : [])
     .map((item) => String(item || "").trim())
     .filter(Boolean)
     .slice(0, 30);
-  const visibleCharacters = selectedNames.size ? characters.filter((item) => selectedNames.has(item.name)) : characters;
+  const categoryCharacters =
+    categoryFilter && categoryFilter !== DEFAULT_CATEGORY
+      ? characters.filter((item) => {
+          const category = normalizeCategory(item.category);
+          return category === categoryFilter || category.startsWith(`${categoryFilter}/`);
+        })
+      : characters;
+  const visibleCharacters = selectedNames.size ? categoryCharacters.filter((item) => selectedNames.has(item.name)) : categoryCharacters;
   const names = visibleCharacters.map((item) => item.name).filter(Boolean);
   const mentionCounts = new Map(names.map((name) => [name, 0]));
   const edgeMap = new Map();
@@ -1676,7 +1839,7 @@ async function buildRelationshipGraph(projectPath, options = {}) {
     .sort((a, b) => b.weight - a.weight)
     .slice(0, 120)
     .map((edge) => ({ ...edge, weight: Math.min(12, edge.weight) }));
-  return { nodes, edges };
+  return { nodes, edges, options: { characterNames: [...selectedNames], categoryFilter: categoryFilter === DEFAULT_CATEGORY ? "" : categoryFilter, relationTypes: customTypes } };
 }
 
 function normalizeConsistencyIssues(payload) {
@@ -1695,11 +1858,16 @@ function normalizeConsistencyIssues(payload) {
     .slice(0, 30);
 }
 
-async function buildLocalConsistencyIssues(projectPath) {
+async function buildLocalConsistencyIssues(projectPath, options = {}) {
   const { chapters, characters, worldDocs } = await loadProjectSources(projectPath);
+  const chapterIds = makeIdSet(options.chapterIds);
+  const sourceIds = makeIdSet(options.knowledgeSourceIds);
+  const visibleChapters = chapterIds.size ? chapters.filter((chapter) => chapterIds.has(chapter.id)) : chapters;
+  const visibleCharacters = sourceIds.size ? characters.filter((card) => sourceIds.has(card.id)) : characters;
+  const visibleWorldDocs = sourceIds.size ? worldDocs.filter((doc) => sourceIds.has(doc.id)) : worldDocs;
   const issues = [];
   const titleMap = new Map();
-  for (const chapter of chapters) {
+  for (const chapter of visibleChapters) {
     const key = `${chapter.volume || ""}/${chapter.title || ""}`;
     titleMap.set(key, [...(titleMap.get(key) || []), chapter]);
     if ((chapter.wordCount || 0) < 20) {
@@ -1727,7 +1895,7 @@ async function buildLocalConsistencyIssues(projectPath) {
       });
     }
   }
-  for (const card of characters) {
+  for (const card of visibleCharacters) {
     if (!String(card.background || card.personality || card.relationships || "").trim()) {
       issues.push({
         id: `local_empty_character_${card.id}`,
@@ -1741,7 +1909,7 @@ async function buildLocalConsistencyIssues(projectPath) {
     }
   }
   const worldTitleMap = new Map();
-  for (const doc of worldDocs) {
+  for (const doc of visibleWorldDocs) {
     worldTitleMap.set(doc.title, [...(worldTitleMap.get(doc.title) || []), doc]);
     if (contentToPlainText(doc.content).length < 20) {
       issues.push({
@@ -1771,10 +1939,10 @@ async function buildLocalConsistencyIssues(projectPath) {
   return issues.slice(0, 40);
 }
 
-async function analyzeConsistency(projectPath) {
-  const localIssues = await buildLocalConsistencyIssues(projectPath);
+async function analyzeConsistency(projectPath, options = {}) {
+  const localIssues = await buildLocalConsistencyIssues(projectPath, options);
   const statuses = await loadIssueStatuses(projectPath);
-  const materials = await buildStructuringMaterials(projectPath, "设定矛盾 时间线 冲突 角色 动机 世界规则 前后不一致");
+  const materials = await buildStructuringMaterials(projectPath, "设定矛盾 时间线 冲突 角色 动机 世界规则 前后不一致", options);
   const systemPrompt = `你是长篇小说设定校对助手。请只基于用户提供的大纲、正文和检索片段，找出可能的前后矛盾、设定冲突、角色动机断裂、时间线问题。只输出 JSON，不要 Markdown，不要解释。
 JSON 格式必须是：
 {"issues":[{"severity":"高","category":"时间线","title":"","detail":"","evidence":[""],"suggestion":""}]}
@@ -1801,9 +1969,25 @@ ${materials.corpus}`;
       seen.add(key);
       return true;
     });
-    return { issues: applyIssueStatuses(issues, statuses), contextCount: materials.search.chunks.length, apiError: "" };
+    return {
+      issues: applyIssueStatuses(issues, statuses),
+      contextCount: materials.search.chunks.length,
+      apiError: "",
+      options: {
+        chapterIds: Array.isArray(options.chapterIds) ? options.chapterIds : [],
+        knowledgeSourceIds: Array.isArray(options.knowledgeSourceIds) ? options.knowledgeSourceIds : [],
+      },
+    };
   } catch (error) {
-    return { issues: applyIssueStatuses(localIssues, statuses), contextCount: materials.search.chunks.length, apiError: error.message || String(error) };
+    return {
+      issues: applyIssueStatuses(localIssues, statuses),
+      contextCount: materials.search.chunks.length,
+      apiError: error.message || String(error),
+      options: {
+        chapterIds: Array.isArray(options.chapterIds) ? options.chapterIds : [],
+        knowledgeSourceIds: Array.isArray(options.knowledgeSourceIds) ? options.knowledgeSourceIds : [],
+      },
+    };
   }
 }
 
@@ -2788,27 +2972,51 @@ function registerIpcHandlers() {
     return globalSearch(projectPath, payload?.query || "");
   });
 
+  ipcMain.handle("analysis:get-state", async () => {
+    const projectPath = await ensureCurrentProject();
+    return loadAnalysisState(projectPath);
+  });
+
+  ipcMain.handle("analysis:save-state", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return saveAnalysisState(projectPath, payload || {});
+  });
+
   ipcMain.handle("analysis:timeline", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
+    const snapshot = await loadAnalysisState(projectPath);
+    if (payload?.refresh === false && snapshot.timeline?.events) return snapshot.timeline;
+    let result;
     if (payload?.mode === "ai") {
       try {
-        return await buildAiTimelineEvents(projectPath);
+        result = await buildAiTimelineEvents(projectPath, payload || {});
       } catch (error) {
-        const fallback = await buildTimelineEvents(projectPath);
-        return { ...fallback, contextCount: 0, apiError: error.message || String(error) };
+        const fallback = await buildTimelineEvents(projectPath, payload || {});
+        result = { ...fallback, contextCount: 0, apiError: error.message || String(error) };
       }
+    } else {
+      result = await buildTimelineEvents(projectPath, payload || {});
     }
-    return buildTimelineEvents(projectPath);
+    await saveAnalysisState(projectPath, { timeline: result, timelineOptions: result.options || payload || {} });
+    return result;
   });
 
   ipcMain.handle("analysis:relationships", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
-    return buildRelationshipGraph(projectPath, payload || {});
+    const snapshot = await loadAnalysisState(projectPath);
+    if (payload?.refresh === false && snapshot.relationships?.nodes) return snapshot.relationships;
+    const result = await buildRelationshipGraph(projectPath, payload || {});
+    await saveAnalysisState(projectPath, { relationships: result, relationshipOptions: result.options || payload || {} });
+    return result;
   });
 
-  ipcMain.handle("analysis:consistency", async () => {
+  ipcMain.handle("analysis:consistency", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
-    return analyzeConsistency(projectPath);
+    const snapshot = await loadAnalysisState(projectPath);
+    if (payload?.refresh === false && snapshot.consistency?.issues) return snapshot.consistency;
+    const result = await analyzeConsistency(projectPath, payload || {});
+    await saveAnalysisState(projectPath, { consistency: result, consistencyOptions: result.options || payload || {} });
+    return result;
   });
 
   ipcMain.handle("analysis:update-issue-status", async (_event, payload) => {
@@ -2819,7 +3027,26 @@ function registerIpcHandlers() {
     const statuses = await loadIssueStatuses(projectPath);
     statuses[issueId] = { status, updatedAt: nowIso() };
     await saveIssueStatuses(projectPath, statuses);
+    const snapshot = await loadAnalysisState(projectPath);
+    if (Array.isArray(snapshot.consistency?.issues)) {
+      await saveAnalysisState(projectPath, {
+        consistency: {
+          ...snapshot.consistency,
+          issues: snapshot.consistency.issues.map((issue) => (issue.id === issueId ? { ...issue, status, statusUpdatedAt: statuses[issueId].updatedAt } : issue)),
+        },
+      });
+    }
     return { issueId, status, updatedAt: statuses[issueId].updatedAt };
+  });
+
+  ipcMain.handle("knowledge:list", async () => {
+    const projectPath = await ensureCurrentProject();
+    return { items: await listKnowledgeItems(projectPath) };
+  });
+
+  ipcMain.handle("knowledge:update", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return updateKnowledgeItems(projectPath, payload?.items || []);
   });
 
   ipcMain.handle("experiments:appearance-stats", async () => {
@@ -2861,6 +3088,7 @@ function registerIpcHandlers() {
       order,
       fileName: `chapter_${String(order + 1).padStart(3, "0")}_${sanitizeFileName(title)}.md`,
       wordCount: 0,
+      knowledgeRole: "正文",
       outline: [{ id: `0_${title}`, level: 1, title, line: 0 }],
       createdAt: nowIso(),
       updatedAt: nowIso(),
@@ -2907,6 +3135,9 @@ function registerIpcHandlers() {
       id: chapter.id,
       type: "chapter",
       title: chapter.title,
+      volume: chapter.volume || "未分卷",
+      category: chapter.volume || "未分卷",
+      knowledgeRole: getKnowledgeRole(chapter),
       content: nextContent,
     });
 
