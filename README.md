@@ -71,28 +71,3 @@ npm run dist
 ```
 
 打包结果会生成在 `release/` 目录。
-
-## 不要提交的内容
-
-本仓库的 `.gitignore` 已默认排除以下内容：
-
-- `node_modules/`
-- `dist/`
-- `release/`
-- `发布包/`
-- `.private/`
-- `novel.config.json`
-- `chapters/`
-- `characters/`
-- `worldbuilding/`
-- `vector_db/`
-- `backups/`
-- `analysis/`
-- `materials/`
-- `.env` 和常见密钥文件
-
-公开仓库前请再次确认没有小说正文、API 密钥、个人资料或未授权素材。
-
-## 许可
-
-本项目目前以“源码可见、保留所有权利”的方式公开。你可以从本仓库下载并在个人环境中测试、学习和使用；未经作者明确许可，不得将本项目或修改版用于商业分发、改名发布、二次销售或声称为自己的原创软件。
