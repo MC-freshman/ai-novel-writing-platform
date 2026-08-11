@@ -70,12 +70,18 @@ import type {
   CharacterCard,
   ChatMessage,
   ConsistencyIssue,
+  ExtractedWorldCandidate,
   GlobalSearchResult,
+  AppearanceStat,
+  MaterialItem,
+  ProgressState,
   Provider,
   RelationshipEdge,
   RelationshipNode,
   TimelineEvent,
   WorldDoc,
+  WorldMapEdge,
+  WorldMapNode,
 } from "./types";
 
 const PROVIDER_DEFAULTS: Record<Provider, { baseUrl: string; model: string; label: string }> = {
@@ -349,6 +355,11 @@ export default function App() {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; text: string } | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [draggingChapterId, setDraggingChapterId] = useState<string | null>(null);
+  const [importProgress, setImportProgress] = useState<ProgressState | null>(null);
+  const [indexProgress, setIndexProgress] = useState<ProgressState | null>(null);
+  const [showFindReplace, setShowFindReplace] = useState(false);
+  const [findText, setFindText] = useState("");
+  const [replaceText, setReplaceText] = useState("");
   const [leftWidth, setLeftWidth] = useState(280);
   const [rightWidth, setRightWidth] = useState(380);
   const [previewWidth, setPreviewWidth] = useState(46);
@@ -372,6 +383,25 @@ export default function App() {
       .then(applyAppState)
       .catch((error) => setStatus(`打开失败：${error.message}`));
   }, [applyAppState]);
+
+  useEffect(() => {
+    const offImport = window.novelAPI.onImportProgress((progress) => {
+      setImportProgress(progress.active ? progress : null);
+      if (progress.active) {
+        setStatus(`${progress.phase}${progress.total ? ` ${progress.current}/${progress.total}` : ""}${progress.fileName ? `：${progress.fileName}` : ""}`);
+      }
+    });
+    const offIndex = window.novelAPI.onIndexProgress((progress) => {
+      setIndexProgress(progress.active ? progress : null);
+      if (progress.active) {
+        setStatus(`${progress.phase}${progress.total ? ` ${progress.current}/${progress.total}` : ""}${progress.detail ? `：${progress.detail}` : ""}`);
+      }
+    });
+    return () => {
+      offImport();
+      offIndex();
+    };
+  }, []);
 
   const saveChapter = useCallback(async () => {
     if (!selectedChapter || saving) return;
@@ -620,6 +650,8 @@ export default function App() {
       setPreview(false);
       if (summary?.failed) {
         setStatus(`已导入 ${summary.imported}/${summary.total} 个文档${targetVolume ? `到「${targetVolume}」` : ""}，${summary.failed} 个失败；成功导入的文档已加入知识库`);
+      } else if (summary?.canceled) {
+        setStatus(`已取消导入；已完成 ${summary.imported}/${summary.total} 个文档`);
       } else if (summary?.imported && summary.imported > 1) {
         setStatus(`已批量导入 ${summary.imported} 个文档${targetVolume ? `到「${targetVolume}」` : ""}，并已加入知识库`);
       } else {
@@ -646,11 +678,11 @@ export default function App() {
     }
   }
 
-  async function exportBookDocx() {
+  async function exportBookDocx(options?: { includeOutline?: boolean; includeCharacters?: boolean; includeWorld?: boolean }) {
     if (dirty) await saveChapter();
     setStatus("正在导出整本小说 Word 文档...");
     try {
-      const result = await window.novelAPI.exportBookDocx();
+      const result = await window.novelAPI.exportBookDocx(options);
       if (result.canceled) {
         setStatus("已取消导出整书");
         return;
@@ -775,11 +807,68 @@ export default function App() {
     setContextMenu({ x: event.clientX, y: event.clientY, text });
   }
 
+  function findNextInChapter() {
+    const needle = findText.trim();
+    if (!needle) return;
+    const editor = editorRef.current;
+    if (!editor) {
+      const found = chapterContent.toLowerCase().indexOf(needle.toLowerCase());
+      setStatus(found >= 0 ? `已找到：${needle}` : `未找到：${needle}`);
+      return;
+    }
+    const start = Math.max(editor.selectionEnd, 0);
+    const lower = chapterContent.toLowerCase();
+    let found = lower.indexOf(needle.toLowerCase(), start);
+    if (found < 0) found = lower.indexOf(needle.toLowerCase());
+    if (found < 0) {
+      setStatus(`未找到：${needle}`);
+      return;
+    }
+    editor.focus();
+    editor.selectionStart = found;
+    editor.selectionEnd = found + needle.length;
+    setSelectedText(chapterContent.slice(found, found + needle.length));
+    setStatus(`已定位：${needle}`);
+  }
+
+  function replaceAllInChapter() {
+    if (!findText) return;
+    const escaped = findText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const regex = new RegExp(escaped, "g");
+    const matches = chapterContent.match(regex)?.length || 0;
+    if (!matches) {
+      setStatus(`没有可替换的内容：${findText}`);
+      return;
+    }
+    setChapterContent(chapterContent.replace(regex, replaceText));
+    setDirty(true);
+    setStatus(`已替换 ${matches} 处`);
+  }
+
   async function askSelectedText(text: string) {
     setContextMenu(null);
     const question = window.prompt("想让 AI 围绕选中文字回答什么？", "分析这段文字的作用，并给出修改建议。");
     if (!question) return;
     await sendChat(question, text);
+  }
+
+  async function editSelectedText(action: "改写" | "润色" | "扩写" | "总结", text: string) {
+    setContextMenu(null);
+    const pendingId = makeMessageId();
+    setChatMessages((items) => [
+      ...items,
+      { id: makeMessageId(), role: "user", content: `${action}选中文字\n\n【选中文字】\n${text}`, createdAt: new Date().toISOString() },
+      { id: pendingId, role: "assistant", content: `正在${action}选中文字...`, createdAt: new Date().toISOString() },
+    ]);
+    try {
+      const result = await window.novelAPI.editSelection({ action, text });
+      setChatMessages((items) => items.map((item) => (item.id === pendingId ? { ...item, content: result.answer } : item)));
+      setStatus(`${action}完成，结果已放到右侧 AI 对话`);
+    } catch (error) {
+      setChatMessages((items) =>
+        items.map((item) => (item.id === pendingId ? { ...item, content: `${action}失败：${error instanceof Error ? error.message : String(error)}` } : item)),
+      );
+    }
   }
 
   async function sendChat(question: string, selection = selectedText) {
@@ -879,15 +968,14 @@ export default function App() {
   }
 
   async function extractWorldCardsFromOutline() {
-    if (!window.confirm("将调用 AI 从大纲和正文中提取地点、势力、物品，并直接写入“世界”界面。继续吗？")) return;
-    setStatus("正在提取地点、势力、物品条目...");
+    if (!window.confirm("将调用 AI 从大纲和正文中提取地点、势力、物品候选，提取后请在“分析 / 导出/提取”中勾选写入。继续吗？")) return;
+    setView("analysis");
+    setStatus("请在“分析 / 导出/提取”里使用候选提取和确认写入。");
     try {
-      const result = await window.novelAPI.extractWorldCardsFromOutline();
-      applyAppState(result.state);
-      setView("world");
-      setStatus(`已提取资料条目：新增 ${result.created} 条，更新 ${result.updated} 条；使用检索片段 ${result.contextCount} 条`);
+      const result = await window.novelAPI.extractWorldCardsFromOutline({ scope: "book" });
+      setStatus(`已提取 ${result.candidates.length} 个候选；请在分析页勾选后写入世界观`);
     } catch (error) {
-      setStatus(`提取资料条目失败：${error instanceof Error ? error.message : String(error)}`);
+      setStatus(`提取候选失败：${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -1052,11 +1140,23 @@ export default function App() {
                   <button title={preview ? "返回富文档编辑" : "查看源码"} className={preview ? "active" : ""} onClick={() => setPreview((value) => !value)}>
                     {preview ? <Eye size={17} /> : <EyeOff size={17} />}
                   </button>
+                  <button title="查找替换" className={showFindReplace ? "active" : ""} onClick={() => setShowFindReplace((value) => !value)}>
+                    <Search size={17} />
+                  </button>
                   <button title="全屏专注" onClick={() => setFocusMode((value) => !value)}>
                     <Maximize2 size={17} />
                   </button>
                 </div>
               </div>
+              {showFindReplace && (
+                <div className="find-replace-bar">
+                  <input value={findText} onChange={(event) => setFindText(event.target.value)} placeholder="查找" />
+                  <input value={replaceText} onChange={(event) => setReplaceText(event.target.value)} placeholder="替换为" />
+                  <button onClick={findNextInChapter}>查找</button>
+                  <button onClick={replaceAllInChapter}>全部替换</button>
+                  <span>选中：{selectedText ? `${countWords(selectedText)} 字` : "0 字"}</span>
+                </div>
+              )}
               <div className="editor-body">
                 {preview ? (
                   <textarea
@@ -1122,7 +1222,8 @@ export default function App() {
                 if (result.sourceType === "world") setView("world");
               }}
               onExportBook={() => void exportBookDocx()}
-              onExtractWorldCards={() => void extractWorldCardsFromOutline()}
+              onExportBookWithOptions={(options) => void exportBookDocx(options)}
+              onApplyState={applyAppState}
               onStatus={setStatus}
             />
           )}
@@ -1148,14 +1249,46 @@ export default function App() {
         <span>总字数：{state.config.stats.totalWords.toLocaleString()} 字</span>
         <span>知识库：{state.vectorStats.chunks} 片段</span>
         <span>模型：{state.config.api.chatModel || "未配置"}</span>
+        {importProgress && (
+          <span className="progress-pill">
+            导入：{importProgress.current}/{importProgress.total || "?"} {importProgress.fileName || importProgress.phase}
+            {importProgress.cancellable && (
+              <button onClick={() => void window.novelAPI.cancelImport()} title="取消后会在当前文件处理完后停止">
+                取消
+              </button>
+            )}
+          </span>
+        )}
+        {indexProgress && (
+          <span className="progress-pill">
+            索引：{indexProgress.current}/{indexProgress.total || "?"} {indexProgress.detail || indexProgress.phase}
+          </span>
+        )}
         <strong>{status}</strong>
       </footer>
 
       {contextMenu && (
         <div className="context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(event) => event.stopPropagation()}>
+          <div className="context-menu-note">{contextMenu.text.length} 字</div>
           <button onClick={() => void askSelectedText(contextMenu.text)}>
             <Wand2 size={15} />
             向 AI 提问
+          </button>
+          {(["改写", "润色", "扩写", "总结"] as const).map((action) => (
+            <button key={action} onClick={() => void editSelectedText(action, contextMenu.text)}>
+              <Sparkles size={15} />
+              {action}
+            </button>
+          ))}
+          <button
+            onClick={() => {
+              setContextMenu(null);
+              setView("analysis");
+              setStatus("请在“分析 / 导出/提取”中选择“仅当前文档”提取设定候选。");
+            }}
+          >
+            <Boxes size={15} />
+            提取设定
           </button>
         </div>
       )}
@@ -1426,6 +1559,7 @@ function ChapterTree({
   const [collapsedChapters, setCollapsedChapters] = useState<Set<string>>(() => new Set());
   const [collapsedHeadings, setCollapsedHeadings] = useState<Set<string>>(() => new Set());
   const [dragOverVolume, setDragOverVolume] = useState("");
+  const [dragHint, setDragHint] = useState("");
   const grouped = useMemo(() => {
     const map = new Map<string, Chapter[]>();
     for (const chapter of chapters) {
@@ -1520,6 +1654,7 @@ function ChapterTree({
           </button>
         </div>
       </div>
+      {dragHint && <div className="drag-hint">{dragHint}</div>}
       {grouped.map(([volume, items]) => (
         <div className="volume" key={volume}>
           <div
@@ -1528,12 +1663,17 @@ function ChapterTree({
               event.preventDefault();
               event.dataTransfer.dropEffect = "move";
               setDragOverVolume(volume);
+              setDragHint(`将移动到「${volume}」分组末尾，保持文档层级`);
             }}
-            onDragLeave={() => setDragOverVolume((current) => (current === volume ? "" : current))}
+            onDragLeave={() => {
+              setDragOverVolume((current) => (current === volume ? "" : current));
+              setDragHint("");
+            }}
             onDrop={(event) => {
               event.preventDefault();
               event.stopPropagation();
               setDragOverVolume("");
+              setDragHint("");
               onDropToVolume(volume);
             }}
           >
@@ -1566,14 +1706,19 @@ function ChapterTree({
                       event.dataTransfer.setData("text/plain", chapter.id);
                       onDragStart(chapter.id);
                     }}
-                    onDragEnd={onDragEnd}
+                    onDragEnd={() => {
+                      setDragHint("");
+                      onDragEnd();
+                    }}
                     onDragOver={(event) => {
                       event.preventDefault();
                       event.dataTransfer.dropEffect = "move";
+                      setDragHint(`将移动到《${chapter.title}》前面，并归入「${chapter.volume || "未分卷"}」`);
                     }}
                     onDrop={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
+                      setDragHint("");
                       onDropOnChapter(chapter);
                     }}
                     onClick={() => onSelect(chapter.id)}
@@ -1715,7 +1860,8 @@ function AnalysisPanel({
   onSelectChapter,
   onOpenSource,
   onExportBook,
-  onExtractWorldCards,
+  onExportBookWithOptions,
+  onApplyState,
   onStatus,
 }: {
   state: AppState;
@@ -1723,7 +1869,8 @@ function AnalysisPanel({
   onSelectChapter: (chapterId: string) => void;
   onOpenSource: (result: GlobalSearchResult) => void;
   onExportBook: () => void;
-  onExtractWorldCards: () => void;
+  onExportBookWithOptions: (options: { includeOutline?: boolean; includeCharacters?: boolean; includeWorld?: boolean }) => void;
+  onApplyState: (state: AppState) => void;
   onStatus: (message: string) => void;
 }) {
   const [tab, setTab] = useState<"search" | "timeline" | "relations" | "consistency" | "versions" | "export">("search");
@@ -1737,6 +1884,19 @@ function AnalysisPanel({
   const [versions, setVersions] = useState<ChapterVersion[]>([]);
   const [selectedVersionId, setSelectedVersionId] = useState("");
   const [versionCompare, setVersionCompare] = useState<ChapterVersionCompare | null>(null);
+  const [timelineMode, setTimelineMode] = useState<"local" | "ai">("ai");
+  const [draggingEventId, setDraggingEventId] = useState("");
+  const [selectedRelationNames, setSelectedRelationNames] = useState<string[]>([]);
+  const [relationTypes, setRelationTypes] = useState<string[]>(["同盟", "敌对", "师徒", "亲属", "感情", "交易", "背叛"]);
+  const [newRelationType, setNewRelationType] = useState("");
+  const [exportOptions, setExportOptions] = useState({ includeOutline: false, includeCharacters: false, includeWorld: false });
+  const [extractScope, setExtractScope] = useState<"book" | "chapter">("book");
+  const [worldCandidates, setWorldCandidates] = useState<ExtractedWorldCandidate[]>([]);
+  const [appearanceStats, setAppearanceStats] = useState<AppearanceStat[]>([]);
+  const [worldMapNodes, setWorldMapNodes] = useState<WorldMapNode[]>([]);
+  const [worldMapEdges, setWorldMapEdges] = useState<WorldMapEdge[]>([]);
+  const [materials, setMaterials] = useState<MaterialItem[]>([]);
+  const [materialDraft, setMaterialDraft] = useState<Partial<MaterialItem>>({ title: "", category: "灵感", content: "" });
   const [busy, setBusy] = useState("");
   const selectedChapter = state.chapters.find((chapter) => chapter.id === selectedChapterId) || state.selectedChapter;
 
@@ -1758,11 +1918,11 @@ function AnalysisPanel({
 
   async function loadTimeline() {
     setBusy("timeline");
-    onStatus("正在整理时间线...");
+    onStatus(timelineMode === "ai" ? "正在让 AI 识别真实剧情事件..." : "正在整理时间线...");
     try {
-      const result = await window.novelAPI.buildTimeline();
+      const result = await window.novelAPI.buildTimeline({ mode: timelineMode });
       setTimelineEvents(result.events);
-      onStatus(`时间线已整理：${result.events.length} 个事件`);
+      onStatus(result.apiError ? `AI 时间线失败，已使用本地结果：${result.apiError}` : `时间线已整理：${result.events.length} 个事件`);
     } catch (error) {
       onStatus(`整理时间线失败：${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -1770,11 +1930,25 @@ function AnalysisPanel({
     }
   }
 
+  function moveTimelineEvent(targetId: string) {
+    if (!draggingEventId || draggingEventId === targetId) return;
+    setTimelineEvents((items) => {
+      const moving = items.find((item) => item.id === draggingEventId);
+      if (!moving) return items;
+      const rest = items.filter((item) => item.id !== draggingEventId);
+      const targetIndex = rest.findIndex((item) => item.id === targetId);
+      rest.splice(targetIndex < 0 ? rest.length : targetIndex, 0, moving);
+      return rest.map((item, index) => ({ ...item, order: index }));
+    });
+    setDraggingEventId("");
+    onStatus("已手动调整时间线顺序");
+  }
+
   async function loadRelationships() {
     setBusy("relations");
     onStatus("正在生成角色关系网...");
     try {
-      const result = await window.novelAPI.buildRelationshipGraph();
+      const result = await window.novelAPI.buildRelationshipGraph({ characterNames: selectedRelationNames, relationTypes });
       setRelationshipNodes(result.nodes);
       setRelationshipEdges(result.edges);
       onStatus(`关系网已生成：${result.nodes.length} 个角色，${result.edges.length} 条关系`);
@@ -1783,6 +1957,17 @@ function AnalysisPanel({
     } finally {
       setBusy("");
     }
+  }
+
+  function toggleRelationName(name: string) {
+    setSelectedRelationNames((items) => (items.includes(name) ? items.filter((item) => item !== name) : [...items, name]));
+  }
+
+  function addRelationType() {
+    const value = newRelationType.trim();
+    if (!value || relationTypes.includes(value)) return;
+    setRelationTypes((items) => [...items, value]);
+    setNewRelationType("");
   }
 
   async function runConsistencyCheck() {
@@ -1798,6 +1983,17 @@ function AnalysisPanel({
       onStatus(`设定检查失败：${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setBusy("");
+    }
+  }
+
+  async function updateIssueStatus(issueId: string, status: ConsistencyIssue["status"]) {
+    if (!status) return;
+    try {
+      await window.novelAPI.updateIssueStatus({ issueId, status });
+      setIssues((items) => items.map((item) => (item.id === issueId ? { ...item, status } : item)));
+      onStatus(`问题已标记为：${status}`);
+    } catch (error) {
+      onStatus(`更新问题状态失败：${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -1831,6 +2027,80 @@ function AnalysisPanel({
     } finally {
       setBusy("");
     }
+  }
+
+  async function prepareWorldCandidates() {
+    setBusy("extract");
+    onStatus(extractScope === "chapter" ? "正在从当前文档提取候选..." : "正在从全书提取候选...");
+    try {
+      const result = await window.novelAPI.extractWorldCardsFromOutline({ scope: extractScope, chapterId: selectedChapterId });
+      setWorldCandidates(result.candidates);
+      onStatus(`已提取 ${result.candidates.length} 个候选；请勾选后写入世界观`);
+    } catch (error) {
+      onStatus(`提取候选失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function saveSelectedCandidates() {
+    setBusy("save-candidates");
+    onStatus("正在写入选中的资料条目...");
+    try {
+      const result = await window.novelAPI.saveWorldCardCandidates({ candidates: worldCandidates });
+      onApplyState(result.state);
+      setWorldCandidates([]);
+      onStatus(`已写入资料条目：新增 ${result.created} 条，合并 ${result.updated} 条`);
+    } catch (error) {
+      onStatus(`写入资料失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function loadAppearanceStats() {
+    setBusy("appearance");
+    try {
+      const result = await window.novelAPI.getAppearanceStats();
+      setAppearanceStats(result.stats);
+      onStatus(`人物出场统计完成：${result.stats.length} 个角色`);
+    } catch (error) {
+      onStatus(`人物出场统计失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function loadWorldMap() {
+    setBusy("world-map");
+    try {
+      const result = await window.novelAPI.getWorldMap();
+      setWorldMapNodes(result.nodes);
+      setWorldMapEdges(result.edges);
+      onStatus(`地点/势力版图已整理：${result.nodes.length} 个节点，${result.edges.length} 条关联`);
+    } catch (error) {
+      onStatus(`整理版图失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function loadMaterials() {
+    const result = await window.novelAPI.listMaterials();
+    setMaterials(result.materials);
+  }
+
+  async function saveMaterialDraft() {
+    const result = await window.novelAPI.saveMaterial(materialDraft);
+    setMaterials(result.materials);
+    setMaterialDraft({ title: "", category: "灵感", content: "" });
+    onStatus(`素材已保存：${result.material.title}`);
+  }
+
+  async function deleteMaterialItem(materialId: string) {
+    const result = await window.novelAPI.deleteMaterial(materialId);
+    setMaterials(result.materials);
+    onStatus("素材已删除");
   }
 
   useEffect(() => {
@@ -1916,6 +2186,10 @@ function AnalysisPanel({
       {tab === "timeline" && (
         <div className="analysis-section">
           <div className="analysis-actions">
+            <select value={timelineMode} onChange={(event) => setTimelineMode(event.target.value as "local" | "ai")}>
+              <option value="ai">AI 识别真实事件</option>
+              <option value="local">本地规则整理</option>
+            </select>
             <button onClick={() => void loadTimeline()} disabled={busy === "timeline"}>
               <RefreshCcw size={16} />
               刷新时间线
@@ -1923,7 +2197,22 @@ function AnalysisPanel({
           </div>
           <div className="timeline-list">
             {timelineEvents.map((event) => (
-              <button key={event.id} className="timeline-item" onClick={() => onSelectChapter(event.chapterId)}>
+              <button
+                key={event.id}
+                className="timeline-item"
+                draggable
+                onDragStart={() => setDraggingEventId(event.id)}
+                onDragOver={(dragEvent) => {
+                  dragEvent.preventDefault();
+                  dragEvent.dataTransfer.dropEffect = "move";
+                }}
+                onDrop={(dragEvent) => {
+                  dragEvent.preventDefault();
+                  moveTimelineEvent(event.id);
+                }}
+                onDragEnd={() => setDraggingEventId("")}
+                onClick={() => onSelectChapter(event.chapterId)}
+              >
                 <span className="timeline-dot" />
                 <div>
                   <strong>{event.timeHint || event.title}</strong>
@@ -1940,6 +2229,34 @@ function AnalysisPanel({
 
       {tab === "relations" && (
         <div className="analysis-section">
+          <div className="relation-controls">
+            <details>
+              <summary>选择角色卡</summary>
+              <div className="check-grid">
+                {state.characters.map((card) => (
+                  <label key={card.id}>
+                    <input type="checkbox" checked={selectedRelationNames.includes(card.name)} onChange={() => toggleRelationName(card.name)} />
+                    {card.name}
+                  </label>
+                ))}
+              </div>
+              <button onClick={() => setSelectedRelationNames([])}>显示全部角色</button>
+            </details>
+            <details>
+              <summary>关系类型</summary>
+              <div className="chip-list">
+                {relationTypes.map((type) => (
+                  <button key={type} onClick={() => setRelationTypes((items) => items.filter((item) => item !== type))} title="点击移除">
+                    {type}
+                  </button>
+                ))}
+              </div>
+              <div className="inline-form">
+                <input value={newRelationType} onChange={(event) => setNewRelationType(event.target.value)} placeholder="新增关系类型" />
+                <button onClick={addRelationType}>添加</button>
+              </div>
+            </details>
+          </div>
           <div className="analysis-actions">
             <button onClick={() => void loadRelationships()} disabled={busy === "relations"}>
               <RefreshCcw size={16} />
@@ -1998,11 +2315,18 @@ function AnalysisPanel({
               <article key={issue.id} className={`issue-card severity-${issue.severity}`}>
                 <header>
                   <strong>{issue.title}</strong>
-                  <span>{issue.severity} / {issue.category}</span>
+                  <span>{issue.severity} / {issue.category} / {issue.status || "待处理"}</span>
                 </header>
                 <p>{issue.detail}</p>
                 {issue.suggestion && <em>{issue.suggestion}</em>}
                 {!!issue.evidence.length && <small>{issue.evidence.join("；")}</small>}
+                <div className="issue-actions">
+                  {(["已确认", "已忽略", "已修复", "待处理"] as const).map((status) => (
+                    <button key={status} onClick={() => void updateIssueStatus(issue.id, status)}>
+                      {status}
+                    </button>
+                  ))}
+                </div>
               </article>
             ))}
             {!issues.length && <div className="analysis-empty">点击“开始检查”后，会结合 AI 和本地规则查找前后矛盾。</div>}
@@ -2051,20 +2375,168 @@ function AnalysisPanel({
       )}
 
       {tab === "export" && (
-        <div className="analysis-section tool-grid">
-          <button className="tool-card" onClick={onExportBook}>
-            <FileDown size={22} />
-            <strong>导出整书 DOCX</strong>
-            <span>按分卷和章节合并为一个 Word 文档。</span>
-          </button>
-          <button className="tool-card" onClick={onExtractWorldCards}>
-            <Wand2 size={22} />
-            <strong>提取地点/势力/物品</strong>
-            <span>调用 AI 生成世界观条目，并直接写入“世界”界面。</span>
-          </button>
+        <div className="analysis-section export-lab">
+          <div className="tool-grid">
+            <div className="tool-card">
+              <FileDown size={22} />
+              <strong>导出整书 DOCX</strong>
+              <label>
+                <input type="checkbox" checked={exportOptions.includeOutline} onChange={(event) => setExportOptions((value) => ({ ...value, includeOutline: event.target.checked }))} />
+                带大纲
+              </label>
+              <label>
+                <input type="checkbox" checked={exportOptions.includeCharacters} onChange={(event) => setExportOptions((value) => ({ ...value, includeCharacters: event.target.checked }))} />
+                带角色卡
+              </label>
+              <label>
+                <input type="checkbox" checked={exportOptions.includeWorld} onChange={(event) => setExportOptions((value) => ({ ...value, includeWorld: event.target.checked }))} />
+                带世界观资料
+              </label>
+              <button onClick={() => onExportBookWithOptions(exportOptions)}>开始导出</button>
+              <button onClick={() => onExportBook()}>只导出正文</button>
+            </div>
+            <div className="tool-card">
+              <Wand2 size={22} />
+              <strong>提取地点/势力/物品候选</strong>
+              <select value={extractScope} onChange={(event) => setExtractScope(event.target.value as "book" | "chapter")}>
+                <option value="book">从全书提取</option>
+                <option value="chapter">仅从当前文档提取</option>
+              </select>
+              <button onClick={() => void prepareWorldCandidates()} disabled={busy === "extract"}>
+                生成候选
+              </button>
+              <span>候选会先显示在下方，勾选后才写入世界观。</span>
+            </div>
+          </div>
+          {!!worldCandidates.length && (
+            <div className="candidate-list">
+              <div className="analysis-actions">
+                <button onClick={() => setWorldCandidates((items) => items.map((item) => ({ ...item, selected: true })))}>全选</button>
+                <button onClick={() => setWorldCandidates((items) => items.map((item) => ({ ...item, selected: false })))}>全不选</button>
+                <button onClick={() => void saveSelectedCandidates()} disabled={busy === "save-candidates"}>
+                  写入选中条目
+                </button>
+              </div>
+              {worldCandidates.map((candidate) => (
+                <article key={candidate.id} className="candidate-card">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={candidate.selected}
+                      onChange={(event) => setWorldCandidates((items) => items.map((item) => (item.id === candidate.id ? { ...item, selected: event.target.checked } : item)))}
+                    />
+                    <strong>{candidate.title}</strong>
+                  </label>
+                  <span>
+                    {candidate.category} / {candidate.action === "merge" ? `合并到：${candidate.matchedTitle}` : "新建条目"}
+                  </span>
+                  <p>{contentToPlainText(candidate.content).slice(0, 180)}</p>
+                </article>
+              ))}
+            </div>
+          )}
+          <details className="experimental-card">
+            <summary>试验功能</summary>
+            <ExperimentalTools
+              appearanceStats={appearanceStats}
+              worldMapNodes={worldMapNodes}
+              worldMapEdges={worldMapEdges}
+              materials={materials}
+              materialDraft={materialDraft}
+              onLoadAppearance={() => void loadAppearanceStats()}
+              onLoadWorldMap={() => void loadWorldMap()}
+              onLoadMaterials={() => void loadMaterials()}
+              onMaterialDraft={setMaterialDraft}
+              onSaveMaterial={() => void saveMaterialDraft()}
+              onDeleteMaterial={(id) => void deleteMaterialItem(id)}
+            />
+          </details>
         </div>
       )}
     </section>
+  );
+}
+
+function ExperimentalTools({
+  appearanceStats,
+  worldMapNodes,
+  worldMapEdges,
+  materials,
+  materialDraft,
+  onLoadAppearance,
+  onLoadWorldMap,
+  onLoadMaterials,
+  onMaterialDraft,
+  onSaveMaterial,
+  onDeleteMaterial,
+}: {
+  appearanceStats: AppearanceStat[];
+  worldMapNodes: WorldMapNode[];
+  worldMapEdges: WorldMapEdge[];
+  materials: MaterialItem[];
+  materialDraft: Partial<MaterialItem>;
+  onLoadAppearance: () => void;
+  onLoadWorldMap: () => void;
+  onLoadMaterials: () => void;
+  onMaterialDraft: (draft: Partial<MaterialItem>) => void;
+  onSaveMaterial: () => void;
+  onDeleteMaterial: (id: string) => void;
+}) {
+  return (
+    <div className="experimental-grid">
+      <section>
+        <header>
+          <strong>人物出场统计</strong>
+          <button onClick={onLoadAppearance}>统计</button>
+        </header>
+        <div className="compact-list">
+          {appearanceStats.slice(0, 12).map((item) => (
+            <div key={item.id}>
+              <span>{item.name}</span>
+              <small>{item.total} 次 / {item.chapters.length} 章</small>
+            </div>
+          ))}
+          {!appearanceStats.length && <p>统计角色在各章节出现次数。</p>}
+        </div>
+      </section>
+      <section>
+        <header>
+          <strong>地点/势力版图</strong>
+          <button onClick={onLoadWorldMap}>整理</button>
+        </header>
+        <div className="compact-list">
+          {worldMapNodes.slice(0, 16).map((node) => (
+            <div key={node.id}>
+              <span>{node.title}</span>
+              <small>{node.type} / {node.category}</small>
+            </div>
+          ))}
+          {!worldMapNodes.length && <p>从世界观条目整理地点、势力、物品节点。</p>}
+          {!!worldMapEdges.length && <p>{worldMapEdges.length} 条文本关联。</p>}
+        </div>
+      </section>
+      <section>
+        <header>
+          <strong>素材库</strong>
+          <button onClick={onLoadMaterials}>刷新</button>
+        </header>
+        <div className="material-form">
+          <input value={materialDraft.title || ""} onChange={(event) => onMaterialDraft({ ...materialDraft, title: event.target.value })} placeholder="素材标题" />
+          <input value={materialDraft.category || ""} onChange={(event) => onMaterialDraft({ ...materialDraft, category: event.target.value })} placeholder="分类" />
+          <textarea value={materialDraft.content || ""} onChange={(event) => onMaterialDraft({ ...materialDraft, content: event.target.value })} placeholder="灵感、桥段、句子或设定碎片" />
+          <button onClick={onSaveMaterial}>保存素材</button>
+        </div>
+        <div className="compact-list">
+          {materials.slice(0, 8).map((item) => (
+            <div key={item.id}>
+              <span>{item.title}</span>
+              <small>{item.category}</small>
+              <button onClick={() => onDeleteMaterial(item.id)}>删除</button>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -2084,6 +2556,7 @@ function CharacterManager({
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
   const [draggingCardId, setDraggingCardId] = useState("");
   const [dragOverCategory, setDragOverCategory] = useState("");
+  const [dragHint, setDragHint] = useState("");
   const groupedCards = useMemo(() => groupByCategory(cards), [cards]);
 
   useEffect(() => {
@@ -2112,6 +2585,7 @@ function CharacterManager({
     onSave(next);
     setDraggingCardId("");
     setDragOverCategory("");
+    setDragHint("");
   }
 
   function renderCategoryGroup(group: CategoryGroup<CharacterCard>, depth = 0) {
@@ -2126,8 +2600,12 @@ function CharacterManager({
             event.preventDefault();
             event.dataTransfer.dropEffect = "move";
             setDragOverCategory(group.key);
+            setDragHint(`将移动到「${group.key}」，分类等级 ${splitCategoryPath(group.key).length} 级`);
           }}
-          onDragLeave={() => setDragOverCategory((current) => (current === group.key ? "" : current))}
+          onDragLeave={() => {
+            setDragOverCategory((current) => (current === group.key ? "" : current));
+            setDragHint("");
+          }}
           onDrop={(event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -2155,6 +2633,7 @@ function CharacterManager({
                 onDragEnd={() => {
                   setDraggingCardId("");
                   setDragOverCategory("");
+                  setDragHint("");
                 }}
                 onClick={() => setActive(card)}
               >
@@ -2182,6 +2661,7 @@ function CharacterManager({
             </button>
           </div>
         </div>
+        {dragHint && <div className="drag-hint">{dragHint}</div>}
         {groupedCards.length ? groupedCards.map((group) => renderCategoryGroup(group)) : <div className="manager-empty">暂无角色卡片</div>}
       </div>
       <div className="form-panel">
@@ -2247,6 +2727,7 @@ function WorldManager({
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
   const [draggingDocId, setDraggingDocId] = useState("");
   const [dragOverCategory, setDragOverCategory] = useState("");
+  const [dragHint, setDragHint] = useState("");
   const groupedDocs = useMemo(() => groupByCategory(docs), [docs]);
 
   useEffect(() => {
@@ -2271,6 +2752,7 @@ function WorldManager({
     onSave(next);
     setDraggingDocId("");
     setDragOverCategory("");
+    setDragHint("");
   }
 
   function renderCategoryGroup(group: CategoryGroup<WorldDoc>, depth = 0) {
@@ -2285,8 +2767,12 @@ function WorldManager({
             event.preventDefault();
             event.dataTransfer.dropEffect = "move";
             setDragOverCategory(group.key);
+            setDragHint(`将移动到「${group.key}」，分类等级 ${splitCategoryPath(group.key).length} 级`);
           }}
-          onDragLeave={() => setDragOverCategory((current) => (current === group.key ? "" : current))}
+          onDragLeave={() => {
+            setDragOverCategory((current) => (current === group.key ? "" : current));
+            setDragHint("");
+          }}
           onDrop={(event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -2314,6 +2800,7 @@ function WorldManager({
                 onDragEnd={() => {
                   setDraggingDocId("");
                   setDragOverCategory("");
+                  setDragHint("");
                 }}
                 onClick={() => setActive(doc)}
               >
@@ -2341,6 +2828,7 @@ function WorldManager({
             </button>
           </div>
         </div>
+        {dragHint && <div className="drag-hint">{dragHint}</div>}
         {groupedDocs.length ? groupedDocs.map((group) => renderCategoryGroup(group)) : <div className="manager-empty">暂无世界观设定</div>}
       </div>
       <div className="form-panel world-editor">

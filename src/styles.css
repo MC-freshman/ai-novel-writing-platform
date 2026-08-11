@@ -497,7 +497,7 @@ body.resizing {
 .editor-panel {
   height: 100%;
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto auto 1fr;
 }
 
 .editor-header {
@@ -530,6 +530,31 @@ body.resizing {
   min-height: 0;
   display: grid;
   grid-template-columns: 1fr;
+}
+
+.find-replace-bar {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) auto auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 82%, var(--bg));
+}
+
+.find-replace-bar input {
+  height: 32px;
+  padding: 0 10px;
+}
+
+.find-replace-bar button {
+  min-height: 32px;
+  padding: 0 10px;
+}
+
+.find-replace-bar span {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .editor-body.split {
@@ -990,6 +1015,17 @@ body.resizing {
   font-size: 13px;
 }
 
+.drag-hint {
+  margin: 0 0 8px;
+  padding: 7px 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line));
+  border-radius: 8px;
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .form-panel {
   min-height: 0;
   overflow: auto;
@@ -1161,6 +1197,13 @@ body.resizing {
   flex-wrap: wrap;
 }
 
+.analysis-actions select,
+.tool-card select,
+.inline-form input {
+  min-height: 34px;
+  padding: 0 10px;
+}
+
 .timeline-list {
   position: relative;
   display: grid;
@@ -1244,6 +1287,65 @@ body.resizing {
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
 }
 
+.relation-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.relation-controls details,
+.experimental-card,
+.candidate-list {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.relation-controls summary,
+.experimental-card summary {
+  cursor: pointer;
+  color: var(--accent-strong);
+  font-weight: 700;
+}
+
+.check-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 6px 10px;
+  margin: 10px 0;
+}
+
+.check-grid label,
+.tool-card label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.chip-list button {
+  min-height: 28px;
+  padding: 0 9px;
+  border-radius: 999px;
+  color: var(--accent-strong);
+}
+
+.inline-form {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) auto;
+  gap: 8px;
+}
+
 .relationship-edges div,
 .issue-card,
 .diff-view,
@@ -1286,6 +1388,18 @@ body.resizing {
 .issue-card small {
   color: var(--muted);
   line-height: 1.5;
+}
+
+.issue-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.issue-actions button {
+  min-height: 28px;
+  padding: 0 9px;
+  font-size: 12px;
 }
 
 .version-tools {
@@ -1348,6 +1462,131 @@ body.resizing {
   align-content: start;
   gap: 10px;
   text-align: left;
+}
+
+.export-lab {
+  display: grid;
+  gap: 14px;
+}
+
+.candidate-list {
+  display: grid;
+  gap: 10px;
+}
+
+.candidate-card {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.candidate-card label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.candidate-card span,
+.candidate-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.experimental-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.experimental-grid section {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.experimental-grid header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.compact-list {
+  display: grid;
+  gap: 7px;
+}
+
+.compact-list div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 58%, transparent);
+}
+
+.compact-list span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compact-list small,
+.compact-list p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.material-form {
+  display: grid;
+  gap: 8px;
+}
+
+.material-form input {
+  height: 32px;
+  padding: 0 9px;
+}
+
+.material-form textarea {
+  min-height: 90px;
+  padding: 9px;
+  resize: vertical;
+}
+
+.progress-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 320px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress-pill button {
+  min-height: 22px;
+  padding: 0 7px;
+  font-size: 11px;
+}
+
+.context-menu-note {
+  padding: 4px 8px 8px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 button.danger {
