@@ -109,6 +109,14 @@ export interface ChatMessage {
   createdAt: string;
 }
 
+export interface ChatSession {
+  id: string;
+  title: string;
+  messages: ChatMessage[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface RetrievedChunk {
   id: string;
   title: string;
@@ -288,4 +296,7 @@ export interface AnalysisSnapshot {
   worldMapEdges?: WorldMapEdge[];
   materials?: MaterialItem[];
   materialDraft?: Partial<MaterialItem>;
+  chatSessions?: ChatSession[];
+  activeChatSessionId?: string;
+  aiProjectMemory?: string;
 }

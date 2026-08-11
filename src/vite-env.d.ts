@@ -86,9 +86,11 @@ declare global {
       deleteCharacter: (characterId: string) => Promise<AppState>;
       saveWorldDoc: (payload: Partial<WorldDoc>) => Promise<AppState>;
       deleteWorldDoc: (docId: string) => Promise<AppState>;
-      askAI: (payload: { question: string; selectedText?: string; history: Array<{ role: "user" | "assistant"; content: string }> }) => Promise<{
+      askAI: (payload: { question: string; selectedText?: string; history: Array<{ role: "user" | "assistant"; content: string }>; projectMemory?: string }) => Promise<{
         answer: string;
         context: AppState extends never ? never : import("./types").RetrievedChunk[];
+        contextCount?: number;
+        candidateCount?: number;
         embeddingSource: string;
         embeddingWarning?: string;
         apiError?: string;

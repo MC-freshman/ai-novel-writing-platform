@@ -29,6 +29,8 @@ const DEFAULT_EMBEDDING_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_PROJECT_NAME = "默认小说项目";
 const MAX_CHAT_TOKENS = 393216;
 const MAX_RETRIEVAL_TOP_K = 250;
+const CHAT_CONTEXT_CHAR_BUDGET = 18000;
+const STRUCTURING_CONTEXT_CHAR_BUDGET = 45000;
 const DEFAULT_CATEGORY = "未分类";
 const EMBEDDING_INDEX_CONCURRENCY = 4;
 
@@ -1187,6 +1189,34 @@ async function removeSourceFromIndex(projectPath, sourceId) {
   await saveVectorStore(projectPath, store);
 }
 
+function selectUsefulChunks(chunks, options = {}) {
+  const safeChunks = Array.isArray(chunks) ? chunks.filter((item) => Number.isFinite(Number(item.score))) : [];
+  if (!safeChunks.length) return [];
+  const maxChunks = Math.max(1, Math.floor(options.maxChunks || safeChunks.length));
+  const minKeep = Math.min(maxChunks, Math.max(0, Math.floor(options.minKeep ?? 3)));
+  const maxChars = Math.max(1000, Math.floor(options.maxChars || CHAT_CONTEXT_CHAR_BUDGET));
+  const topScore = Number(safeChunks[0]?.score || 0);
+  const minScore = Number.isFinite(Number(options.minScore))
+    ? Number(options.minScore)
+    : topScore >= 0.4
+      ? Math.max(0.18, topScore * 0.55)
+      : topScore >= 0.2
+        ? Math.max(0.1, topScore * 0.45)
+        : 0.08;
+  const selected = [];
+  let totalChars = 0;
+  for (let index = 0; index < safeChunks.length && selected.length < maxChunks; index += 1) {
+    const chunk = safeChunks[index];
+    const textLength = String(chunk.text || "").length;
+    const relevant = index < minKeep || (Number(chunk.score) > 0 && Number(chunk.score) >= minScore);
+    if (!relevant) continue;
+    if (selected.length >= minKeep && totalChars + textLength > maxChars) break;
+    selected.push(chunk);
+    totalChars += textLength;
+  }
+  return selected;
+}
+
 async function rebuildIndex(projectPath) {
   const config = await loadConfig(projectPath);
   const sources = [];
@@ -1242,12 +1272,18 @@ async function searchRelevantChunks(projectPath, question, topK, options = {}) {
   const embedding = await getEmbedding(question, config.api);
   const safeTopK = Math.floor(clampNumber(topK, 1, MAX_RETRIEVAL_TOP_K, 5));
   const sourceIds = new Set((Array.isArray(options.sourceIds) ? options.sourceIds : []).map((id) => String(id || "")).filter(Boolean));
-  const scored = store.vectors
+  const candidates = store.vectors
     .map((item) => ({ ...item, score: cosineSimilarity(embedding.vector, item.embedding || []) }))
     .filter((item) => !sourceIds.size || sourceIds.has(item.sourceId))
     .sort((a, b) => b.score - a.score)
     .slice(0, safeTopK);
-  return { chunks: scored, embeddingSource: embedding.source, embeddingWarning: embedding.warning };
+  const chunks = selectUsefulChunks(candidates, {
+    maxChunks: safeTopK,
+    minKeep: options.minKeep,
+    minScore: options.minScore,
+    maxChars: options.maxChars,
+  });
+  return { chunks, candidateCount: candidates.length, embeddingSource: embedding.source, embeddingWarning: embedding.warning };
 }
 
 function characterToMarkdown(card) {
@@ -1262,11 +1298,39 @@ function characterToMarkdown(card) {
   ].join("\n");
 }
 
-async function collectPromptMaterials(projectPath, retrievedChunks) {
+function truncateForPrompt(value, maxChars) {
+  const text = String(value || "").trim();
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}\n【内容过长，已截断】`;
+}
+
+async function collectPromptMaterials(projectPath, retrievedChunks, question = "") {
   const characters = await loadCharacters(projectPath);
   const worldDocs = await loadWorldDocs(projectPath);
-  const characterCards = characters.map(characterToMarkdown).join("\n\n").slice(0, 12000);
-  const worldbuilding = worldDocs.map((doc) => `# ${doc.title}\n分类：${normalizeCategory(doc.category)}\n${doc.content}`).join("\n\n").slice(0, 12000);
+  const characterNames = new Set();
+  const worldIds = new Set();
+  const questionText = String(question || "");
+  for (const chunk of retrievedChunks || []) {
+    if (chunk.sourceType === "character") characterNames.add(chunk.title);
+    if (chunk.sourceType === "world") worldIds.add(chunk.sourceId);
+    for (const name of chunk.metadata?.characters || []) characterNames.add(name);
+  }
+  for (const card of characters) {
+    if (card.name && questionText.includes(card.name)) characterNames.add(card.name);
+  }
+  for (const doc of worldDocs) {
+    if (doc.title && questionText.includes(doc.title)) worldIds.add(doc.id);
+  }
+  const relevantCharacters = characters.filter((card) => characterNames.has(card.name)).slice(0, 12);
+  const relevantWorldDocs = worldDocs.filter((doc) => worldIds.has(doc.id)).slice(0, 10);
+  const characterIndex = characters.map((card) => `${card.name}（${normalizeCategory(card.category)}）`).slice(0, 80).join("；");
+  const worldIndex = worldDocs.map((doc) => `${doc.title}（${normalizeCategory(doc.category)}）`).slice(0, 80).join("；");
+  const characterCards = relevantCharacters.length
+    ? relevantCharacters.map((card) => truncateForPrompt(characterToMarkdown(card), 900)).join("\n\n")
+    : `角色索引：${characterIndex || "暂无角色卡"}`;
+  const worldbuilding = relevantWorldDocs.length
+    ? relevantWorldDocs.map((doc) => truncateForPrompt(`# ${doc.title}\n分类：${normalizeCategory(doc.category)}\n${doc.content}`, 1000)).join("\n\n")
+    : `世界观索引：${worldIndex || "暂无世界观条目"}`;
   const retrievedContext = retrievedChunks
     .map((item, index) => {
       const sourceName = item.sourceType === "chapter" ? "章节" : item.sourceType === "character" ? "角色卡" : "世界观";
@@ -1276,9 +1340,35 @@ async function collectPromptMaterials(projectPath, retrievedChunks) {
   return { characterCards, worldbuilding, retrievedContext };
 }
 
-function buildSystemPrompt({ retrievedContext, characterCards, worldbuilding, userQuestion, selectedText }) {
+function buildProjectMemorySummary(snapshot, extraMemory = "") {
+  const manualMemory = [String(snapshot?.aiProjectMemory || "").trim(), String(extraMemory || "").trim()].filter(Boolean).join("\n").slice(0, 3000);
+  const sessions = Array.isArray(snapshot?.chatSessions) ? snapshot.chatSessions : [];
+  const sessionLines = sessions
+    .slice()
+    .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")))
+    .slice(0, 10)
+    .map((session) => {
+      const messages = Array.isArray(session.messages) ? session.messages : [];
+      const recentUserMessages = messages
+        .filter((message) => message.role === "user")
+        .slice(-3)
+        .map((message) => String(message.content || "").replace(/\s+/g, " ").slice(0, 120))
+        .filter(Boolean);
+      if (!recentUserMessages.length) return "";
+      return `- ${String(session.title || "会话").slice(0, 40)}：${recentUserMessages.join("；")}`;
+    })
+    .filter(Boolean)
+    .join("\n")
+    .slice(0, 2500);
+  return [manualMemory ? `【手动项目记忆】\n${manualMemory}` : "", sessionLines ? `【最近会话摘要】\n${sessionLines}` : ""].filter(Boolean).join("\n\n");
+}
+
+function buildSystemPrompt({ retrievedContext, characterCards, worldbuilding, projectMemory, userQuestion, selectedText }) {
   const selected = selectedText
     ? `\n【用户选中的文本】\n"""\n${selectedText}\n"""\n`
+    : "";
+  const memory = projectMemory
+    ? `\n【项目内 AI 记忆】\n${projectMemory}\n`
     : "";
   return `你是一位专业的小说创作助手。用户正在创作一部小说，你将基于小说的已有内容为其提供建议。
 
@@ -1290,13 +1380,15 @@ ${characterCards || "暂无角色设定。"}
 
 【世界观设定】
 ${worldbuilding || "暂无世界观设定。"}
+${memory}
 ${selected}
 规则：
 1. 你的回答必须基于上述提供的小说内容，不要编造未出现的信息。
 2. 如果用户的问题在提供的内容中没有答案，请明确说明“根据已有内容，暂时无法回答这个问题”。
 3. 回答时可以引用具体的章节或段落。
 4. 如果用户要求创作建议，请结合小说的风格、角色性格和已有情节给出建议。
-5. 保持专业、鼓励性的语气。
+5. “项目内 AI 记忆”只用于承接用户偏好、已确认方向和跨会话沟通，不可替代检索片段中的事实设定；涉及具体剧情和设定时优先以检索片段、角色卡和世界观为准。
+6. 保持专业、鼓励性的语气。
 
 用户问题：${userQuestion}`;
 }
@@ -1422,7 +1514,11 @@ async function buildStructuringMaterials(projectPath, query, options = {}) {
   const config = await loadConfig(projectPath);
   const topK = Math.floor(clampNumber(config.api.topK || 20, 1, MAX_RETRIEVAL_TOP_K, 20));
   const knowledgeSourceIds = Array.isArray(options.knowledgeSourceIds) ? options.knowledgeSourceIds : [];
-  const search = await searchRelevantChunks(projectPath, query, topK, { sourceIds: knowledgeSourceIds });
+  const search = await searchRelevantChunks(projectPath, query, topK, {
+    sourceIds: knowledgeSourceIds,
+    minKeep: Math.min(12, topK),
+    maxChars: STRUCTURING_CONTEXT_CHAR_BUDGET,
+  });
   const retrieved = search.chunks
     .map((item, index) => {
       const role = item.sourceType === "chapter" ? knowledgeRoleLabel(item.knowledgeRole) : item.sourceType === "character" ? "角色卡" : "世界观";
@@ -3357,10 +3453,16 @@ function registerIpcHandlers() {
     const question = String(payload.question || "").trim();
     if (!question) throw new Error("请输入要询问 AI 的内容。");
     const topK = Math.floor(clampNumber(config.api.topK || 5, 1, MAX_RETRIEVAL_TOP_K, 5));
-    const search = await searchRelevantChunks(projectPath, question, topK);
-    const materials = await collectPromptMaterials(projectPath, search.chunks);
+    const search = await searchRelevantChunks(projectPath, question, topK, {
+      minKeep: Math.min(3, topK),
+      maxChars: CHAT_CONTEXT_CHAR_BUDGET,
+    });
+    const materials = await collectPromptMaterials(projectPath, search.chunks, question);
+    const analysisState = await loadAnalysisState(projectPath);
+    const projectMemory = buildProjectMemorySummary(analysisState, payload.projectMemory || "");
     const systemPrompt = buildSystemPrompt({
       ...materials,
+      projectMemory,
       userQuestion: question,
       selectedText: payload.selectedText || "",
     });
@@ -3377,6 +3479,8 @@ function registerIpcHandlers() {
           text: item.text,
           metadata: item.metadata,
         })),
+        contextCount: search.chunks.length,
+        candidateCount: search.candidateCount || search.chunks.length,
         embeddingSource: search.embeddingSource,
         embeddingWarning: search.embeddingWarning,
       };
@@ -3391,6 +3495,8 @@ function registerIpcHandlers() {
           text: item.text,
           metadata: item.metadata,
         })),
+        contextCount: search.chunks.length,
+        candidateCount: search.candidateCount || search.chunks.length,
         embeddingSource: search.embeddingSource,
         embeddingWarning: search.embeddingWarning,
         apiError: error.message,

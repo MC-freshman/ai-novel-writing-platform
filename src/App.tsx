@@ -70,6 +70,7 @@ import type {
   ChapterVersionCompare,
   CharacterCard,
   ChatMessage,
+  ChatSession,
   ConsistencyIssue,
   ExtractedWorldCandidate,
   GlobalSearchResult,
@@ -172,6 +173,54 @@ function groupByCategory<T extends { category?: string; name?: string; title?: s
 
 function makeMessageId() {
   return `${Date.now().toString(36)}_${Math.random().toString(16).slice(2)}`;
+}
+
+function makeChatSession(title = "新会话", messages: ChatMessage[] = []): ChatSession {
+  const now = new Date().toISOString();
+  return {
+    id: `chat_${makeMessageId()}`,
+    title,
+    messages,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function titleFromMessages(messages: ChatMessage[], fallback = "新会话") {
+  const firstUser = messages.find((message) => message.role === "user" && message.content.trim());
+  const title = (firstUser?.content || fallback).replace(/\s+/g, " ").trim();
+  return title.length > 18 ? `${title.slice(0, 18)}...` : title || fallback;
+}
+
+function compactChatMessages(messages: ChatMessage[]) {
+  return messages.slice(-40).map((message) => ({
+    ...message,
+    content: message.content.slice(0, 6000),
+    context: message.context?.slice(0, 6).map((chunk) => ({
+      ...chunk,
+      text: chunk.text.slice(0, 600),
+    })),
+  }));
+}
+
+function keepRecentChatSessions(sessions: ChatSession[], activeId: string) {
+  const unique = new Map<string, ChatSession>();
+  for (const session of sessions) {
+    if (!session?.id) continue;
+    unique.set(session.id, {
+      ...session,
+      title: session.title || titleFromMessages(session.messages || []),
+      messages: compactChatMessages(session.messages || []),
+      createdAt: session.createdAt || new Date().toISOString(),
+      updatedAt: session.updatedAt || session.createdAt || new Date().toISOString(),
+    });
+  }
+  const sorted = [...unique.values()].sort((a, b) => {
+    if (a.id === activeId) return -1;
+    if (b.id === activeId) return 1;
+    return String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""));
+  });
+  return sorted.slice(0, 10);
 }
 
 function countWords(text: string) {
@@ -357,6 +406,10 @@ export default function App() {
   const [selectedText, setSelectedText] = useState("");
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; text: string } | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
+  const [activeChatSessionId, setActiveChatSessionId] = useState("");
+  const [aiProjectMemory, setAiProjectMemory] = useState("");
+  const [chatLoaded, setChatLoaded] = useState(false);
   const [draggingChapterId, setDraggingChapterId] = useState<string | null>(null);
   const [importProgress, setImportProgress] = useState<ProgressState | null>(null);
   const [indexProgress, setIndexProgress] = useState<ProgressState | null>(null);
@@ -386,6 +439,31 @@ export default function App() {
       .then(applyAppState)
       .catch((error) => setStatus(`打开失败：${error.message}`));
   }, [applyAppState]);
+
+  useEffect(() => {
+    if (!state?.projectPath) return;
+    setChatLoaded(false);
+    window.novelAPI
+      .getAnalysisState()
+      .then((snapshot) => {
+        const restored = keepRecentChatSessions(snapshot.chatSessions || [], snapshot.activeChatSessionId || "");
+        const initialSessions = restored.length ? restored : [makeChatSession()];
+        const activeId = initialSessions.some((session) => session.id === snapshot.activeChatSessionId) ? snapshot.activeChatSessionId || initialSessions[0].id : initialSessions[0].id;
+        const active = initialSessions.find((session) => session.id === activeId) || initialSessions[0];
+        setChatSessions(initialSessions);
+        setActiveChatSessionId(active.id);
+        setChatMessages(active.messages || []);
+        setAiProjectMemory(snapshot.aiProjectMemory || "");
+      })
+      .catch(() => {
+        const session = makeChatSession();
+        setChatSessions([session]);
+        setActiveChatSessionId(session.id);
+        setChatMessages([]);
+        setAiProjectMemory("");
+      })
+      .finally(() => setChatLoaded(true));
+  }, [state?.projectPath]);
 
   useEffect(() => {
     const offImport = window.novelAPI.onImportProgress((progress) => {
@@ -848,6 +926,67 @@ export default function App() {
     setStatus(`已替换 ${matches} 处`);
   }
 
+  function saveChatDraft(nextSessions: ChatSession[], nextActiveId = activeChatSessionId, nextMemory = aiProjectMemory) {
+    if (!chatLoaded) return;
+    const compactSessions = keepRecentChatSessions(nextSessions, nextActiveId);
+    void window.novelAPI
+      .saveAnalysisState({
+        chatSessions: compactSessions,
+        activeChatSessionId: nextActiveId,
+        aiProjectMemory: nextMemory,
+      })
+      .catch(() => null);
+  }
+
+  function updateCurrentChat(nextMessages: ChatMessage[]) {
+    const now = new Date().toISOString();
+    const activeId = activeChatSessionId || chatSessions[0]?.id || makeChatSession().id;
+    const sessionExists = chatSessions.some((session) => session.id === activeId);
+    const baseSession = sessionExists ? chatSessions.find((session) => session.id === activeId)! : makeChatSession();
+    const nextSession = {
+      ...baseSession,
+      id: activeId,
+      title: titleFromMessages(nextMessages, baseSession.title || "新会话"),
+      messages: compactChatMessages(nextMessages),
+      updatedAt: now,
+    };
+    const nextSessions = keepRecentChatSessions([nextSession, ...chatSessions.filter((session) => session.id !== activeId)], activeId);
+    setChatSessions(nextSessions);
+    setActiveChatSessionId(activeId);
+    setChatMessages(nextMessages);
+    saveChatDraft(nextSessions, activeId);
+  }
+
+  function createChatSession() {
+    const session = makeChatSession();
+    const nextSessions = keepRecentChatSessions([session, ...chatSessions], session.id);
+    setChatSessions(nextSessions);
+    setActiveChatSessionId(session.id);
+    setChatMessages([]);
+    saveChatDraft(nextSessions, session.id);
+    setStatus("已新建 AI 会话");
+  }
+
+  function switchChatSession(sessionId: string) {
+    const session = chatSessions.find((item) => item.id === sessionId);
+    if (!session) return;
+    setActiveChatSessionId(session.id);
+    setChatMessages(session.messages || []);
+    saveChatDraft(chatSessions, session.id);
+  }
+
+  function clearCurrentChat() {
+    const nextMessages: ChatMessage[] = [];
+    updateCurrentChat(nextMessages);
+    setStatus("已清空当前 AI 会话");
+  }
+
+  function updateProjectMemory(value: string) {
+    const next = value.slice(0, 3000);
+    setAiProjectMemory(next);
+    saveChatDraft(chatSessions, activeChatSessionId, next);
+  }
+
   async function askSelectedText(text: string) {
     setContextMenu(null);
     const question = window.prompt("想让 AI 围绕选中文字回答什么？", "分析这段文字的作用，并给出修改建议。");
@@ -858,18 +997,19 @@ export default function App() {
   async function editSelectedText(action: "改写" | "润色" | "扩写" | "总结", text: string) {
     setContextMenu(null);
     const pendingId = makeMessageId();
-    setChatMessages((items) => [
-      ...items,
+    const startedMessages: ChatMessage[] = [
+      ...chatMessages,
       { id: makeMessageId(), role: "user", content: `${action}选中文字\n\n【选中文字】\n${text}`, createdAt: new Date().toISOString() },
       { id: pendingId, role: "assistant", content: `正在${action}选中文字...`, createdAt: new Date().toISOString() },
-    ]);
+    ];
+    updateCurrentChat(startedMessages);
     try {
       const result = await window.novelAPI.editSelection({ action, text });
-      setChatMessages((items) => items.map((item) => (item.id === pendingId ? { ...item, content: result.answer } : item)));
+      updateCurrentChat(startedMessages.map((item) => (item.id === pendingId ? { ...item, content: result.answer } : item)));
       setStatus(`${action}完成，结果已放到右侧 AI 对话`);
     } catch (error) {
-      setChatMessages((items) =>
-        items.map((item) => (item.id === pendingId ? { ...item, content: `${action}失败：${error instanceof Error ? error.message : String(error)}` } : item)),
+      updateCurrentChat(
+        startedMessages.map((item) => (item.id === pendingId ? { ...item, content: `${action}失败：${error instanceof Error ? error.message : String(error)}` } : item)),
       );
     }
   }
@@ -884,19 +1024,22 @@ export default function App() {
       createdAt: new Date().toISOString(),
     };
     const pendingId = makeMessageId();
-    setChatMessages((items) => [
-      ...items,
+    const historyMessages = chatMessages;
+    const startedMessages: ChatMessage[] = [
+      ...historyMessages,
       userMessage,
       { id: pendingId, role: "assistant", content: "正在检索小说知识库并组织回答...", createdAt: new Date().toISOString() },
-    ]);
+    ];
+    updateCurrentChat(startedMessages);
     try {
       const response = await window.novelAPI.askAI({
         question: trimmed,
         selectedText: selection,
-        history: chatMessages.map((item) => ({ role: item.role, content: item.content })),
+        history: historyMessages.map((item) => ({ role: item.role, content: item.content })),
+        projectMemory: aiProjectMemory,
       });
-      setChatMessages((items) =>
-        items.map((item) =>
+      updateCurrentChat(
+        startedMessages.map((item) =>
           item.id === pendingId
             ? {
                 ...item,
@@ -906,10 +1049,16 @@ export default function App() {
             : item,
         ),
       );
-      if (response.embeddingWarning) setStatus(`检索已完成，本地向量回退：${response.embeddingWarning}`);
+      const contextCount = response.contextCount ?? response.context.length;
+      const candidateCount = response.candidateCount ?? contextCount;
+      setStatus(
+        response.embeddingWarning
+          ? `检索已完成：候选 ${candidateCount} 条，实际发送 ${contextCount} 条；本地向量回退：${response.embeddingWarning}`
+          : `检索已完成：候选 ${candidateCount} 条，实际发送 ${contextCount} 条`,
+      );
     } catch (error) {
-      setChatMessages((items) =>
-        items.map((item) =>
+      updateCurrentChat(
+        startedMessages.map((item) =>
           item.id === pendingId
             ? { ...item, content: `请求失败：${error instanceof Error ? error.message : String(error)}` }
             : item,
@@ -1246,9 +1395,15 @@ export default function App() {
         {!focusMode && (
           <ChatPanel
             messages={chatMessages}
+            sessions={chatSessions}
+            activeSessionId={activeChatSessionId}
+            projectMemory={aiProjectMemory}
             selectedText={selectedText}
             onSend={(question) => void sendChat(question)}
-            onClear={() => setChatMessages([])}
+            onClear={clearCurrentChat}
+            onNewSession={createChatSession}
+            onSwitchSession={switchChatSession}
+            onProjectMemoryChange={updateProjectMemory}
             onQuick={(question) => void sendChat(question, question.includes("当前章节") ? chapterContent : selectedText)}
           />
         )}
@@ -1774,15 +1929,27 @@ function ChapterTree({
 
 function ChatPanel({
   messages,
+  sessions,
+  activeSessionId,
+  projectMemory,
   selectedText,
   onSend,
   onClear,
+  onNewSession,
+  onSwitchSession,
+  onProjectMemoryChange,
   onQuick,
 }: {
   messages: ChatMessage[];
+  sessions: ChatSession[];
+  activeSessionId: string;
+  projectMemory: string;
   selectedText: string;
   onSend: (question: string) => void;
   onClear: () => void;
+  onNewSession: () => void;
+  onSwitchSession: (sessionId: string) => void;
+  onProjectMemoryChange: (value: string) => void;
   onQuick: (question: string) => void;
 }) {
   const [input, setInput] = useState("");
@@ -1810,6 +1977,30 @@ function ChatPanel({
           <MessageSquarePlus size={16} />
         </button>
       </div>
+
+      <div className="chat-session-bar">
+        <select value={activeSessionId} onChange={(event) => onSwitchSession(event.target.value)} title="切换 AI 会话">
+          {sessions.map((session) => (
+            <option key={session.id} value={session.id}>
+              {session.title || "新会话"} · {formatDateTime(session.updatedAt)}
+            </option>
+          ))}
+        </select>
+        <button onClick={onNewSession} title="新建 AI 会话">
+          新会话
+        </button>
+      </div>
+
+      <details className="chat-memory-box">
+        <summary>项目 AI 记忆</summary>
+        <textarea
+          value={projectMemory}
+          maxLength={3000}
+          onChange={(event) => onProjectMemoryChange(event.target.value)}
+          placeholder="写下需要跨会话保留的项目内背景、偏好或已确认结论。建议简短，越短越省 token。"
+        />
+        <small>{projectMemory.length}/3000 字</small>
+      </details>
 
       <div className="quick-prompts">
         {QUICK_PROMPTS.map((prompt) => (
@@ -3469,7 +3660,7 @@ function SettingsModal({
             />
           </label>
           <label>
-            检索片段数量（最高 250）
+            检索片段上限（最高 250）
             <input
               type="number"
               min="1"
@@ -3517,7 +3708,7 @@ function SettingsModal({
 
         <div className="settings-help">
           <strong>接口说明</strong>
-          <p>DeepSeek 推荐：接口地址 https://api.deepseek.com/v1，聊天模型 deepseek-chat，最大输出字数 4000-8000，检索片段数量可按项目大小调整，长篇大纲可设到 250。DeepSeek、OpenAI、Kimi、Ollama 和大多数中转接口使用 /chat/completions；Claude 使用 /v1/messages。向量接口使用 /embeddings。若不填向量接口密钥，软件会使用本地哈希向量作为临时索引。</p>
+          <p>DeepSeek 推荐：接口地址 https://api.deepseek.com/v1，聊天模型 deepseek-chat，最大输出字数 4000-8000，检索片段上限可按项目大小调整，长篇大纲可设到 250。它只是上限，实际提问时会按相关度和上下文字数预算裁剪。DeepSeek、OpenAI、Kimi、Ollama 和大多数中转接口使用 /chat/completions；Claude 使用 /v1/messages。向量接口使用 /embeddings。若不填向量接口密钥，软件会使用本地哈希向量作为临时索引。</p>
         </div>
 
         <footer>
