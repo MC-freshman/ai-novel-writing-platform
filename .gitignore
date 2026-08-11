@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+release/
+发布包/
+
+# Local temporary test artifacts
+.tmp-*/
+.tmp-*.docx
+*.log
+.private/
+
+# Local project/user data. These may contain API settings, novel drafts, vectors, backups, or imported files.
+novel.config.json
+chapters/
+characters/
+worldbuilding/
+vector_db/
+backups/
+documents/
+assets/imports/
+
+# Secrets and machine-local config
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.pfx
+*.sqlite
+*.db
+vectors.json
