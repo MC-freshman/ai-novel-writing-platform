@@ -1,6 +1,6 @@
 {
   "name": "ai-novel-writing-platform",
-  "version": "0.1.17",
+  "version": "0.1.28",
   "private": true,
   "description": "本地 AI 小说创作平台，支持 Markdown 写作、本地知识库和 RAG 对话。",
   "main": "electron/main.cjs",
@@ -10,6 +10,7 @@
     "electron": "wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .",
     "start": "concurrently -k \"npm run dev\" \"npm run electron\"",
     "build": "tsc --noEmit && vite build",
+    "audit:ui": "node scripts/run-ui-button-audit.cjs",
     "preview": "vite preview --host 127.0.0.1",
     "dist": "npm run build && electron-builder --win nsis portable"
   },

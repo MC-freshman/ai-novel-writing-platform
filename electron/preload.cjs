@@ -57,6 +57,7 @@ contextBridge.exposeInMainWorld("novelAPI", {
   saveWorldDoc: (payload) => ipcRenderer.invoke("world:save", payload),
   deleteWorldDoc: (docId) => ipcRenderer.invoke("world:delete", docId),
 
+  getCreativeAdvice: (payload) => ipcRenderer.invoke("ai:creative-advice", payload),
   askAI: (payload) => ipcRenderer.invoke("ai:ask", payload),
   editSelection: (payload) => ipcRenderer.invoke("ai:edit-selection", payload),
   generateCharactersFromOutline: () => ipcRenderer.invoke("ai:generate-characters"),

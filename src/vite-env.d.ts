@@ -9,11 +9,15 @@ import type {
   ExtractedWorldCandidate,
   GlobalSearchResult,
   AppearanceStat,
+  CreativeAdviceMode,
+  CreativeAdviceResult,
   MaterialItem,
   ProgressState,
   KnowledgeItem,
   RelationshipEdge,
   RelationshipNode,
+  RetrievalDiagnostics,
+  RetrievalMode,
   TimelineEvent,
   WorldMapEdge,
   WorldMapNode,
@@ -86,11 +90,21 @@ declare global {
       deleteCharacter: (characterId: string) => Promise<AppState>;
       saveWorldDoc: (payload: Partial<WorldDoc>) => Promise<AppState>;
       deleteWorldDoc: (docId: string) => Promise<AppState>;
-      askAI: (payload: { question: string; selectedText?: string; history: Array<{ role: "user" | "assistant"; content: string }>; projectMemory?: string }) => Promise<{
+      getCreativeAdvice: (payload: { mode: CreativeAdviceMode; chapterId?: string; focus?: string }) => Promise<CreativeAdviceResult>;
+      askAI: (payload: {
+        question: string;
+        selectedText?: string;
+        history: Array<{ role: "user" | "assistant"; content: string }>;
+        projectMemory?: string;
+        retrievalMode?: RetrievalMode;
+        selectedChapterId?: string;
+      }) => Promise<{
         answer: string;
         context: AppState extends never ? never : import("./types").RetrievedChunk[];
+        retrieval?: RetrievalDiagnostics;
         contextCount?: number;
         candidateCount?: number;
+        scannedCount?: number;
         embeddingSource: string;
         embeddingWarning?: string;
         apiError?: string;
@@ -112,7 +126,7 @@ declare global {
         titles: string[];
         contextCount: number;
       }>;
-      extractWorldCardsFromOutline: (payload?: { scope?: "book" | "chapter"; chapterId?: string }) => Promise<{
+      extractWorldCardsFromOutline: (payload?: { scope?: "book" | "chapter"; chapterId?: string; text?: string }) => Promise<{
         candidates: ExtractedWorldCandidate[];
         contextCount: number;
         scope: "book" | "chapter";
