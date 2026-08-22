@@ -1,4 +1,4 @@
-export type Provider = "openai" | "deepseek" | "kimi" | "claude" | "ollama" | "custom";
+export type Provider = "openai" | "deepseek" | "qwen" | "kimi" | "claude" | "ollama" | "custom";
 
 export interface ApiConfig {
   provider: Provider;
@@ -12,7 +12,28 @@ export interface ApiConfig {
   temperature: number;
   maxTokens: number;
   topK: number;
+  scanK: number;
   sendFullText: boolean;
+}
+
+export type RetrievalMode = "auto" | "inventory" | "chapter" | "entity" | "book" | "current" | "normal";
+
+export interface RetrievalDiagnostics {
+  requestedMode: RetrievalMode;
+  mode: RetrievalMode;
+  modeLabel: string;
+  catalogUsed: boolean;
+  inventoryUsed: boolean;
+  scanLimit: number;
+  sendLimit: number;
+  scannedCount: number;
+  candidateCount: number;
+  contextCount: number;
+  documentCount: number;
+  includedTitles: string[];
+  existingButNotRead: string[];
+  categoryCounts: Record<string, number>;
+  notes: string[];
 }
 
 export interface UiConfig {
@@ -106,6 +127,7 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   context?: RetrievedChunk[];
+  retrieval?: RetrievalDiagnostics;
   createdAt: string;
 }
 
@@ -122,6 +144,11 @@ export interface RetrievedChunk {
   title: string;
   sourceType: "chapter" | "character" | "world";
   score: number;
+  vectorScore?: number;
+  keywordScore?: number;
+  knowledgeRole?: KnowledgeRole;
+  volume?: string;
+  category?: string;
   text: string;
   metadata: {
     characters: string[];
@@ -263,6 +290,33 @@ export interface MaterialItem {
   updatedAt: string;
 }
 
+export type CreativeAdviceMode = "next" | "plot" | "foreshadow";
+
+export interface CreativeAdviceItem {
+  id: string;
+  type: "下一章建议" | "剧情推进" | "伏笔建议";
+  title: string;
+  priority: "高" | "中" | "低";
+  summary: string;
+  rationale: string;
+  benefits: string[];
+  risks: string[];
+  relatedCharacters: string[];
+  relatedSettings: string[];
+  targetChapter: string;
+  suggestedUse: string;
+}
+
+export interface CreativeAdviceResult {
+  mode: CreativeAdviceMode;
+  chapterId: string;
+  chapterTitle: string;
+  generatedAt: string;
+  contextCount: number;
+  apiError?: string;
+  items: CreativeAdviceItem[];
+}
+
 export type KnowledgeRole = "大纲" | "正文" | "补充材料";
 
 export interface KnowledgeItem {
@@ -296,7 +350,10 @@ export interface AnalysisSnapshot {
   worldMapEdges?: WorldMapEdge[];
   materials?: MaterialItem[];
   materialDraft?: Partial<MaterialItem>;
+  creativeAdvice?: CreativeAdviceResult;
+  creativeOptions?: { mode?: CreativeAdviceMode; chapterId?: string; focus?: string };
   chatSessions?: ChatSession[];
   activeChatSessionId?: string;
   aiProjectMemory?: string;
+  chatRetrievalMode?: RetrievalMode;
 }

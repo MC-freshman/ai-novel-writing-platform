@@ -28,8 +28,16 @@ const DEFAULT_CHAT_BASE_URL = "https://api.deepseek.com/v1";
 const DEFAULT_EMBEDDING_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_PROJECT_NAME = "默认小说项目";
 const MAX_CHAT_TOKENS = 393216;
-const MAX_RETRIEVAL_TOP_K = 250;
-const CHAT_CONTEXT_CHAR_BUDGET = 18000;
+const MAX_RETRIEVAL_TOP_K = 1000;
+const MAX_RETRIEVAL_SCAN_K = 50000;
+const DEFAULT_RETRIEVAL_SCAN_K = 5000;
+const CHAT_CONTEXT_MIN_CHUNKS = 30;
+const CHAT_CONTEXT_CHAR_BUDGET = 130000;
+const CHAT_API_TIMEOUT_MS = Number(process.env.NOVEL_CHAT_TIMEOUT_MS || 300000);
+const CHAT_HISTORY_MESSAGE_MAX_CHARS = 3500;
+const CHAT_HISTORY_TOTAL_MAX_CHARS = 14000;
+const USER_QUESTION_SYSTEM_PREVIEW_CHARS = 1200;
+const SELECTED_TEXT_PROMPT_MAX_CHARS = 12000;
 const STRUCTURING_CONTEXT_CHAR_BUDGET = 45000;
 const DEFAULT_CATEGORY = "未分类";
 const EMBEDDING_INDEX_CONCURRENCY = 4;
@@ -62,11 +70,17 @@ function encodeSecret(value) {
 }
 
 function decodeSecret(value) {
-  if (!value) return "";
+  const raw = String(value || "");
+  if (!raw) return "";
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(raw) || raw.length % 4 !== 0) return raw;
   try {
-    return Buffer.from(value, "base64").toString("utf8");
+    const decoded = Buffer.from(raw, "base64").toString("utf8");
+    if (!decoded || decoded.includes("\uFFFD")) return raw;
+    const normalizedRaw = raw.replace(/=+$/, "");
+    const normalizedDecoded = Buffer.from(decoded, "utf8").toString("base64").replace(/=+$/, "");
+    return normalizedDecoded === normalizedRaw ? decoded : raw;
   } catch {
-    return "";
+    return raw;
   }
 }
 
@@ -131,6 +145,27 @@ async function writeJson(file, data) {
   await fs.writeFile(file, JSON.stringify(data, null, 2), "utf8");
 }
 
+async function backupUnreadableConfig(projectPath, configPath, error) {
+  if (!existsSync(configPath)) return;
+  const backupDir = path.join(projectPath, "backups", "config_corrupt");
+  await ensureDir(backupDir);
+  const stamp = nowIso().replace(/[:.]/g, "-");
+  const backupPath = path.join(backupDir, `novel.config_${stamp}.json`);
+  await fs.copyFile(configPath, backupPath).catch(() => null);
+  throw new Error(`项目配置文件读取失败。为避免覆盖原项目，软件已停止打开并备份问题配置：${backupPath}。原始错误：${error.message}`);
+}
+
+async function readProjectConfig(projectPath) {
+  const configPath = getConfigPath(projectPath);
+  try {
+    const raw = await fs.readFile(configPath, "utf8");
+    return JSON.parse(raw);
+  } catch (error) {
+    await backupUnreadableConfig(projectPath, configPath, error);
+    return defaultConfig();
+  }
+}
+
 function getConfigPath(projectPath) {
   return path.join(projectPath, "novel.config.json");
 }
@@ -155,8 +190,12 @@ function getMaterialsDir(projectPath) {
   return path.join(projectPath, "materials");
 }
 
+function normalizeChapterFileName(fileName) {
+  return path.basename(String(fileName || ""));
+}
+
 function getChapterPath(projectPath, chapter) {
-  return path.join(projectPath, "chapters", chapter.fileName);
+  return path.join(projectPath, "chapters", normalizeChapterFileName(chapter?.fileName));
 }
 
 function getOriginalDocumentPath(projectPath, chapter) {
@@ -175,6 +214,140 @@ async function uniqueFileName(dir, baseName, extension) {
     index += 1;
   }
   return fileName;
+}
+
+async function uniqueFileNameAvoiding(dir, baseName, extension, reserved = new Set()) {
+  const ext = String(extension || ".md").startsWith(".") ? String(extension || ".md") : `.${extension}`;
+  const safeBaseName = sanitizeFileName(baseName || "未命名");
+  let fileName = `${safeBaseName}${ext}`;
+  let index = 2;
+  while (reserved.has(fileName) || existsSync(path.join(dir, fileName))) {
+    fileName = `${safeBaseName}_${index}${ext}`;
+    index += 1;
+  }
+  return fileName;
+}
+
+function normalizeManagedFileName(fileName, extension) {
+  const ext = String(extension || "").startsWith(".") ? String(extension || "") : `.${extension || ""}`;
+  const raw = path.basename(String(fileName || ""));
+  if (!raw) return "";
+  return raw.toLowerCase().endsWith(ext.toLowerCase()) ? raw : `${sanitizeFileName(raw)}${ext}`;
+}
+
+function normalizeDataId(value) {
+  const raw = path.basename(String(value || "")).replace(/\.(json|md|html)$/i, "").trim();
+  if (!raw) return "";
+  return raw
+    .replace(/[\\/:*?"<>|]/g, "_")
+    .replace(/\s+/g, "_")
+    .slice(0, 80);
+}
+
+function normalizeChapterVersionFileName(fileName) {
+  const raw = path.basename(String(fileName || ""));
+  return /\.(md|html)$/i.test(raw) ? raw : "";
+}
+
+function getMaterialPath(projectPath, materialId) {
+  return path.join(getMaterialsDir(projectPath), `${normalizeDataId(materialId)}.json`);
+}
+
+async function uniqueFileNameAllowingCurrent(dir, baseName, extension, currentFileName = "") {
+  const ext = String(extension || ".md").startsWith(".") ? String(extension || ".md") : `.${extension}`;
+  const safeBaseName = sanitizeFileName(baseName || "未命名");
+  const current = normalizeManagedFileName(currentFileName, ext);
+  let fileName = `${safeBaseName}${ext}`;
+  let index = 2;
+  while (fileName !== current && existsSync(path.join(dir, fileName))) {
+    fileName = `${safeBaseName}_${index}${ext}`;
+    index += 1;
+  }
+  return fileName;
+}
+
+async function uniqueContentFileName(projectPath, dirName, baseName, extension, currentFileName = "") {
+  const dir = path.join(projectPath, dirName);
+  await ensureDir(dir);
+  return uniqueFileNameAllowingCurrent(dir, baseName, extension, currentFileName);
+}
+
+async function uniqueChapterFileName(projectPath, config, baseName, extension, excludeChapterId = "") {
+  const chapterDir = path.join(projectPath, "chapters");
+  const reserved = new Set(
+    (config.chapters || [])
+      .filter((chapter) => chapter.id !== excludeChapterId)
+      .map((chapter) => normalizeChapterFileName(chapter.fileName))
+      .filter(Boolean),
+  );
+  return uniqueFileNameAvoiding(chapterDir, baseName, extension, reserved);
+}
+
+function getSharedChapterFileGroups(config) {
+  const groups = new Map();
+  for (const chapter of config.chapters || []) {
+    const fileName = normalizeChapterFileName(chapter.fileName);
+    if (!fileName) continue;
+    if (!groups.has(fileName)) groups.set(fileName, []);
+    groups.get(fileName).push(chapter);
+  }
+  return [...groups.entries()]
+    .filter(([, chapters]) => chapters.length > 1)
+    .map(([fileName, chapters]) => ({
+      fileName,
+      chapters: chapters.slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
+    }));
+}
+
+async function ensureExclusiveChapterFile(projectPath, config, chapter, contentOverride = null, options = {}) {
+  if (!chapter) return false;
+  const chapterDir = path.join(projectPath, "chapters");
+  await ensureDir(chapterDir);
+
+  const currentFileName = normalizeChapterFileName(chapter.fileName);
+  const users = (config.chapters || []).filter((item) => normalizeChapterFileName(item.fileName) === currentFileName);
+  if (currentFileName && users.length <= 1) return false;
+
+  let content = contentOverride;
+  if (content === null || content === undefined) {
+    content = currentFileName ? await fs.readFile(path.join(chapterDir, currentFileName), "utf8").catch(() => "") : "";
+  }
+  if (!String(content || "").trim()) content = `# ${chapter.title || "未命名章节"}\n\n`;
+
+  if (options.snapshot !== false) {
+    await snapshotChapterVersion(projectPath, chapter, content, options.reason || "拆分共享章节文件前版本").catch(() => null);
+  }
+
+  const extension = path.extname(currentFileName).toLowerCase() || (isHtmlContent(content) ? ".html" : ".md");
+  const fallbackBase = `chapter_${String((chapter.order ?? 0) + 1).padStart(3, "0")}_${chapter.title || "未命名章节"}`;
+  const baseName = path.basename(currentFileName || fallbackBase, extension) || fallbackBase;
+  chapter.fileName = await uniqueChapterFileName(projectPath, config, baseName, extension, chapter.id);
+  chapter.wordCount = countWords(content);
+  chapter.outline = extractOutline(content);
+  chapter.updatedAt = nowIso();
+  await fs.writeFile(getChapterPath(projectPath, chapter), content, "utf8");
+  return true;
+}
+
+async function repairSharedChapterFiles(projectPath, config) {
+  const repaired = [];
+  for (const group of getSharedChapterFileGroups(config)) {
+    const sharedPath = path.join(projectPath, "chapters", group.fileName);
+    const content = await fs.readFile(sharedPath, "utf8").catch(() => "");
+    for (const chapter of group.chapters.slice(1)) {
+      const previousFileName = normalizeChapterFileName(chapter.fileName);
+      const changed = await ensureExclusiveChapterFile(projectPath, config, chapter, content, {
+        snapshot: false,
+        reason: "自动拆分共享章节文件",
+      });
+      if (changed) repaired.push({ chapterId: chapter.id, title: chapter.title, from: previousFileName, to: chapter.fileName });
+    }
+  }
+  if (repaired.length) {
+    config.updatedAt = nowIso();
+    await writeJson(getConfigPath(projectPath), config);
+  }
+  return repaired;
 }
 
 function extensionFromContentType(contentType) {
@@ -244,11 +417,13 @@ function promoteMarkdownHeadingsInHtml(html) {
 }
 
 function getCharacterPath(projectPath, card) {
-  return path.join(projectPath, "characters", `${sanitizeFileName(card.name || card.id)}.json`);
+  const fileName = normalizeManagedFileName(card?.fileName, ".json") || `${sanitizeFileName(card?.name || card?.id)}.json`;
+  return path.join(projectPath, "characters", fileName);
 }
 
 function getWorldDocPath(projectPath, doc) {
-  return path.join(projectPath, "worldbuilding", doc.fileName);
+  const fileName = normalizeManagedFileName(doc?.fileName, ".md") || `${sanitizeFileName(doc?.title || doc?.id)}.md`;
+  return path.join(projectPath, "worldbuilding", fileName);
 }
 
 function stripWorldDocFrontMatter(content) {
@@ -294,11 +469,13 @@ async function writeWorldDoc(projectPath, doc) {
 }
 
 function getChapterVersionDir(projectPath, chapterId) {
-  return path.join(projectPath, "backups", "versions", chapterId);
+  return path.join(projectPath, "backups", "versions", normalizeDataId(chapterId));
 }
 
 function getChapterVersionContentPath(projectPath, chapterId, version) {
-  return path.join(getChapterVersionDir(projectPath, chapterId), version.fileName);
+  const fileName = normalizeChapterVersionFileName(version?.fileName);
+  if (!fileName) throw new Error("历史版本文件名异常，已停止读取。");
+  return path.join(getChapterVersionDir(projectPath, chapterId), fileName);
 }
 
 async function snapshotChapterVersion(projectPath, chapter, content, reason = "保存前版本") {
@@ -324,8 +501,10 @@ async function snapshotChapterVersion(projectPath, chapter, content, reason = "�
 
   const versions = await listChapterVersions(projectPath, chapter.id);
   for (const oldVersion of versions.slice(40)) {
-    await fs.rm(path.join(versionDir, oldVersion.fileName), { force: true }).catch(() => null);
-    await fs.rm(path.join(versionDir, `${oldVersion.id}.json`), { force: true }).catch(() => null);
+    const oldContentFileName = normalizeChapterVersionFileName(oldVersion.fileName);
+    if (oldContentFileName) await fs.rm(path.join(versionDir, oldContentFileName), { force: true }).catch(() => null);
+    const oldMetaFileName = normalizeManagedFileName(oldVersion.id, ".json");
+    if (oldMetaFileName) await fs.rm(path.join(versionDir, oldMetaFileName), { force: true }).catch(() => null);
   }
   return version;
 }
@@ -337,7 +516,7 @@ async function listChapterVersions(projectPath, chapterId) {
   const versions = [];
   for (const file of files.filter((item) => item.endsWith(".json"))) {
     const version = await readJson(path.join(versionDir, file), null);
-    if (version?.id && version?.fileName) versions.push(version);
+    if (version?.id && normalizeChapterVersionFileName(version?.fileName)) versions.push({ ...version, fileName: normalizeChapterVersionFileName(version.fileName) });
   }
   return versions.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
 }
@@ -394,6 +573,76 @@ async function loadProjectSources(projectPath) {
 
 function stableHash(value) {
   return crypto.createHash("sha1").update(String(value || ""), "utf8").digest("hex").slice(0, 16);
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(2)} MB`;
+}
+
+function safeEndpointLabel(url) {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+  } catch {
+    return String(url || "");
+  }
+}
+
+function describeFetchError(error) {
+  const parts = [];
+  if (error?.name) parts.push(error.name);
+  if (error?.message) parts.push(error.message);
+  const cause = error?.cause;
+  if (cause) {
+    const causeParts = [cause.code, cause.name, cause.message].filter(Boolean);
+    if (causeParts.length) parts.push(`底层原因：${causeParts.join(" / ")}`);
+    const networkParts = [cause.syscall, cause.address, cause.port].filter(Boolean);
+    if (networkParts.length) parts.push(`网络信息：${networkParts.join(" ")}`);
+  }
+  if (!parts.length) parts.push(String(error || "未知网络错误"));
+  return [...new Set(parts)].join("；");
+}
+
+function compactChatHistory(history = []) {
+  const compact = [];
+  let usedChars = 0;
+  for (const item of history.slice().reverse()) {
+    if (item?.role !== "user" && item?.role !== "assistant") continue;
+    if (usedChars >= CHAT_HISTORY_TOTAL_MAX_CHARS) break;
+    const raw = String(item.content || "").trim();
+    if (!raw) continue;
+    const remaining = CHAT_HISTORY_TOTAL_MAX_CHARS - usedChars;
+    const maxChars = Math.min(CHAT_HISTORY_MESSAGE_MAX_CHARS, remaining);
+    const content = truncateForPrompt(raw, maxChars);
+    compact.push({ role: item.role, content });
+    usedChars += content.length;
+  }
+  return compact.reverse();
+}
+
+async function fetchJsonWithDiagnostics(url, payload, headers, label) {
+  const body = JSON.stringify(payload);
+  const bodyBytes = Buffer.byteLength(body, "utf8");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CHAT_API_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers,
+      body,
+      signal: controller.signal,
+    });
+    return { response, bodyBytes };
+  } catch (error) {
+    const timeoutHint = error?.name === "AbortError" ? `请求超过 ${Math.round(CHAT_API_TIMEOUT_MS / 1000)} 秒未完成，已自动中断。` : "";
+    const sizeHint = bodyBytes > 1024 * 1024 ? "请求体超过 1MB，可能被本地代理、网关或安全软件中断。" : "如果问题很长，可减少引用片段上限或拆成几次提问。";
+    throw new Error(`${label}本地连接失败：${describeFetchError(error)}\n请求地址：${safeEndpointLabel(url)}\n请求体大小：${formatBytes(bodyBytes)}。${timeoutHint}${sizeHint}`);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function normalizeComparableTitle(value) {
@@ -494,20 +743,23 @@ async function loadMaterials(projectPath) {
 }
 
 async function saveMaterial(projectPath, payload) {
+  const id = normalizeDataId(payload.id) || makeId("material");
   const item = {
-    id: payload.id || makeId("material"),
+    id,
     title: String(payload.title || "未命名素材").trim() || "未命名素材",
     category: normalizeCategory(payload.category || "灵感"),
     content: String(payload.content || "").trim(),
     createdAt: payload.createdAt || nowIso(),
     updatedAt: nowIso(),
   };
-  await writeJson(path.join(getMaterialsDir(projectPath), `${item.id}.json`), item);
+  await writeJson(getMaterialPath(projectPath, item.id), item);
   return item;
 }
 
 async function deleteMaterial(projectPath, materialId) {
-  await fs.rm(path.join(getMaterialsDir(projectPath), `${materialId}.json`), { force: true });
+  const id = normalizeDataId(materialId);
+  if (!id) return;
+  await fs.rm(getMaterialPath(projectPath, id), { force: true });
 }
 
 async function listKnowledgeItems(projectPath) {
@@ -583,7 +835,8 @@ function defaultConfig(title = DEFAULT_PROJECT_NAME) {
       embeddingModel: "text-embedding-3-small",
       temperature: 0.7,
       maxTokens: 8000,
-      topK: 5,
+      topK: 120,
+      scanK: DEFAULT_RETRIEVAL_SCAN_K,
       sendFullText: false,
     },
     ui: {
@@ -636,11 +889,12 @@ async function ensureProjectStructure(projectPath, title) {
 }
 
 async function loadConfig(projectPath) {
-  const config = await readJson(getConfigPath(projectPath), defaultConfig());
+  const config = await readProjectConfig(projectPath);
   config.chapters = Array.isArray(config.chapters) ? config.chapters : [];
   config.api = { ...defaultConfig().api, ...(config.api || {}) };
   config.ui = { ...defaultConfig().ui, ...(config.ui || {}) };
   config.stats = { ...defaultConfig().stats, ...(config.stats || {}) };
+  await repairSharedChapterFiles(projectPath, config).catch(() => null);
   return config;
 }
 
@@ -665,7 +919,8 @@ function configFromRenderer(existingConfig, patch) {
   const ui = patch.ui || {};
   const nextTemperature = clampNumber(api.temperature ?? existingConfig.api.temperature, 0, 2, 0.7);
   const nextMaxTokens = Math.floor(clampNumber(api.maxTokens ?? existingConfig.api.maxTokens, 1, MAX_CHAT_TOKENS, 8000));
-  const nextTopK = Math.floor(clampNumber(api.topK ?? existingConfig.api.topK, 1, MAX_RETRIEVAL_TOP_K, 5));
+  const nextTopK = Math.floor(clampNumber(api.topK ?? existingConfig.api.topK, 1, MAX_RETRIEVAL_TOP_K, 120));
+  const nextScanK = Math.floor(clampNumber(api.scanK ?? existingConfig.api.scanK, nextTopK, MAX_RETRIEVAL_SCAN_K, DEFAULT_RETRIEVAL_SCAN_K));
   return {
     ...existingConfig,
     title: patch.title ?? existingConfig.title,
@@ -676,6 +931,7 @@ function configFromRenderer(existingConfig, patch) {
       temperature: nextTemperature,
       maxTokens: nextMaxTokens,
       topK: nextTopK,
+      scanK: nextScanK,
       apiKey: encodeSecret(api.apiKey ?? decodeSecret(existingConfig.api.apiKey)),
       embeddingApiKey: encodeSecret(api.embeddingApiKey ?? decodeSecret(existingConfig.api.embeddingApiKey)),
     },
@@ -838,9 +1094,8 @@ async function importDocumentIntoProject(projectPath, filePath, options = {}) {
   const importId = makeId("import");
   const converted = await convertDocumentToRichContent(projectPath, filePath, importId);
   if (!converted.content.trim()) throw new Error("文档中没有可导入的正文内容。");
-  const chapterDir = path.join(projectPath, "chapters");
   const order = config.chapters.length;
-  const fileName = await uniqueFileName(chapterDir, `document_${String(order + 1).padStart(3, "0")}_${converted.title}`, ".html");
+  const fileName = await uniqueChapterFileName(projectPath, config, `document_${String(order + 1).padStart(3, "0")}_${converted.title}`, ".html");
   const volume = String(options.volume || "").trim() || "导入文档";
   const chapter = {
     id: makeId("chapter"),
@@ -898,6 +1153,11 @@ async function refreshChapterFromOriginalDocument(projectPath, chapterId) {
     throw new Error("找不到导入时的原始 Word 文档，请重新导入 docx。");
   }
 
+  const existingContent = await fs.readFile(getChapterPath(projectPath, chapter), "utf8").catch(() => "");
+  await ensureExclusiveChapterFile(projectPath, config, chapter, existingContent, {
+    reason: "恢复 Word 原文前自动拆分共享章节文件",
+  });
+
   const oldPath = getChapterPath(projectPath, chapter);
   const backupDir = path.join(projectPath, "backups", "docx_refresh");
   await ensureDir(backupDir);
@@ -915,7 +1175,7 @@ async function refreshChapterFromOriginalDocument(projectPath, chapterId) {
   const currentExt = path.extname(chapter.fileName).toLowerCase();
   if (currentExt !== ".html") {
     const baseName = path.basename(chapter.fileName, path.extname(chapter.fileName)) || `document_${String(chapter.order + 1).padStart(3, "0")}_${chapter.title}`;
-    chapter.fileName = await uniqueFileName(chapterDir, baseName, ".html");
+    chapter.fileName = await uniqueChapterFileName(projectPath, config, baseName, ".html", chapter.id);
   }
 
   await fs.writeFile(getChapterPath(projectPath, chapter), converted.content, "utf8");
@@ -1054,14 +1314,10 @@ async function remoteEmbedding(text, apiConfig) {
 
   const headers = { "Content-Type": "application/json" };
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
-  const response = await fetch(`${baseUrl}/embeddings`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ model, input: text }),
-  });
+  const { response, bodyBytes } = await fetchJsonWithDiagnostics(`${baseUrl}/embeddings`, { model, input: text }, headers, "向量 API ");
   if (!response.ok) {
     const detail = await response.text();
-    throw new Error(`Embedding API 请求失败：${response.status} ${detail.slice(0, 300)}`);
+    throw new Error(`Embedding API 请求失败：${response.status} ${detail.slice(0, 300)}\n请求地址：${safeEndpointLabel(`${baseUrl}/embeddings`)}\n请求体大小：${formatBytes(bodyBytes)}`);
   }
   const data = await response.json();
   const embedding = data?.data?.[0]?.embedding;
@@ -1115,6 +1371,39 @@ function cosineSimilarity(a, b) {
   }
   if (!normA || !normB) return 0;
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+function compactSearchText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[《》“”"'‘’：:，,。.!！?？、；;（）()[\]{}【】\s·_\-—]/g, "");
+}
+
+function lexicalRelevanceScore(item, question) {
+  const tokens = queryTokens(question)
+    .map((token) => String(token || "").trim())
+    .filter((token) => token.length >= 2);
+  if (!tokens.length) return 0;
+  const title = String(item.title || "").toLowerCase();
+  const titleCompact = compactSearchText(item.title);
+  const meta = `${item.volume || ""} ${item.category || ""} ${knowledgeRoleLabel(item.knowledgeRole || "")}`.toLowerCase();
+  const text = String(item.text || "").toLowerCase();
+  const questionCompact = compactSearchText(question);
+  let score = 0;
+  let titleHits = 0;
+  for (const token of tokens) {
+    const tokenCompact = compactSearchText(token);
+    if (!tokenCompact) continue;
+    if (title.includes(token) || titleCompact.includes(tokenCompact)) {
+      score += tokenCompact.length >= 4 ? 0.42 : 0.28;
+      titleHits += 1;
+    }
+    if (meta.includes(token) || compactSearchText(meta).includes(tokenCompact)) score += 0.1;
+    if (text.includes(token) || compactSearchText(text).includes(tokenCompact)) score += tokenCompact.length >= 4 ? 0.16 : 0.08;
+  }
+  if (questionCompact && titleCompact && (titleCompact.includes(questionCompact) || questionCompact.includes(titleCompact))) score += 0.75;
+  if (titleHits >= Math.min(2, tokens.length)) score += 0.35;
+  return Math.min(score, 1.8);
 }
 
 async function loadVectorStore(projectPath) {
@@ -1271,19 +1560,24 @@ async function searchRelevantChunks(projectPath, question, topK, options = {}) {
   const store = await loadVectorStore(projectPath);
   const embedding = await getEmbedding(question, config.api);
   const safeTopK = Math.floor(clampNumber(topK, 1, MAX_RETRIEVAL_TOP_K, 5));
+  const safeScanLimit = Math.floor(clampNumber(options.scanLimit || config.api.scanK || Math.max(safeTopK * 4, DEFAULT_RETRIEVAL_SCAN_K), safeTopK, MAX_RETRIEVAL_SCAN_K, DEFAULT_RETRIEVAL_SCAN_K));
   const sourceIds = new Set((Array.isArray(options.sourceIds) ? options.sourceIds : []).map((id) => String(id || "")).filter(Boolean));
   const candidates = store.vectors
-    .map((item) => ({ ...item, score: cosineSimilarity(embedding.vector, item.embedding || []) }))
+    .map((item) => {
+      const vectorScore = cosineSimilarity(embedding.vector, item.embedding || []);
+      const keywordScore = lexicalRelevanceScore(item, question);
+      return { ...item, score: vectorScore + keywordScore, vectorScore, keywordScore };
+    })
     .filter((item) => !sourceIds.size || sourceIds.has(item.sourceId))
     .sort((a, b) => b.score - a.score)
-    .slice(0, safeTopK);
+    .slice(0, safeScanLimit);
   const chunks = selectUsefulChunks(candidates, {
     maxChunks: safeTopK,
     minKeep: options.minKeep,
     minScore: options.minScore,
     maxChars: options.maxChars,
   });
-  return { chunks, candidateCount: candidates.length, embeddingSource: embedding.source, embeddingWarning: embedding.warning };
+  return { chunks, candidateCount: candidates.length, scannedCount: store.vectors.length, embeddingSource: embedding.source, embeddingWarning: embedding.warning };
 }
 
 function characterToMarkdown(card) {
@@ -1304,9 +1598,33 @@ function truncateForPrompt(value, maxChars) {
   return `${text.slice(0, maxChars)}\n【内容过长，已截断】`;
 }
 
+function buildProjectSourceCatalog(config, characters, worldDocs) {
+  const chapters = (config.chapters || [])
+    .slice()
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+    .map((chapter) => `- ${knowledgeRoleLabel(getKnowledgeRole(chapter))}｜${chapter.volume || "未分卷"}｜${chapter.title}`)
+    .join("\n");
+  const characterLines = (characters || [])
+    .map((card) => `- ${card.name}｜${normalizeCategory(card.category)}`)
+    .join("\n");
+  const worldLines = (worldDocs || [])
+    .map((doc) => `- ${doc.title}｜${normalizeCategory(doc.category)}`)
+    .join("\n");
+  return [
+    "【章节与资料文档】",
+    chapters || "- 暂无章节或资料文档",
+    "【角色卡】",
+    characterLines || "- 暂无角色卡",
+    "【世界观条目】",
+    worldLines || "- 暂无世界观条目",
+  ].join("\n");
+}
+
 async function collectPromptMaterials(projectPath, retrievedChunks, question = "") {
+  const config = await loadConfig(projectPath);
   const characters = await loadCharacters(projectPath);
   const worldDocs = await loadWorldDocs(projectPath);
+  const sourceCatalog = buildProjectSourceCatalog(config, characters, worldDocs);
   const characterNames = new Set();
   const worldIds = new Set();
   const questionText = String(question || "");
@@ -1337,7 +1655,7 @@ async function collectPromptMaterials(projectPath, retrievedChunks, question = "
       return `【片段${index + 1}｜${sourceName}｜${item.title}｜相关度 ${item.score.toFixed(3)}】\n${item.text}`;
     })
     .join("\n\n");
-  return { characterCards, worldbuilding, retrievedContext };
+  return { characterCards, worldbuilding, retrievedContext, sourceCatalog };
 }
 
 function buildProjectMemorySummary(snapshot, extraMemory = "") {
@@ -1363,14 +1681,25 @@ function buildProjectMemorySummary(snapshot, extraMemory = "") {
   return [manualMemory ? `【手动项目记忆】\n${manualMemory}` : "", sessionLines ? `【最近会话摘要】\n${sessionLines}` : ""].filter(Boolean).join("\n\n");
 }
 
-function buildSystemPrompt({ retrievedContext, characterCards, worldbuilding, projectMemory, userQuestion, selectedText }) {
+function buildSystemPrompt({ retrievedContext, characterCards, worldbuilding, sourceCatalog, projectMemory, userQuestion, selectedText, retrieval, inventorySummary }) {
+  const questionPreview = truncateForPrompt(userQuestion, USER_QUESTION_SYSTEM_PREVIEW_CHARS);
   const selected = selectedText
-    ? `\n【用户选中的文本】\n"""\n${selectedText}\n"""\n`
+    ? `\n【用户选中的文本】\n"""\n${truncateForPrompt(selectedText, SELECTED_TEXT_PROMPT_MAX_CHARS)}\n"""\n`
     : "";
   const memory = projectMemory
     ? `\n【项目内 AI 记忆】\n${projectMemory}\n`
     : "";
   return `你是一位专业的小说创作助手。用户正在创作一部小说，你将基于小说的已有内容为其提供建议。
+
+【本次检索模式】
+${retrieval ? `${retrieval.modeLabel || retrieval.mode}；候选扫描 ${retrieval.candidateCount || 0}/${retrieval.scannedCount || 0} 片段；实际发送 ${retrieval.contextCount || 0} 片段。${retrieval.catalogUsed ? "已使用项目资料目录兜底。" : ""}` : "普通检索。"}
+${retrieval?.notes?.length ? retrieval.notes.map((note) => `- ${note}`).join("\n") : ""}
+
+【项目资料目录】
+${sourceCatalog || "暂无项目资料目录。"}
+
+【项目资料盘点清单】
+${inventorySummary || "未生成资料盘点清单。"}
 
 【检索到的小说内容】
 ${retrievedContext || "没有检索到相关片段。"}
@@ -1388,9 +1717,275 @@ ${selected}
 3. 回答时可以引用具体的章节或段落。
 4. 如果用户要求创作建议，请结合小说的风格、角色性格和已有情节给出建议。
 5. “项目内 AI 记忆”只用于承接用户偏好、已确认方向和跨会话沟通，不可替代检索片段中的事实设定；涉及具体剧情和设定时优先以检索片段、角色卡和世界观为准。
-6. 保持专业、鼓励性的语气。
+6. 如果“项目资料目录”列出了某个章节或资料，但“检索到的小说内容”没有对应片段，不要说该资料不存在；应说明“目录中存在，但本次未检索到具体片段”。
+7. 当用户询问“有哪些资料、有哪些章节、有哪些角色卡、知识库里有什么”时，优先依据“项目资料目录”给出完整清单，再说明哪些资料在本次检索片段中出现。
+8. 保持专业、鼓励性的语气。
 
-用户问题：${userQuestion}`;
+用户问题预览：${questionPreview || "见用户消息"}`;
+}
+
+const RETRIEVAL_MODE_LABELS = {
+  auto: "自动判断",
+  inventory: "资料盘点",
+  chapter: "指定章节",
+  entity: "角色/设定聚焦",
+  book: "全书分析",
+  current: "当前文档",
+  normal: "普通问答",
+};
+
+function normalizeRetrievalMode(value) {
+  return Object.prototype.hasOwnProperty.call(RETRIEVAL_MODE_LABELS, String(value || "")) ? String(value) : "auto";
+}
+
+function classifyRetrievalMode(question, requestedMode = "auto", config = {}, selectedChapterId = "") {
+  const manual = normalizeRetrievalMode(requestedMode);
+  if (manual !== "auto") return manual;
+  const text = String(question || "");
+  if (/当前(章节|文档|正文)|这[一这]章|本章/.test(text) && selectedChapterId) return "current";
+  if (/(有哪些|知识库|资料|清单|列表|盘点|已导入|已有).*(章节|正文|资料|文档|角色|世界观|设定)|章节.*(有哪些|清单|列表|缺少|统计)|知识库里有什么/.test(text)) return "inventory";
+  if (/第[零〇一二三四五六七八九十百千万\d]+章|序章|终章|\d+\s*[.、]\s*第/.test(text)) return "chapter";
+  if (/(全书|全文|整体|全部|所有|整本|长篇|五百万|500万|全局).*(分析|检查|梳理|整理|时间线|一致性|节奏|伏笔|人物|设定)|检查.*(全书|全文|整体|全部|所有)/.test(text)) return "book";
+  const chapters = Array.isArray(config.chapters) ? config.chapters : [];
+  if (chapters.some((chapter) => chapter.title && text.includes(chapter.title))) return "chapter";
+  return "normal";
+}
+
+function normalizeTitleForMatch(value) {
+  return compactSearchText(value)
+    .replace(/^\d+/, "")
+    .replace(/^第[零〇一二三四五六七八九十百千万\d]+章/, "");
+}
+
+function findMentionedChapters(config, question, selectedChapterId = "", mode = "normal") {
+  const chapters = (config.chapters || []).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  if (mode === "current" && selectedChapterId) return chapters.filter((chapter) => chapter.id === selectedChapterId);
+  const text = String(question || "");
+  const compactQuestion = compactSearchText(text);
+  const matches = [];
+  for (const chapter of chapters) {
+    const title = String(chapter.title || "");
+    const compactTitle = compactSearchText(title);
+    if (!compactTitle) continue;
+    const titleNoPrefix = normalizeTitleForMatch(title);
+    const orderNumber = (chapter.order ?? -1) + 1;
+    const patterns = [
+      title,
+      compactTitle,
+      titleNoPrefix,
+      `第${orderNumber}章`,
+      `${orderNumber}.`,
+      `${orderNumber}、`,
+    ].filter(Boolean);
+    const matched = patterns.some((pattern) => {
+      const raw = String(pattern || "");
+      return raw && (text.includes(raw) || compactQuestion.includes(compactSearchText(raw)));
+    });
+    if (matched) matches.push(chapter);
+  }
+  return matches;
+}
+
+function findMentionedSourceIds(question, characters, worldDocs) {
+  const text = String(question || "");
+  const compactQuestion = compactSearchText(text);
+  const ids = [];
+  for (const card of characters || []) {
+    const name = String(card.name || "");
+    if (name && (text.includes(name) || compactQuestion.includes(compactSearchText(name)))) ids.push(card.id);
+  }
+  for (const doc of worldDocs || []) {
+    const title = String(doc.title || "");
+    if (title && (text.includes(title) || compactQuestion.includes(compactSearchText(title)))) ids.push(doc.id);
+  }
+  return [...new Set(ids)];
+}
+
+function buildInventorySummary(config, characters, worldDocs, store) {
+  const chunkCounts = countBySourceId(store?.vectors || []);
+  const chapters = (config.chapters || []).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const chapterLines = (role) =>
+    chapters
+      .filter((chapter) => getKnowledgeRole(chapter) === role)
+      .map((chapter) => `- ${chapter.volume || "未分卷"}｜${chapter.title}｜${chunkCounts.get(chapter.id) || 0} 片段`)
+      .join("\n") || "- 无";
+  const characterLines = (characters || []).map((card) => `- ${card.name}｜${normalizeCategory(card.category)}｜${chunkCounts.get(card.id) || 0} 片段`).join("\n") || "- 无";
+  const worldLines = (worldDocs || []).map((doc) => `- ${doc.title}｜${normalizeCategory(doc.category)}｜${chunkCounts.get(doc.id) || 0} 片段`).join("\n") || "- 无";
+  return [
+    `知识库总片段：${(store?.vectors || []).length}`,
+    "【正文章节】",
+    chapterLines("正文"),
+    "【大纲】",
+    chapterLines("大纲"),
+    "【补充材料】",
+    chapterLines("补充材料"),
+    "【角色卡】",
+    characterLines,
+    "【世界观】",
+    worldLines,
+  ].join("\n");
+}
+
+function countBySourceId(vectors) {
+  const counts = new Map();
+  for (const entry of vectors || []) counts.set(entry.sourceId, (counts.get(entry.sourceId) || 0) + 1);
+  return counts;
+}
+
+function appendCoverageChunks(chunks, store, sourceIds, maxChunks) {
+  const selected = Array.isArray(chunks) ? chunks.slice() : [];
+  const existingChunkIds = new Set(selected.map((item) => item.id));
+  const existingSourceIds = new Set(selected.map((item) => item.sourceId));
+  for (const sourceId of sourceIds) {
+    if (selected.length >= maxChunks) break;
+    if (existingSourceIds.has(sourceId)) continue;
+    const entry = (store.vectors || []).find((item) => item.sourceId === sourceId && !existingChunkIds.has(item.id));
+    if (!entry) continue;
+    selected.push({
+      ...entry,
+      score: Number(entry.score || 0.001),
+      vectorScore: Number(entry.vectorScore || 0),
+      keywordScore: Number(entry.keywordScore || 0),
+    });
+    existingChunkIds.add(entry.id);
+    existingSourceIds.add(sourceId);
+  }
+  return selected;
+}
+
+function summarizeRetrieval(chunks, config, characters, worldDocs, mode, requestedMode, search, options = {}) {
+  const chaptersById = new Map((config.chapters || []).map((chapter) => [chapter.id, chapter]));
+  const characterIds = new Set((characters || []).map((item) => item.id));
+  const worldIds = new Set((worldDocs || []).map((item) => item.id));
+  const includedTitles = [];
+  const includedSet = new Set();
+  const categoryCounts = {};
+  for (const chunk of chunks || []) {
+    const chapter = chaptersById.get(chunk.sourceId);
+    const sourceLabel = chapter ? knowledgeRoleLabel(getKnowledgeRole(chapter)) : characterIds.has(chunk.sourceId) ? "角色卡" : worldIds.has(chunk.sourceId) ? "世界观" : "其他";
+    categoryCounts[sourceLabel] = (categoryCounts[sourceLabel] || 0) + 1;
+    const key = `${sourceLabel}_${chunk.title}`;
+    if (!includedSet.has(key)) {
+      includedSet.add(key);
+      includedTitles.push(`${sourceLabel}｜${chunk.title}`);
+    }
+  }
+  const allChapterTitles = (config.chapters || []).map((chapter) => chapter.title);
+  const includedChapterTitles = new Set((chunks || []).filter((chunk) => chaptersById.has(chunk.sourceId)).map((chunk) => chunk.title));
+  const existingButNotRead = allChapterTitles.filter((title) => !includedChapterTitles.has(title));
+  return {
+    requestedMode,
+    mode,
+    modeLabel: RETRIEVAL_MODE_LABELS[mode] || mode,
+    catalogUsed: Boolean(options.catalogUsed),
+    inventoryUsed: Boolean(options.inventoryUsed),
+    scanLimit: options.scanLimit || 0,
+    sendLimit: options.sendLimit || 0,
+    scannedCount: search?.scannedCount || 0,
+    candidateCount: search?.candidateCount || 0,
+    contextCount: chunks?.length || 0,
+    documentCount: includedTitles.length,
+    includedTitles: includedTitles.slice(0, 80),
+    existingButNotRead: existingButNotRead.slice(0, 120),
+    categoryCounts,
+    notes: options.notes || [],
+  };
+}
+
+function contextFromChunks(chunks) {
+  return (chunks || []).map((item) => ({
+    id: item.id,
+    title: item.title,
+    sourceType: item.sourceType,
+    score: item.score,
+    vectorScore: item.vectorScore,
+    keywordScore: item.keywordScore,
+    knowledgeRole: item.knowledgeRole,
+    volume: item.volume,
+    category: item.category,
+    text: item.text,
+    metadata: item.metadata,
+  }));
+}
+
+async function buildChatRetrievalPackage(projectPath, config, payload, question) {
+  const requestedMode = normalizeRetrievalMode(payload?.retrievalMode || "auto");
+  const selectedChapterId = String(payload?.selectedChapterId || "");
+  const characters = await loadCharacters(projectPath);
+  const worldDocs = await loadWorldDocs(projectPath);
+  const store = await loadVectorStore(projectPath);
+  let mode = classifyRetrievalMode(question, requestedMode, config, selectedChapterId);
+  const mentionedEntityIds = findMentionedSourceIds(question, characters, worldDocs);
+  if (mode === "normal" && requestedMode === "auto" && mentionedEntityIds.length) mode = "entity";
+  const sendLimit = Math.floor(clampNumber(config.api.topK || 120, 1, MAX_RETRIEVAL_TOP_K, 120));
+  const scanLimit = Math.floor(clampNumber(config.api.scanK || DEFAULT_RETRIEVAL_SCAN_K, sendLimit, MAX_RETRIEVAL_SCAN_K, DEFAULT_RETRIEVAL_SCAN_K));
+  const notes = [];
+  let sourceIds = [];
+  let searchQuestion = question;
+  let minKeep = Math.min(CHAT_CONTEXT_MIN_CHUNKS, sendLimit);
+  let maxChars = CHAT_CONTEXT_CHAR_BUDGET;
+  let catalogUsed = true;
+  let inventoryUsed = false;
+
+  if (mode === "inventory") {
+    inventoryUsed = true;
+    minKeep = Math.min(20, sendLimit);
+    maxChars = Math.min(50000, CHAT_CONTEXT_CHAR_BUDGET);
+    searchQuestion = `${question}\n资料 章节 正文 大纲 补充材料 角色卡 世界观 清单`;
+    notes.push("资料盘点模式：完整清单来自项目配置与知识库索引，引用片段只作补充。");
+  }
+
+  if (mode === "current") {
+    const current = findMentionedChapters(config, question, selectedChapterId, "current");
+    sourceIds = current.map((chapter) => chapter.id);
+    minKeep = Math.min(12, sendLimit);
+    notes.push(sourceIds.length ? "当前文档模式：优先只读取当前打开文档。" : "当前文档模式未找到当前文档，已回退到普通检索。");
+  }
+
+  if (mode === "chapter") {
+    const matched = findMentionedChapters(config, question, selectedChapterId, "chapter");
+    sourceIds = matched.map((chapter) => chapter.id);
+    minKeep = Math.min(24, sendLimit);
+    notes.push(sourceIds.length ? `指定章节模式：已锁定 ${matched.map((item) => item.title).join("、")}。` : "指定章节模式未锁定章节，已回退到混合检索。");
+  }
+
+  if (mode === "entity") {
+    sourceIds = mentionedEntityIds;
+    minKeep = Math.min(18, sendLimit);
+    notes.push(sourceIds.length ? "角色/设定聚焦模式：优先读取点名角色卡或世界观。" : "角色/设定聚焦模式未锁定资料，已回退到混合检索。");
+  }
+
+  if (mode === "book") {
+    minKeep = Math.min(120, sendLimit);
+    maxChars = CHAT_CONTEXT_CHAR_BUDGET;
+    searchQuestion = `${question}\n全书 正文 大纲 角色 世界观 时间线 一致性 节奏 伏笔`;
+    notes.push("全书分析模式：扩大候选扫描，并尽量补足正文章节覆盖。");
+  }
+
+  const search = await searchRelevantChunks(projectPath, searchQuestion, sendLimit, {
+    sourceIds,
+    scanLimit,
+    minKeep,
+    maxChars,
+  });
+  let chunks = search.chunks;
+  if (mode === "book") {
+    const bodyIds = (config.chapters || []).filter((chapter) => getKnowledgeRole(chapter) === "正文").map((chapter) => chapter.id);
+    chunks = appendCoverageChunks(chunks, store, bodyIds, sendLimit);
+  }
+  if (mode === "chapter" || mode === "current") {
+    chunks = appendCoverageChunks(chunks, store, sourceIds, sendLimit);
+  }
+  const materials = await collectPromptMaterials(projectPath, chunks, question);
+  const inventorySummary = buildInventorySummary(config, characters, worldDocs, store);
+  const retrieval = summarizeRetrieval(chunks, config, characters, worldDocs, mode, requestedMode, search, {
+    scanLimit,
+    sendLimit,
+    catalogUsed,
+    inventoryUsed,
+    notes,
+  });
+  return { search: { ...search, chunks }, materials, retrieval, inventorySummary };
 }
 
 async function callChatApi(config, systemPrompt, question, history = []) {
@@ -1407,24 +2002,26 @@ async function callChatApi(config, systemPrompt, question, history = []) {
   }
 
   if (provider === "claude") {
-    const response = await fetch(`${baseUrl || "https://api.anthropic.com"}/v1/messages`, {
-      method: "POST",
-      headers: {
+    const payload = {
+      model,
+      max_tokens: maxTokens,
+      temperature,
+      system: systemPrompt,
+      messages: [{ role: "user", content: question }],
+    };
+    const { response, bodyBytes } = await fetchJsonWithDiagnostics(
+      `${baseUrl || "https://api.anthropic.com"}/v1/messages`,
+      payload,
+      {
         "Content-Type": "application/json",
         "x-api-key": apiKey,
         "anthropic-version": "2023-06-01",
       },
-      body: JSON.stringify({
-        model,
-        max_tokens: maxTokens,
-        temperature,
-        system: systemPrompt,
-        messages: [{ role: "user", content: question }],
-      }),
-    });
+      "Claude API ",
+    );
     if (!response.ok) {
       const detail = await response.text();
-      throw new Error(`Claude API 请求失败：${response.status} ${detail.slice(0, 400)}`);
+      throw new Error(`Claude API 请求失败：${response.status} ${detail.slice(0, 400)}\n请求体大小：${formatBytes(bodyBytes)}`);
     }
     const data = await response.json();
     const text = (data.content || []).map((item) => item.text || "").join("\n").trim();
@@ -1433,24 +2030,18 @@ async function callChatApi(config, systemPrompt, question, history = []) {
 
   const headers = { "Content-Type": "application/json" };
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
-  const safeHistory = history
-    .filter((item) => item.role === "user" || item.role === "assistant")
-    .slice(-8)
-    .map((item) => ({ role: item.role, content: item.content }));
+  const safeHistory = compactChatHistory(history);
 
-  const response = await fetch(`${baseUrl}/chat/completions`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      model,
-      temperature,
-      max_tokens: maxTokens,
-      messages: [{ role: "system", content: systemPrompt }, ...safeHistory, { role: "user", content: question }],
-    }),
-  });
+  const payload = {
+    model,
+    temperature,
+    max_tokens: maxTokens,
+    messages: [{ role: "system", content: systemPrompt }, ...safeHistory, { role: "user", content: question }],
+  };
+  const { response, bodyBytes } = await fetchJsonWithDiagnostics(`${baseUrl}/chat/completions`, payload, headers, "聊天 API ");
   if (!response.ok) {
     const detail = await response.text();
-    throw new Error(`聊天 API 请求失败：${response.status} ${detail.slice(0, 400)}`);
+    throw new Error(`聊天 API 请求失败：${response.status} ${detail.slice(0, 400)}\n请求地址：${safeEndpointLabel(`${baseUrl}/chat/completions`)}\n请求体大小：${formatBytes(bodyBytes)}`);
   }
   const data = await response.json();
   const answer = data?.choices?.[0]?.message?.content || data?.message?.content || "";
@@ -1596,6 +2187,7 @@ ${materials.corpus}`;
   const existingByName = new Map(existing.map((item) => [item.name, item]));
   for (const item of generated) {
     const previous = existingByName.get(item.name);
+    const fileName = previous?.fileName || (await uniqueContentFileName(projectPath, "characters", item.name, ".json"));
     const card = {
       id: previous?.id || makeId("character"),
       name: item.name,
@@ -1605,9 +2197,9 @@ ${materials.corpus}`;
       background: item.background || previous?.background || "",
       relationships: item.relationships || previous?.relationships || "",
       notes: item.notes || previous?.notes || "",
+      fileName,
       updatedAt: nowIso(),
     };
-    if (previous?.fileName) card.fileName = previous.fileName;
     await writeJson(getCharacterPath(projectPath, card), card);
     await indexSource(projectPath, {
       id: card.id,
@@ -1659,11 +2251,12 @@ ${materials.corpus}`;
   const existingByTitle = new Map(existing.map((item) => [item.title, item]));
   for (const item of generated) {
     const previous = existingByTitle.get(item.title);
+    const fileName = previous?.fileName || (await uniqueContentFileName(projectPath, "worldbuilding", item.title, ".md"));
     const doc = {
-      id: previous?.id || sanitizeFileName(item.title),
+      id: previous?.id || fileName.replace(/\.md$/i, ""),
       title: item.title,
       category: normalizeCategory(item.category || previous?.category),
-      fileName: previous?.fileName || `${sanitizeFileName(item.title)}.md`,
+      fileName,
       content: item.content,
       updatedAt: nowIso(),
     };
@@ -2107,6 +2700,16 @@ function normalizeExtractedWorldCards(payload) {
 }
 
 async function buildExtractionMaterials(projectPath, options = {}) {
+  const selectedText = contentToPlainText(String(options.text || "")).trim();
+  if (selectedText) {
+    const config = await loadConfig(projectPath);
+    return {
+      config,
+      search: { chunks: [], embeddingSource: "selection", embeddingWarning: "" },
+      retrieved: "",
+      corpus: `【选中文字】\n${truncateForPrompt(selectedText, 20000)}`,
+    };
+  }
   const scope = options.scope === "chapter" ? "chapter" : "book";
   if (scope !== "chapter") {
     return buildStructuringMaterials(projectPath, "地点 城市 国家 大陆 势力 组织 家族 教会 物品 神器 道具 材料");
@@ -2171,7 +2774,7 @@ async function saveWorldCardCandidates(projectPath, candidates) {
   const indexedSources = [];
   for (const item of selected) {
     const previous = existing.find((doc) => doc.id === item.matchedDocId) || findSimilarWorldDoc(item.title, existing);
-    const fileName = previous?.fileName || (await uniqueFileName(path.join(projectPath, "worldbuilding"), item.title, ".md"));
+    const fileName = previous?.fileName || (await uniqueContentFileName(projectPath, "worldbuilding", item.title, ".md"));
     const mergedContent =
       previous && item.action === "merge"
         ? `${stripWorldDocFrontMatter(previous.content).trim()}\n\n## 新提取资料 ${new Date().toLocaleDateString("zh-CN")}\n\n${stripWorldDocFrontMatter(item.content).replace(/^#.+\n?/, "").trim()}`
@@ -2197,6 +2800,210 @@ async function saveWorldCardCandidates(projectPath, candidates) {
     count: selected.length,
     titles: selected.map((item) => item.title),
   };
+}
+
+function normalizeCreativeAdviceMode(value) {
+  return ["next", "plot", "foreshadow"].includes(String(value || "")) ? String(value) : "next";
+}
+
+function creativeAdviceTypeForMode(mode) {
+  if (mode === "plot") return "剧情推进";
+  if (mode === "foreshadow") return "伏笔建议";
+  return "下一章建议";
+}
+
+function normalizeStringArray(value, maxItems = 6) {
+  if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).filter(Boolean).slice(0, maxItems);
+  const text = String(value || "").trim();
+  return text ? [text].slice(0, maxItems) : [];
+}
+
+function normalizeCreativeAdvicePayload(payload, mode, chapter) {
+  const fallbackType = creativeAdviceTypeForMode(mode);
+  const items = Array.isArray(payload?.items) ? payload.items : Array.isArray(payload?.advice) ? payload.advice : [];
+  return items
+    .map((item, index) => {
+      const title = String(item.title || item.name || "").trim();
+      const summary = String(item.summary || item.detail || item.description || "").trim();
+      const type = ["下一章建议", "剧情推进", "伏笔建议"].includes(String(item.type)) ? String(item.type) : fallbackType;
+      const priority = ["高", "中", "低"].includes(String(item.priority)) ? String(item.priority) : index < 2 ? "高" : "中";
+      return {
+        id: `advice_${stableHash(`${mode}_${chapter?.id || ""}_${index}_${title}_${summary}`)}`,
+        type,
+        title: title || `${fallbackType} ${index + 1}`,
+        priority,
+        summary,
+        rationale: String(item.rationale || item.reason || item.why || "").trim(),
+        benefits: normalizeStringArray(item.benefits || item.value || item.effect),
+        risks: normalizeStringArray(item.risks || item.risk || item.warning),
+        relatedCharacters: normalizeStringArray(item.relatedCharacters || item.characters),
+        relatedSettings: normalizeStringArray(item.relatedSettings || item.settings || item.worldbuilding),
+        targetChapter: String(item.targetChapter || item.chapter || chapter?.title || "").trim(),
+        suggestedUse: String(item.suggestedUse || item.use || item.action || "").trim(),
+      };
+    })
+    .filter((item) => item.title && item.summary)
+    .slice(0, 12);
+}
+
+function buildLocalCreativeAdvice(mode, chapter, nextChapter, focus = "") {
+  const type = creativeAdviceTypeForMode(mode);
+  const focusText = String(focus || "").trim();
+  const target = nextChapter?.title || chapter?.title || "下一章";
+  const shared = {
+    type,
+    priority: "中",
+    relatedCharacters: [],
+    relatedSettings: [],
+    targetChapter: target,
+  };
+  if (mode === "foreshadow") {
+    return [
+      {
+        ...shared,
+        id: `advice_${stableHash(`${chapter?.id || ""}_foreshadow_1`)}`,
+        title: "用一个异常细节提前露出后续冲突",
+        summary: `围绕《${chapter?.title || "当前章节"}》刚出现的线索，埋一个看似无关的小异常。`,
+        rationale: "本地兜底无法调用模型，但伏笔最稳的做法是先给读者一个可记住的细节，暂时不解释。",
+        benefits: ["增强后续回收的满足感", "让设定显得不是临时出现"],
+        risks: ["异常太明显会破坏悬念", "细节如果后续不回收会变成噪音"],
+        suggestedUse: focusText ? `结合你的关注点“${focusText}”，把伏笔藏在人物反应、物品状态或环境变化里。` : "优先藏在人物反应、物品状态或环境变化里。",
+      },
+    ];
+  }
+  if (mode === "plot") {
+    return [
+      {
+        ...shared,
+        id: `advice_${stableHash(`${chapter?.id || ""}_plot_1`)}`,
+        title: "用一个选择题推动剧情，而不是只用信息推动剧情",
+        summary: `下一步可以让角色面对一个必须取舍的事件，把线索推进和人物塑造绑在一起。`,
+        rationale: "长篇剧情推进最怕只靠说明信息。让人物做选择，可以同时推进事件、关系和主题。",
+        benefits: ["角色主动性更强", "读者更容易记住本章作用"],
+        risks: ["选择代价需要明确", "不要让选择和主线目标脱节"],
+        suggestedUse: focusText ? `围绕“${focusText}”设计一个短期选择：追线索、救人、隐瞒、交易或冒险。` : "设计一个短期选择：追线索、救人、隐瞒、交易或冒险。",
+      },
+    ];
+  }
+  return [
+    {
+      ...shared,
+      id: `advice_${stableHash(`${chapter?.id || ""}_next_1`)}`,
+      title: "下一章先承接上一章结果，再给出新的麻烦",
+      summary: `从《${chapter?.title || "当前章节"}》的后果开场，随后引出一个更具体的目标或阻碍。`,
+      rationale: "先承接能保持因果连续，再抛出新麻烦能让章节有推进感。",
+      benefits: ["节奏自然", "读者不会觉得转场突兀"],
+      risks: ["承接过长会拖慢开篇", "新麻烦需要和主线或人物目标有关"],
+      suggestedUse: focusText ? `结合“${focusText}”，把开场控制在一到两个场景内。` : "把开场控制在一到两个场景内，尽快给出本章目标。",
+    },
+  ];
+}
+
+async function buildCreativeAdvice(projectPath, options = {}) {
+  const mode = normalizeCreativeAdviceMode(options.mode);
+  const focus = String(options.focus || "").trim().slice(0, 1200);
+  const config = await loadConfig(projectPath);
+  const ordered = config.chapters.slice().sort((a, b) => a.order - b.order);
+  const selectedIndex = Math.max(0, ordered.findIndex((chapter) => chapter.id === options.chapterId));
+  const chapter = ordered[selectedIndex] || ordered[0];
+  if (!chapter) throw new Error("当前项目还没有可分析的章节。");
+  const previousChapter = ordered[selectedIndex - 1] || null;
+  const nextChapter = ordered[selectedIndex + 1] || null;
+  const readPlain = async (item, maxChars) => {
+    if (!item) return "";
+    const content = await fs.readFile(getChapterPath(projectPath, item), "utf8").catch(() => "");
+    return truncateForPrompt(contentToPlainText(content), maxChars);
+  };
+  const currentText = await readPlain(chapter, 12000);
+  const previousText = await readPlain(previousChapter, 5000);
+  const nextText = await readPlain(nextChapter, 5000);
+  const outlineTitles = ordered
+    .filter((item) => getKnowledgeRole(item) === "大纲")
+    .slice(0, 8)
+    .map((item) => `${item.volume || "未分卷"} / ${item.title}`)
+    .join("；");
+  const modeQuestion =
+    mode === "plot"
+      ? "剧情推进 合理化 冲突 动机 节奏 事件 选择"
+      : mode === "foreshadow"
+        ? "伏笔 埋设 回收 线索 异常 预兆 悬念"
+        : "下一章 建议 节奏 人物 事件 主线 转场";
+  const query = [modeQuestion, chapter.title, nextChapter?.title || "", focus].filter(Boolean).join(" ");
+  const topK = Math.floor(clampNumber(config.api.topK || 40, 1, MAX_RETRIEVAL_TOP_K, 40));
+  const search = await searchRelevantChunks(projectPath, query, topK, {
+    minKeep: Math.min(24, topK),
+    maxChars: STRUCTURING_CONTEXT_CHAR_BUDGET,
+  });
+  const retrieved = search.chunks
+    .map((item, index) => {
+      const role = item.sourceType === "chapter" ? knowledgeRoleLabel(item.knowledgeRole) : item.sourceType === "character" ? "角色卡" : "世界观";
+      const group = item.volume || item.category || "";
+      return `【检索片段${index + 1}｜${role}${group ? `｜${group}` : ""}｜${item.title}】\n${item.text}`;
+    })
+    .join("\n\n");
+  const systemPrompt = `你是一个“小说创作参谋 Agent”，不是代写机器。你的任务是辅助作者判断下一步怎么写，而不是替作者完成正文。
+必须只基于提供的大纲、正文、角色卡、世界观和检索片段提出建议；不确定就写风险，不要硬编事实。
+请输出 JSON，不要 Markdown，不要解释。JSON 格式必须是：
+{"items":[{"type":"下一章建议","priority":"高","title":"","summary":"","rationale":"","benefits":[""],"risks":[""],"relatedCharacters":[""],"relatedSettings":[""],"targetChapter":"","suggestedUse":""}]}
+
+字段要求：
+1. type 只能是：下一章建议、剧情推进、伏笔建议。
+2. priority 只能是：高、中、低。
+3. summary 写具体建议，不要空泛。
+4. rationale 写为什么它适合当前文本和大纲。
+5. benefits 写收益，risks 写风险或注意事项。
+6. suggestedUse 写作者可以怎样使用这个建议，但不要写完整正文。
+7. 每条建议尽量能被作者采纳、改造或存为素材。`;
+  const task =
+    mode === "plot"
+      ? "请给出 5 到 8 个剧情推进/合理化方案，重点是事件因果、角色动机、冲突升级和节奏控制。"
+      : mode === "foreshadow"
+        ? "请给出 5 到 8 个伏笔建议，包含现在怎么轻轻埋下、未来如何回收、风险是什么。"
+        : "请给出 5 到 8 个下一章创作建议，重点是可用事件、章节目标、节奏、人物表现和自然转场。";
+  const question = `${task}
+
+【当前关注点】
+${focus || "无"}
+
+【当前章节】
+${chapter.volume || "未分卷"} / ${chapter.title}
+${currentText || "暂无正文"}
+
+【上一章参考】
+${previousChapter ? `${previousChapter.volume || "未分卷"} / ${previousChapter.title}\n${previousText}` : "无"}
+
+【下一条目录参考】
+${nextChapter ? `${nextChapter.volume || "未分卷"} / ${nextChapter.title}\n${nextText}` : "无"}
+
+【项目大纲文档】
+${outlineTitles || "未显式标记大纲文档"}
+
+【检索片段】
+${retrieved || "无"}`;
+  try {
+    const answer = await callChatApi(config, systemPrompt, question, []);
+    const items = normalizeCreativeAdvicePayload(extractJsonFromModelText(answer), mode, chapter);
+    if (!items.length) throw new Error("AI 没有返回可识别的建议卡片。");
+    return {
+      mode,
+      chapterId: chapter.id,
+      chapterTitle: chapter.title,
+      generatedAt: nowIso(),
+      contextCount: search.chunks.length,
+      apiError: "",
+      items,
+    };
+  } catch (error) {
+    return {
+      mode,
+      chapterId: chapter.id,
+      chapterTitle: chapter.title,
+      generatedAt: nowIso(),
+      contextCount: search.chunks.length,
+      apiError: error.message || String(error),
+      items: buildLocalCreativeAdvice(mode, chapter, nextChapter, focus),
+    };
+  }
 }
 
 async function buildAppearanceStats(projectPath) {
@@ -2697,6 +3504,8 @@ async function chapterContentToDocxChildren(content) {
 async function exportBookToDocx(projectPath, targetFile, options = {}) {
   const config = await loadConfig(projectPath);
   const chapters = config.chapters.slice().sort((a, b) => a.order - b.order);
+  const bodyChapters = chapters.filter((chapter) => getKnowledgeRole(chapter) === "正文");
+  const outlineChapters = chapters.filter((chapter) => getKnowledgeRole(chapter) === "大纲");
   const children = [
     new Paragraph({
       heading: HeadingLevel.HEADING_1,
@@ -2710,7 +3519,7 @@ async function exportBookToDocx(projectPath, targetFile, options = {}) {
     new Paragraph({ text: "" }),
   ];
   let currentVolume = "";
-  for (const chapter of chapters) {
+  for (const chapter of bodyChapters) {
     const volume = chapter.volume || "未分卷";
     if (volume !== currentVolume) {
       currentVolume = volume;
@@ -2734,7 +3543,16 @@ async function exportBookToDocx(projectPath, targetFile, options = {}) {
   }
   if (options.includeOutline) {
     children.push(new Paragraph({ heading: HeadingLevel.HEADING_1, pageBreakBefore: true, children: [new TextRun({ text: "大纲目录", bold: true })] }));
-    for (const chapter of chapters) {
+    for (const chapter of outlineChapters) {
+      children.push(new Paragraph({ heading: HeadingLevel.HEADING_2, children: [new TextRun({ text: `${chapter.volume || "未分卷"} / ${chapter.title}`, bold: true })] }));
+      const content = await fs.readFile(getChapterPath(projectPath, chapter), "utf8").catch(() => "");
+      const blocks = await chapterContentToDocxChildren(content);
+      children.push(...blocks, new Paragraph({ text: "" }));
+    }
+    if (bodyChapters.some((chapter) => chapter.outline?.length)) {
+      children.push(new Paragraph({ heading: HeadingLevel.HEADING_2, children: [new TextRun({ text: "正文小标题目录", bold: true })] }));
+    }
+    for (const chapter of bodyChapters) {
       children.push(new Paragraph({ heading: HeadingLevel.HEADING_2, children: [new TextRun({ text: `${chapter.volume || "未分卷"} / ${chapter.title}`, bold: true })] }));
       for (const item of chapter.outline || []) {
         children.push(
@@ -3172,17 +3990,34 @@ function registerIpcHandlers() {
     return { materials: await loadMaterials(projectPath) };
   });
 
+  ipcMain.handle("ai:creative-advice", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    const result = await buildCreativeAdvice(projectPath, payload || {});
+    await saveAnalysisState(projectPath, {
+      creativeAdvice: result,
+      creativeOptions: {
+        mode: result.mode,
+        chapterId: result.chapterId,
+        focus: String(payload?.focus || "").trim(),
+      },
+    });
+    return result;
+  });
+
   ipcMain.handle("chapter:create", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     const config = await loadConfig(projectPath);
     const order = config.chapters.length;
     const title = payload?.title?.trim() || `第${order + 1}章 新章节`;
+    const chapterDir = path.join(projectPath, "chapters");
+    await ensureDir(chapterDir);
+    const fileName = await uniqueChapterFileName(projectPath, config, `chapter_${String(order + 1).padStart(3, "0")}_${title}`, ".md");
     const chapter = {
       id: makeId("chapter"),
       title,
       volume: payload?.volume || "卷一",
       order,
-      fileName: `chapter_${String(order + 1).padStart(3, "0")}_${sanitizeFileName(title)}.md`,
+      fileName,
       wordCount: 0,
       knowledgeRole: "正文",
       outline: [{ id: `0_${title}`, level: 1, title, line: 0 }],
@@ -3205,10 +4040,15 @@ function registerIpcHandlers() {
     const config = await loadConfig(projectPath);
     const chapter = config.chapters.find((item) => item.id === payload.chapterId);
     if (!chapter) throw new Error("章节不存在，无法保存。");
-    const filePath = getChapterPath(projectPath, chapter);
+    let filePath = getChapterPath(projectPath, chapter);
     const previousContent = await fs.readFile(filePath, "utf8").catch(() => "");
     const previousWords = countWords(previousContent);
     const nextContent = String(payload.content ?? "");
+    const didSplitSharedFile = await ensureExclusiveChapterFile(projectPath, config, chapter, previousContent, {
+      snapshot: false,
+      reason: "保存前自动拆分共享章节文件",
+    });
+    if (didSplitSharedFile) filePath = getChapterPath(projectPath, chapter);
     if (previousContent && previousContent !== nextContent) {
       await snapshotChapterVersion(projectPath, chapter, previousContent).catch(() => null);
     }
@@ -3255,7 +4095,12 @@ function registerIpcHandlers() {
     const chapter = config.chapters.find((item) => item.id === chapterId);
     if (!chapter) throw new Error("章节不存在，无法删除。");
     if (config.chapters.length <= 1) throw new Error("至少需要保留一个章节。");
-    await fs.rm(getChapterPath(projectPath, chapter), { force: true });
+    const hasOtherChapterUsingFile = config.chapters.some(
+      (item) => item.id !== chapterId && normalizeChapterFileName(item.fileName) === normalizeChapterFileName(chapter.fileName),
+    );
+    if (!hasOtherChapterUsingFile) {
+      await fs.rm(getChapterPath(projectPath, chapter), { force: true });
+    }
     config.chapters = config.chapters.filter((item) => item.id !== chapterId).map((item, index) => ({ ...item, order: index }));
     await removeSourceFromIndex(projectPath, chapterId);
     await calculateTotalWords(projectPath, config);
@@ -3345,6 +4190,9 @@ function registerIpcHandlers() {
 
   ipcMain.handle("character:save", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
+    const characters = await loadCharacters(projectPath);
+    const previous = payload.id ? characters.find((item) => item.id === payload.id) : null;
+    const fileName = await uniqueContentFileName(projectPath, "characters", payload.name || payload.id || "未命名角色", ".json", previous?.fileName || "");
     const card = {
       id: payload.id || makeId("character"),
       name: payload.name || "未命名角色",
@@ -3354,12 +4202,13 @@ function registerIpcHandlers() {
       background: payload.background || "",
       relationships: payload.relationships || "",
       notes: payload.notes || "",
+      fileName,
       updatedAt: nowIso(),
     };
     const nextPath = getCharacterPath(projectPath, card);
     // 角色改名会改变文件名，保存前清理旧文件，避免同一角色出现重复卡片。
-    if (payload.fileName && path.basename(nextPath) !== payload.fileName) {
-      await fs.rm(path.join(projectPath, "characters", payload.fileName), { force: true });
+    if (previous?.fileName && path.basename(nextPath) !== normalizeManagedFileName(previous.fileName, ".json")) {
+      await fs.rm(getCharacterPath(projectPath, previous), { force: true });
     }
     await writeJson(nextPath, card);
     await indexSource(projectPath, {
@@ -3375,7 +4224,7 @@ function registerIpcHandlers() {
     const projectPath = await ensureCurrentProject();
     const characters = await loadCharacters(projectPath);
     const card = characters.find((item) => item.id === characterId);
-    if (card) await fs.rm(path.join(projectPath, "characters", card.fileName), { force: true });
+    if (card) await fs.rm(getCharacterPath(projectPath, card), { force: true });
     await removeSourceFromIndex(projectPath, characterId);
     return buildAppState(projectPath);
   });
@@ -3383,11 +4232,14 @@ function registerIpcHandlers() {
   ipcMain.handle("world:save", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     const title = payload.title || "未命名设定";
+    const worldDocs = await loadWorldDocs(projectPath);
+    const previous = payload.id ? worldDocs.find((item) => item.id === payload.id) : null;
+    const fileName = previous?.fileName || (await uniqueContentFileName(projectPath, "worldbuilding", title, ".md"));
     const doc = {
-      id: payload.id || sanitizeFileName(title),
+      id: previous?.id || fileName.replace(/\.md$/i, ""),
       title,
       category: normalizeCategory(payload.category),
-      fileName: payload.fileName || `${sanitizeFileName(title)}.md`,
+      fileName,
       content: payload.content || "",
       updatedAt: nowIso(),
     };
@@ -3452,12 +4304,8 @@ function registerIpcHandlers() {
     const config = await loadConfig(projectPath);
     const question = String(payload.question || "").trim();
     if (!question) throw new Error("请输入要询问 AI 的内容。");
-    const topK = Math.floor(clampNumber(config.api.topK || 5, 1, MAX_RETRIEVAL_TOP_K, 5));
-    const search = await searchRelevantChunks(projectPath, question, topK, {
-      minKeep: Math.min(3, topK),
-      maxChars: CHAT_CONTEXT_CHAR_BUDGET,
-    });
-    const materials = await collectPromptMaterials(projectPath, search.chunks, question);
+    const retrievalPackage = await buildChatRetrievalPackage(projectPath, config, payload || {}, question);
+    const { search, materials, retrieval, inventorySummary } = retrievalPackage;
     const analysisState = await loadAnalysisState(projectPath);
     const projectMemory = buildProjectMemorySummary(analysisState, payload.projectMemory || "");
     const systemPrompt = buildSystemPrompt({
@@ -3465,38 +4313,30 @@ function registerIpcHandlers() {
       projectMemory,
       userQuestion: question,
       selectedText: payload.selectedText || "",
+      retrieval,
+      inventorySummary,
     });
 
     try {
       const answer = await callChatApi(config, systemPrompt, question, payload.history || []);
       return {
         answer,
-        context: search.chunks.map((item) => ({
-          id: item.id,
-          title: item.title,
-          sourceType: item.sourceType,
-          score: item.score,
-          text: item.text,
-          metadata: item.metadata,
-        })),
+        context: contextFromChunks(search.chunks),
+        retrieval,
         contextCount: search.chunks.length,
         candidateCount: search.candidateCount || search.chunks.length,
+        scannedCount: search.scannedCount || search.candidateCount || search.chunks.length,
         embeddingSource: search.embeddingSource,
         embeddingWarning: search.embeddingWarning,
       };
     } catch (error) {
       return {
         answer: `我已经完成本地检索，但暂时没有成功连接到大模型接口。\n\n${error.message}\n\n你可以先查看下方“引用片段”，确认知识库是否已经索引成功。配置接口后再次提问即可获得模型回答。`,
-        context: search.chunks.map((item) => ({
-          id: item.id,
-          title: item.title,
-          sourceType: item.sourceType,
-          score: item.score,
-          text: item.text,
-          metadata: item.metadata,
-        })),
+        context: contextFromChunks(search.chunks),
+        retrieval,
         contextCount: search.chunks.length,
         candidateCount: search.candidateCount || search.chunks.length,
+        scannedCount: search.scannedCount || search.candidateCount || search.chunks.length,
         embeddingSource: search.embeddingSource,
         embeddingWarning: search.embeddingWarning,
         apiError: error.message,
@@ -3511,19 +4351,59 @@ function registerIpcHandlers() {
   });
 }
 
-app.whenReady().then(async () => {
-  app.setName("AI小说创作平台");
-  setChineseApplicationMenu();
-  registerIpcHandlers();
-  currentProjectPath = await getDefaultProjectPath();
-  await ensureProjectStructure(currentProjectPath);
-  await createWindow();
+if (process.env.NOVEL_PLATFORM_TEST === "1") {
+  module.exports = {
+    analyzeConsistency,
+    buildAiTimelineEvents,
+    buildAppState,
+    buildChatRetrievalPackage,
+    buildCreativeAdvice,
+    buildInventorySummary,
+    buildProjectSourceCatalog,
+    buildRelationshipGraph,
+    buildSystemPrompt,
+    buildTimelineEvents,
+    callChatApi,
+    chunkText,
+    collectPromptMaterials,
+    contentToPlainText,
+    defaultConfig,
+    ensureProjectStructure,
+    exportBookToDocx,
+    generateCharactersFromOutline,
+    getChapterPath,
+    getConfigPath,
+    getKnowledgeRole,
+    importDocumentIntoProject,
+    indexSource,
+    indexSources,
+    loadAnalysisState,
+    loadCharacters,
+    loadConfig,
+    loadVectorStore,
+    loadWorldDocs,
+    prepareWorldCardCandidates,
+    rebuildIndex,
+    saveConfig,
+    saveAnalysisState,
+    saveWorldCardCandidates,
+    searchRelevantChunks,
+  };
+} else {
+  app.whenReady().then(async () => {
+    app.setName("AI小说创作平台");
+    setChineseApplicationMenu();
+    registerIpcHandlers();
+    currentProjectPath = await getDefaultProjectPath();
+    await ensureProjectStructure(currentProjectPath);
+    await createWindow();
 
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    });
   });
-});
 
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
-});
+  app.on("window-all-closed", () => {
+    if (process.platform !== "darwin") app.quit();
+  });
+}

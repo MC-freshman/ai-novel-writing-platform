@@ -9,10 +9,15 @@ release/
 # Local temporary test artifacts
 .tmp-*/
 .tmp-*.docx
+.test-runs/
+测试报告_*.md
+AI功能专项测试报告_*.md
+UI按钮与功能入口审计报告_*.md
 *.log
 .private/
 
 # Local project/user data. These may contain API settings, novel drafts, vectors, backups, or imported files.
+小说1材料/
 novel.config.json
 chapters/
 characters/

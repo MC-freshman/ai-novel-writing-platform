@@ -9,6 +9,7 @@ import {
   Boxes,
   ChevronDown,
   ChevronRight,
+  Copy,
   Download,
   Eye,
   EyeOff,
@@ -26,6 +27,7 @@ import {
   ListOrdered,
   ListTree,
   Maximize2,
+  Minimize2,
   MessageSquarePlus,
   Moon,
   PanelLeftClose,
@@ -72,6 +74,9 @@ import type {
   ChatMessage,
   ChatSession,
   ConsistencyIssue,
+  CreativeAdviceItem,
+  CreativeAdviceMode,
+  CreativeAdviceResult,
   ExtractedWorldCandidate,
   GlobalSearchResult,
   AppearanceStat,
@@ -82,6 +87,7 @@ import type {
   KnowledgeRole,
   RelationshipEdge,
   RelationshipNode,
+  RetrievalMode,
   TimelineEvent,
   WorldDoc,
   WorldMapEdge,
@@ -90,6 +96,7 @@ import type {
 
 const PROVIDER_DEFAULTS: Record<Provider, { baseUrl: string; model: string; label: string }> = {
   deepseek: { label: "DeepSeek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat" },
+  qwen: { label: "通义千问 / Qwen", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-plus" },
   openai: { label: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" },
   kimi: { label: "Kimi", baseUrl: "https://api.moonshot.cn/v1", model: "moonshot-v1-8k" },
   claude: { label: "Claude", baseUrl: "https://api.anthropic.com", model: "claude-3-5-sonnet-latest" },
@@ -105,8 +112,26 @@ const QUICK_PROMPTS = [
 ];
 
 const MAX_CHAT_TOKENS = 393216;
-const MAX_RETRIEVAL_TOP_K = 250;
+const MAX_RETRIEVAL_TOP_K = 1000;
+const MAX_RETRIEVAL_SCAN_K = 50000;
 const DEFAULT_CATEGORY_LABEL = "未分类";
+type AnalysisTab = "search" | "timeline" | "relations" | "consistency" | "versions" | "export";
+
+const RETRIEVAL_MODE_OPTIONS: Array<{ value: RetrievalMode; label: string }> = [
+  { value: "auto", label: "自动判断" },
+  { value: "inventory", label: "资料盘点" },
+  { value: "chapter", label: "指定章节" },
+  { value: "entity", label: "角色/设定" },
+  { value: "book", label: "全书分析" },
+  { value: "current", label: "当前文档" },
+  { value: "normal", label: "普通问答" },
+];
+
+const CREATIVE_ADVICE_MODES: Array<{ value: CreativeAdviceMode; label: string }> = [
+  { value: "next", label: "下一章建议" },
+  { value: "plot", label: "剧情推进" },
+  { value: "foreshadow", label: "伏笔建议" },
+];
 
 function clampNumber(value: number, min: number, max: number, fallback: number) {
   if (!Number.isFinite(value)) return fallback;
@@ -242,6 +267,104 @@ function contentToHtml(content: string) {
 function contentToPlainText(content: string) {
   const doc = new DOMParser().parseFromString(contentToHtml(content || ""), "text/html");
   return doc.body.textContent?.replace(/\s+/g, " ").trim() || "";
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function buildRichTextIndex(editor: Editor) {
+  const chars: string[] = [];
+  const positions: Array<number | null> = [];
+  let previousTextEnd = -1;
+  editor.state.doc.descendants((node, pos) => {
+    if (!node.isText || !node.text) return true;
+    if (previousTextEnd >= 0 && pos > previousTextEnd) {
+      chars.push("\n");
+      positions.push(null);
+    }
+    for (let index = 0; index < node.text.length; index += 1) {
+      chars.push(node.text[index]);
+      positions.push(pos + index);
+    }
+    previousTextEnd = pos + node.text.length;
+    return true;
+  });
+  return { text: chars.join(""), positions };
+}
+
+function textOffsetFromDocPos(positions: Array<number | null>, docPos: number) {
+  const offset = positions.findIndex((position) => typeof position === "number" && position >= docPos);
+  return offset < 0 ? positions.length : offset;
+}
+
+function scrollRichSelectionIntoView(editor: Editor, from: number) {
+  window.requestAnimationFrame(() => {
+    try {
+      const shell = editor.view.dom.closest(".rich-page-shell") as HTMLElement | null;
+      if (!shell) return;
+      const coords = editor.view.coordsAtPos(from);
+      const rect = shell.getBoundingClientRect();
+      shell.scrollTop += coords.top - rect.top - shell.clientHeight * 0.4;
+    } catch {
+      editor.view.dom.scrollIntoView({ block: "nearest" });
+    }
+  });
+}
+
+function findNextInRichEditor(editor: Editor, query: string) {
+  const index = buildRichTextIndex(editor);
+  const needle = query.toLowerCase();
+  const haystack = index.text.toLowerCase();
+  const startOffset = textOffsetFromDocPos(index.positions, editor.state.selection.to);
+  let found = haystack.indexOf(needle, startOffset);
+  let wrapped = false;
+  if (found < 0 && startOffset > 0) {
+    found = haystack.indexOf(needle, 0);
+    wrapped = true;
+  }
+  const from = index.positions[found];
+  const last = index.positions[found + query.length - 1];
+  if (found < 0 || typeof from !== "number" || typeof last !== "number") return { found: false, wrapped, selectedText: "" };
+  const to = last + 1;
+  editor.commands.setTextSelection({ from, to });
+  editor.commands.focus();
+  scrollRichSelectionIntoView(editor, from);
+  return { found: true, wrapped, selectedText: index.text.slice(found, found + query.length) };
+}
+
+function replaceAllInRichEditor(editor: Editor, query: string, replacement: string) {
+  const index = buildRichTextIndex(editor);
+  const needle = query.toLowerCase();
+  const haystack = index.text.toLowerCase();
+  const matches: Array<{ from: number; to: number }> = [];
+  let cursor = 0;
+  while (cursor <= haystack.length - needle.length) {
+    const found = haystack.indexOf(needle, cursor);
+    if (found < 0) break;
+    const from = index.positions[found];
+    const last = index.positions[found + query.length - 1];
+    if (typeof from !== "number" || typeof last !== "number") {
+      cursor = found + Math.max(1, query.length);
+      continue;
+    }
+    matches.push({
+      from,
+      to: last + 1,
+    });
+    cursor = found + Math.max(1, query.length);
+  }
+  if (!matches.length) return 0;
+  let transaction = editor.state.tr;
+  for (const range of matches.slice().reverse()) {
+    transaction = replacement ? transaction.insertText(replacement, range.from, range.to) : transaction.delete(range.from, range.to);
+  }
+  editor.view.dispatch(transaction);
+  const first = matches[0];
+  editor.commands.setTextSelection({ from: first.from, to: first.from + replacement.length });
+  editor.commands.focus();
+  scrollRichSelectionIntoView(editor, first.from);
+  return matches.length;
 }
 
 function changeHeadingLevel(content: string, headingLineOrIndex: number, nextLevel: number) {
@@ -389,6 +512,10 @@ function formatDateTime(value?: string) {
   return date.toLocaleString("zh-CN", { hour12: false });
 }
 
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export default function App() {
   const [state, setState] = useState<AppState | null>(null);
   const [selectedChapter, setSelectedChapter] = useState<Chapter | null>(null);
@@ -400,6 +527,7 @@ export default function App() {
   const [status, setStatus] = useState("正在打开项目...");
   const [view, setView] = useState<"chapters" | "characters" | "world" | "knowledge" | "analysis">("chapters");
   const [showSettings, setShowSettings] = useState(false);
+  const [showQuickPanel, setShowQuickPanel] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   const [preview, setPreview] = useState(false);
   const [scrollAnchor, setScrollAnchor] = useState("");
@@ -409,6 +537,7 @@ export default function App() {
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
   const [activeChatSessionId, setActiveChatSessionId] = useState("");
   const [aiProjectMemory, setAiProjectMemory] = useState("");
+  const [chatRetrievalMode, setChatRetrievalMode] = useState<RetrievalMode>("auto");
   const [chatLoaded, setChatLoaded] = useState(false);
   const [draggingChapterId, setDraggingChapterId] = useState<string | null>(null);
   const [importProgress, setImportProgress] = useState<ProgressState | null>(null);
@@ -417,10 +546,18 @@ export default function App() {
   const [findText, setFindText] = useState("");
   const [replaceText, setReplaceText] = useState("");
   const [leftWidth, setLeftWidth] = useState(280);
-  const [rightWidth, setRightWidth] = useState(380);
+  const [rightWidth, setRightWidth] = useState(520);
+  const [aiExpanded, setAiExpanded] = useState(false);
   const [previewWidth, setPreviewWidth] = useState(46);
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
+  const richEditorRef = useRef<Editor | null>(null);
   const workspaceRef = useRef<HTMLElement | null>(null);
+  const selectedChapterIdRef = useRef("");
+  const chapterDraftRef = useRef({ content: "", title: "", volume: "" });
+
+  const handleRichEditorReady = useCallback((editor: Editor | null) => {
+    richEditorRef.current = editor;
+  }, []);
 
   const applyAppState = useCallback((nextState: AppState) => {
     setState(nextState);
@@ -441,6 +578,11 @@ export default function App() {
   }, [applyAppState]);
 
   useEffect(() => {
+    selectedChapterIdRef.current = selectedChapter?.id ?? "";
+    chapterDraftRef.current = { content: chapterContent, title: chapterTitle, volume: chapterVolume };
+  }, [chapterContent, chapterTitle, chapterVolume, selectedChapter?.id]);
+
+  useEffect(() => {
     if (!state?.projectPath) return;
     setChatLoaded(false);
     window.novelAPI
@@ -454,6 +596,7 @@ export default function App() {
         setActiveChatSessionId(active.id);
         setChatMessages(active.messages || []);
         setAiProjectMemory(snapshot.aiProjectMemory || "");
+        setChatRetrievalMode(snapshot.chatRetrievalMode || "auto");
       })
       .catch(() => {
         const session = makeChatSession();
@@ -461,6 +604,7 @@ export default function App() {
         setActiveChatSessionId(session.id);
         setChatMessages([]);
         setAiProjectMemory("");
+        setChatRetrievalMode("auto");
       })
       .finally(() => setChatLoaded(true));
   }, [state?.projectPath]);
@@ -485,37 +629,64 @@ export default function App() {
   }, []);
 
   const saveChapter = useCallback(async () => {
-    if (!selectedChapter || saving) return;
+    if (!selectedChapter) {
+      setStatus("请先选择一个文档再保存。");
+      return false;
+    }
+    if (saving) {
+      setStatus("当前文档正在保存，请稍候。");
+      return false;
+    }
+    const draft = {
+      chapterId: selectedChapter.id,
+      title: chapterTitle,
+      volume: chapterVolume,
+      content: chapterContent,
+    };
     setSaving(true);
     setStatus("正在保存并更新知识库...");
     try {
-      const result = await window.novelAPI.saveChapter({
-        chapterId: selectedChapter.id,
-        title: chapterTitle,
-        volume: chapterVolume,
-        content: chapterContent,
-      });
-      setSelectedChapter(result.chapter);
+      const result = await window.novelAPI.saveChapter(draft);
+      const stillViewingSameChapter = selectedChapterIdRef.current === draft.chapterId;
+      const currentDraft = chapterDraftRef.current;
+      const draftUnchanged =
+        currentDraft.content === draft.content && currentDraft.title === draft.title && currentDraft.volume === draft.volume;
+      if (stillViewingSameChapter) {
+        setSelectedChapter(result.chapter);
+      }
       setState((current) =>
         current
           ? {
               ...current,
               config: result.config,
               chapters: result.config.chapters,
-              selectedChapter: result.chapter,
+              selectedChapter: current.selectedChapter?.id === draft.chapterId ? result.chapter : current.selectedChapter,
               vectorStats: result.vectorStats,
             }
           : current,
       );
-      setDirty(false);
+      if (stillViewingSameChapter && draftUnchanged) {
+        setDirty(false);
+      }
       const mode = result.indexResult.chunks > 0 ? `索引 ${result.indexResult.chunks} 个片段` : "暂无可索引内容";
-      setStatus(`已保存，${mode}`);
+      setStatus(draftUnchanged ? `已保存，${mode}` : "已保存此前版本，当前还有新改动待保存");
+      return stillViewingSameChapter && draftUnchanged;
     } catch (error) {
       setStatus(`保存失败：${error instanceof Error ? error.message : String(error)}`);
+      return false;
     } finally {
       setSaving(false);
     }
   }, [chapterContent, chapterTitle, chapterVolume, saving, selectedChapter]);
+
+  const saveBeforeLeavingChapter = useCallback(async () => {
+    if (!dirty) return true;
+    if (saving) {
+      setStatus("当前章节正在保存，请等保存完成后再切换或执行其他操作。");
+      return false;
+    }
+    return saveChapter();
+  }, [dirty, saveChapter, saving]);
 
   useEffect(() => {
     if (!dirty || !state?.config.ui.autosaveMs) return;
@@ -531,81 +702,67 @@ export default function App() {
         event.preventDefault();
         void saveChapter();
       }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setShowQuickPanel(true);
+      }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [saveChapter]);
 
   const currentWords = useMemo(() => countWords(chapterContent), [chapterContent]);
-  const renderedMarkdown = useMemo(() => ({ __html: contentToHtml(chapterContent) }), [chapterContent]);
 
   async function selectChapter(chapterId: string, line?: number) {
-    if (dirty) await saveChapter();
-    const payload = await window.novelAPI.loadChapter(chapterId);
-    setSelectedChapter(payload.chapter);
-    setChapterContent(payload.content);
-    setChapterTitle(payload.chapter?.title ?? "");
-    setChapterVolume(payload.chapter?.volume ?? "卷一");
-    setDirty(false);
-    setView("chapters");
-    if (typeof line === "number") {
-      setScrollAnchor(`${Date.now()}_${line}`);
-      window.requestAnimationFrame(() => {
-        const editor = editorRef.current;
-        if (!editor) return;
-        const lines = payload.content.split(/\r?\n/);
-        const position = lines.slice(0, line).join("\n").length + (line > 0 ? 1 : 0);
-        editor.focus();
-        editor.selectionStart = position;
-        editor.selectionEnd = position + (lines[line]?.length || 0);
-        const ratio = Math.max(0, line / Math.max(1, lines.length));
-        editor.scrollTop = ratio * editor.scrollHeight;
-      });
+    if (!(await saveBeforeLeavingChapter())) return;
+    try {
+      const payload = await window.novelAPI.loadChapter(chapterId);
+      setSelectedChapter(payload.chapter);
+      setChapterContent(payload.content);
+      setChapterTitle(payload.chapter?.title ?? "");
+      setChapterVolume(payload.chapter?.volume ?? "卷一");
+      setDirty(false);
+      setView("chapters");
+      if (typeof line === "number") {
+        setScrollAnchor(`${Date.now()}_${line}`);
+        window.requestAnimationFrame(() => {
+          const editor = editorRef.current;
+          if (!editor) return;
+          const lines = payload.content.split(/\r?\n/);
+          const position = lines.slice(0, line).join("\n").length + (line > 0 ? 1 : 0);
+          editor.focus();
+          editor.selectionStart = position;
+          editor.selectionEnd = position + (lines[line]?.length || 0);
+          const ratio = Math.max(0, line / Math.max(1, lines.length));
+          editor.scrollTop = ratio * editor.scrollHeight;
+        });
+      }
+    } catch (error) {
+      setStatus(`打开文档失败：${getErrorMessage(error)}`);
     }
-  }
-
-  function insertMarkdown(prefix: string, suffix = "") {
-    const editor = editorRef.current;
-    if (!editor) return;
-    const start = editor.selectionStart;
-    const end = editor.selectionEnd;
-    const before = chapterContent.slice(0, start);
-    const selected = chapterContent.slice(start, end);
-    const after = chapterContent.slice(end);
-    const next = `${before}${prefix}${selected || "文字"}${suffix}${after}`;
-    setChapterContent(next);
-    setDirty(true);
-    window.requestAnimationFrame(() => {
-      editor.focus();
-      editor.selectionStart = start + prefix.length;
-      editor.selectionEnd = start + prefix.length + (selected || "文字").length;
-    });
-  }
-
-  function runRichCommand(command: string, value?: string) {
-    if (preview) {
-      if (command === "formatBlock" && value === "h1") insertMarkdown("# ", "");
-      if (command === "bold") insertMarkdown("**", "**");
-      if (command === "italic") insertMarkdown("*", "*");
-      if (command === "formatBlock" && value === "blockquote") insertMarkdown("> ", "");
-      return;
-    }
-    document.execCommand(command, false, value);
-    setDirty(true);
-    setStatus("已应用格式，自动保存会同步知识库");
   }
 
   async function createChapter() {
+    if (!(await saveBeforeLeavingChapter())) return;
     const title = `第${(state?.chapters.length ?? 0) + 1}章 新章节`;
-    const next = await window.novelAPI.createChapter({ title, volume: chapterVolume || "卷一" });
-    applyAppState(next);
-    setStatus("已创建新章节，可以在中间顶部修改标题");
+    try {
+      const next = await window.novelAPI.createChapter({ title, volume: chapterVolume || "卷一" });
+      applyAppState(next);
+      setStatus("已创建新章节，可以在中间顶部修改标题");
+    } catch (error) {
+      setStatus(`新建章节失败：${getErrorMessage(error)}`);
+    }
   }
 
   async function deleteChapter(chapterId: string) {
     if (!window.confirm("确定删除这个章节吗？对应的本地文件和向量索引都会删除。")) return;
-    const next = await window.novelAPI.deleteChapter(chapterId);
-    applyAppState(next);
+    try {
+      const next = await window.novelAPI.deleteChapter(chapterId);
+      applyAppState(next);
+      setStatus("章节已删除");
+    } catch (error) {
+      setStatus(`删除章节失败：${getErrorMessage(error)}`);
+    }
   }
 
   async function moveDraggingChapter(volume: string, beforeChapterId = "") {
@@ -614,7 +771,7 @@ export default function App() {
       setDraggingChapterId(null);
       return;
     }
-    if (dirty) await saveChapter();
+    if (!(await saveBeforeLeavingChapter())) return;
     const targetVolume = volume.trim() || "未分卷";
     try {
       const next = await window.novelAPI.moveChapterToVolume({
@@ -633,9 +790,18 @@ export default function App() {
   }
 
   async function adjustOutlineLevel(chapterId: string, lineOrIndex: number, currentLevel: number, delta: number) {
-    if (dirty) await saveChapter();
-    const payload = await window.novelAPI.loadChapter(chapterId);
-    if (!payload.chapter) return;
+    if (!(await saveBeforeLeavingChapter())) return;
+    let payload: Awaited<ReturnType<typeof window.novelAPI.loadChapter>>;
+    try {
+      payload = await window.novelAPI.loadChapter(chapterId);
+    } catch (error) {
+      setStatus(`读取目录对应文档失败：${getErrorMessage(error)}`);
+      return;
+    }
+    if (!payload.chapter) {
+      setStatus("没有找到要调整目录等级的文档。");
+      return;
+    }
     const nextLevel = Math.min(6, Math.max(1, currentLevel + delta));
     if (nextLevel === currentLevel) {
       setStatus(delta < 0 ? "已经是最高级标题" : "已经是最低级标题");
@@ -706,17 +872,27 @@ export default function App() {
   async function createProject() {
     const title = window.prompt("新小说项目名称", "新小说项目");
     if (!title) return;
-    const result = await window.novelAPI.createProject({ title });
-    if (!("canceled" in result)) applyAppState(result);
+    try {
+      const result = await window.novelAPI.createProject({ title });
+      if (!("canceled" in result)) applyAppState(result);
+      else setStatus("已取消新建项目");
+    } catch (error) {
+      setStatus(`新建项目失败：${getErrorMessage(error)}`);
+    }
   }
 
   async function openProject() {
-    const result = await window.novelAPI.openProject();
-    if (!("canceled" in result)) applyAppState(result);
+    try {
+      const result = await window.novelAPI.openProject();
+      if (!("canceled" in result)) applyAppState(result);
+      else setStatus("已取消打开项目");
+    } catch (error) {
+      setStatus(`打开项目失败：${getErrorMessage(error)}`);
+    }
   }
 
   async function importDocument(volume = "") {
-    if (dirty) await saveChapter();
+    if (!(await saveBeforeLeavingChapter())) return;
     const targetVolume = volume.trim();
     setStatus(targetVolume ? `正在导入文档到「${targetVolume}」并建立知识库...` : "正在导入文档并建立知识库...");
     try {
@@ -744,8 +920,11 @@ export default function App() {
   }
 
   async function exportChapterDocx() {
-    if (!selectedChapter) return;
-    if (dirty) await saveChapter();
+    if (!selectedChapter) {
+      setStatus("请先选择要导出的文档。");
+      return;
+    }
+    if (!(await saveBeforeLeavingChapter())) return;
     setStatus("正在导出 Word 文档...");
     try {
       const result = await window.novelAPI.exportChapterDocx(selectedChapter.id);
@@ -754,13 +933,14 @@ export default function App() {
         return;
       }
       if (result.filePath) setStatus(`Word 文档已导出：${result.filePath}`);
+      else setStatus("导出已结束，但没有收到保存位置。请重新选择导出路径。");
     } catch (error) {
       setStatus(`导出失败：${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
   async function exportBookDocx(options?: { includeOutline?: boolean; includeCharacters?: boolean; includeWorld?: boolean }) {
-    if (dirty) await saveChapter();
+    if (!(await saveBeforeLeavingChapter())) return;
     setStatus("正在导出整本小说 Word 文档...");
     try {
       const result = await window.novelAPI.exportBookDocx(options);
@@ -769,25 +949,37 @@ export default function App() {
         return;
       }
       if (result.filePath) setStatus(`整书 Word 文档已导出：${result.filePath}`);
+      else setStatus("整书导出已结束，但没有收到保存位置。请重新选择导出路径。");
     } catch (error) {
       setStatus(`导出整书失败：${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
   async function openOriginalDocument() {
-    if (!selectedChapter) return;
-    const result = await window.novelAPI.openOriginalDocument(selectedChapter.id);
-    if (result.error) {
-      setStatus(`打开 Word 原文失败：${result.error}`);
+    if (!selectedChapter) {
+      setStatus("请先选择一个导入的文档。");
       return;
     }
-    if (result.filePath) setStatus(`已打开 Word 原文：${result.filePath}`);
+    try {
+      const result = await window.novelAPI.openOriginalDocument(selectedChapter.id);
+      if (result.error) {
+        setStatus(`打开 Word 原文失败：${result.error}`);
+        return;
+      }
+      if (result.filePath) setStatus(`已打开 Word 原文：${result.filePath}`);
+      else setStatus("这个文档没有可打开的 Word 原文记录。");
+    } catch (error) {
+      setStatus(`打开 Word 原文失败：${getErrorMessage(error)}`);
+    }
   }
 
   async function refreshChapterFromOriginal() {
-    if (!selectedChapter) return;
+    if (!selectedChapter) {
+      setStatus("请先选择一个导入的 Word 文档。");
+      return;
+    }
     if (!window.confirm("将从导入时的 Word 原文重新生成富文档内容，用来恢复表格和版式。当前编辑副本会先自动备份，但正文里的后续手改内容可能被原文覆盖。继续吗？")) return;
-    if (dirty) await saveChapter();
+    if (!(await saveBeforeLeavingChapter())) return;
     setSaving(true);
     setStatus("正在从 Word 原文恢复表格和富文档格式...");
     try {
@@ -804,26 +996,43 @@ export default function App() {
   }
 
   async function exportBackup() {
-    const result = await window.novelAPI.exportBackup();
-    if (result.filePath) setStatus(`备份已导出：${result.filePath}`);
+    try {
+      const result = await window.novelAPI.exportBackup();
+      if (result.canceled) {
+        setStatus("已取消备份导出");
+        return;
+      }
+      if (result.filePath) setStatus(`备份已导出：${result.filePath}`);
+      else setStatus("备份导出已结束，但没有收到保存位置。请重新选择导出路径。");
+    } catch (error) {
+      setStatus(`备份导出失败：${getErrorMessage(error)}`);
+    }
   }
 
   async function rebuildIndex() {
     setStatus("正在重建整本小说知识库...");
-    const result = await window.novelAPI.rebuildIndex();
-    applyAppState(result.state);
-    setStatus(`知识库已重建，共 ${result.chunks} 个片段`);
+    try {
+      const result = await window.novelAPI.rebuildIndex();
+      applyAppState(result.state);
+      setStatus(`知识库已重建，共 ${result.chunks} 个片段`);
+    } catch (error) {
+      setStatus(`重建知识库失败：${getErrorMessage(error)}`);
+    }
   }
 
   async function toggleTheme() {
     if (!state) return;
     const nextTheme = state.config.ui.theme === "dark" ? "light" : "dark";
-    const next = await window.novelAPI.saveProjectSettings({
-      ...state.config,
-      ui: { ...state.config.ui, theme: nextTheme },
-      selectedChapterId: selectedChapter?.id,
-    });
-    applyAppState(next);
+    try {
+      const next = await window.novelAPI.saveProjectSettings({
+        ...state.config,
+        ui: { ...state.config.ui, theme: nextTheme },
+        selectedChapterId: selectedChapter?.id,
+      });
+      applyAppState(next);
+    } catch (error) {
+      setStatus(`切换主题失败：${getErrorMessage(error)}`);
+    }
   }
 
   function startPaneResize(kind: "left" | "right" | "preview", event: React.MouseEvent<HTMLDivElement>) {
@@ -841,7 +1050,7 @@ export default function App() {
         setLeftWidth(Math.min(460, Math.max(210, initialLeft + delta)));
       }
       if (kind === "right") {
-        setRightWidth(Math.min(560, Math.max(300, initialRight - delta)));
+        setRightWidth(Math.min(860, Math.max(360, initialRight - delta)));
       }
       if (kind === "preview" && editorBody) {
         const next = initialPreview - (delta / editorBody.width) * 100;
@@ -890,7 +1099,21 @@ export default function App() {
 
   function findNextInChapter() {
     const needle = findText.trim();
-    if (!needle) return;
+    if (!needle) {
+      setStatus("请先输入要查找的文字。");
+      return;
+    }
+    if (!preview) {
+      const result = richEditorRef.current ? findNextInRichEditor(richEditorRef.current, needle) : { found: false, wrapped: false, selectedText: "" };
+      if (!result.found) {
+        setSelectedText("");
+        setStatus(`未找到：${needle}`);
+        return;
+      }
+      setSelectedText(result.selectedText);
+      setStatus(result.wrapped ? `已从开头重新定位：${needle}` : `已定位：${needle}`);
+      return;
+    }
     const editor = editorRef.current;
     if (!editor) {
       const found = chapterContent.toLowerCase().indexOf(needle.toLowerCase());
@@ -900,7 +1123,11 @@ export default function App() {
     const start = Math.max(editor.selectionEnd, 0);
     const lower = chapterContent.toLowerCase();
     let found = lower.indexOf(needle.toLowerCase(), start);
-    if (found < 0) found = lower.indexOf(needle.toLowerCase());
+    let wrapped = false;
+    if (found < 0) {
+      found = lower.indexOf(needle.toLowerCase());
+      wrapped = found >= 0;
+    }
     if (found < 0) {
       setStatus(`未找到：${needle}`);
       return;
@@ -909,16 +1136,30 @@ export default function App() {
     editor.selectionStart = found;
     editor.selectionEnd = found + needle.length;
     setSelectedText(chapterContent.slice(found, found + needle.length));
-    setStatus(`已定位：${needle}`);
+    setStatus(wrapped ? `已从开头重新定位：${needle}` : `已定位：${needle}`);
   }
 
   function replaceAllInChapter() {
-    if (!findText) return;
-    const escaped = findText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const regex = new RegExp(escaped, "g");
+    const needle = findText.trim();
+    if (!needle) {
+      setStatus("请先输入要替换的文字。");
+      return;
+    }
+    if (!preview) {
+      const matches = richEditorRef.current ? replaceAllInRichEditor(richEditorRef.current, needle, replaceText) : 0;
+      if (!matches) {
+        setStatus(`没有可替换的内容：${needle}`);
+        return;
+      }
+      setSelectedText(replaceText);
+      setDirty(true);
+      setStatus(`已替换 ${matches} 处`);
+      return;
+    }
+    const regex = new RegExp(escapeRegExp(needle), "gi");
     const matches = chapterContent.match(regex)?.length || 0;
     if (!matches) {
-      setStatus(`没有可替换的内容：${findText}`);
+      setStatus(`没有可替换的内容：${needle}`);
       return;
     }
     setChapterContent(chapterContent.replace(regex, replaceText));
@@ -934,6 +1175,7 @@ export default function App() {
         chatSessions: compactSessions,
         activeChatSessionId: nextActiveId,
         aiProjectMemory: nextMemory,
+        chatRetrievalMode,
       })
       .catch(() => null);
   }
@@ -1014,7 +1256,40 @@ export default function App() {
     }
   }
 
-  async function sendChat(question: string, selection = selectedText) {
+  async function extractWorldCardsFromSelection(text: string) {
+    setContextMenu(null);
+    const sourceText = text.trim();
+    if (!sourceText) {
+      setStatus("请先选中要提取设定的正文。");
+      return;
+    }
+    setStatus("正在从选中文字提取地点、势力、物品候选...");
+    try {
+      const result = await window.novelAPI.extractWorldCardsFromOutline({
+        scope: "chapter",
+        chapterId: selectedChapter?.id,
+        text: sourceText,
+      });
+      await window.novelAPI.saveAnalysisState({
+        tab: "export",
+        extractScope: "chapter",
+        worldCandidates: result.candidates,
+      });
+      setView("analysis");
+      setStatus(`已从选中文字提取 ${result.candidates.length} 个候选；请在分析页勾选后写入世界观`);
+    } catch (error) {
+      setStatus(`提取设定失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  function updateChatRetrievalMode(mode: RetrievalMode) {
+    setChatRetrievalMode(mode);
+    if (chatLoaded) {
+      void window.novelAPI.saveAnalysisState({ chatRetrievalMode: mode }).catch(() => null);
+    }
+  }
+
+  async function sendChat(question: string, selection = selectedText, retrievalMode = chatRetrievalMode) {
     const trimmed = question.trim();
     if (!trimmed) return;
     const userMessage: ChatMessage = {
@@ -1037,6 +1312,8 @@ export default function App() {
         selectedText: selection,
         history: historyMessages.map((item) => ({ role: item.role, content: item.content })),
         projectMemory: aiProjectMemory,
+        retrievalMode,
+        selectedChapterId: selectedChapter?.id || "",
       });
       updateCurrentChat(
         startedMessages.map((item) =>
@@ -1045,16 +1322,19 @@ export default function App() {
                 ...item,
                 content: response.answer,
                 context: response.context,
+                retrieval: response.retrieval,
               }
             : item,
         ),
       );
       const contextCount = response.contextCount ?? response.context.length;
       const candidateCount = response.candidateCount ?? contextCount;
+      const scannedCount = response.scannedCount ?? candidateCount;
+      const modeLabel = response.retrieval?.modeLabel || RETRIEVAL_MODE_OPTIONS.find((item) => item.value === retrievalMode)?.label || "自动判断";
       setStatus(
         response.embeddingWarning
-          ? `检索已完成：候选 ${candidateCount} 条，实际发送 ${contextCount} 条；本地向量回退：${response.embeddingWarning}`
-          : `检索已完成：候选 ${candidateCount} 条，实际发送 ${contextCount} 条`,
+          ? `检索已完成：${modeLabel}，扫描 ${scannedCount} 条，候选 ${candidateCount} 条，发送 ${contextCount} 条；本地向量回退：${response.embeddingWarning}`
+          : `检索已完成：${modeLabel}，扫描 ${scannedCount} 条，候选 ${candidateCount} 条，发送 ${contextCount} 条`,
       );
     } catch (error) {
       updateCurrentChat(
@@ -1068,16 +1348,26 @@ export default function App() {
   }
 
   async function saveCharacter(card: Partial<CharacterCard>) {
-    const next = await window.novelAPI.saveCharacter(card);
-    applyAppState(next);
-    setView("characters");
+    try {
+      const next = await window.novelAPI.saveCharacter(card);
+      applyAppState(next);
+      setView("characters");
+      setStatus(`角色卡片已保存：${card.name || "未命名角色"}`);
+    } catch (error) {
+      setStatus(`保存角色失败：${getErrorMessage(error)}`);
+    }
   }
 
   async function deleteCharacter(characterId: string) {
     if (!window.confirm("确定删除这个角色卡片吗？")) return;
-    const next = await window.novelAPI.deleteCharacter(characterId);
-    applyAppState(next);
-    setView("characters");
+    try {
+      const next = await window.novelAPI.deleteCharacter(characterId);
+      applyAppState(next);
+      setView("characters");
+      setStatus("角色卡片已删除");
+    } catch (error) {
+      setStatus(`删除角色失败：${getErrorMessage(error)}`);
+    }
   }
 
   async function generateCharactersFromOutline() {
@@ -1094,16 +1384,26 @@ export default function App() {
   }
 
   async function saveWorldDoc(doc: Partial<WorldDoc>) {
-    const next = await window.novelAPI.saveWorldDoc(doc);
-    applyAppState(next);
-    setView("world");
+    try {
+      const next = await window.novelAPI.saveWorldDoc(doc);
+      applyAppState(next);
+      setView("world");
+      setStatus(`世界观条目已保存：${doc.title || "未命名设定"}`);
+    } catch (error) {
+      setStatus(`保存世界观失败：${getErrorMessage(error)}`);
+    }
   }
 
   async function deleteWorldDoc(docId: string) {
     if (!window.confirm("确定删除这份世界观设定吗？")) return;
-    const next = await window.novelAPI.deleteWorldDoc(docId);
-    applyAppState(next);
-    setView("world");
+    try {
+      const next = await window.novelAPI.deleteWorldDoc(docId);
+      applyAppState(next);
+      setView("world");
+      setStatus("世界观条目已删除");
+    } catch (error) {
+      setStatus(`删除世界观失败：${getErrorMessage(error)}`);
+    }
   }
 
   async function generateWorldFromOutline() {
@@ -1121,10 +1421,15 @@ export default function App() {
 
   async function extractWorldCardsFromOutline() {
     if (!window.confirm("将调用 AI 从大纲和正文中提取地点、势力、物品候选，提取后请在“分析 / 导出/提取”中勾选写入。继续吗？")) return;
-    setView("analysis");
-    setStatus("请在“分析 / 导出/提取”里使用候选提取和确认写入。");
+    setStatus("正在从全书提取地点、势力、物品候选...");
     try {
       const result = await window.novelAPI.extractWorldCardsFromOutline({ scope: "book" });
+      await window.novelAPI.saveAnalysisState({
+        tab: "export",
+        extractScope: "book",
+        worldCandidates: result.candidates,
+      });
+      setView("analysis");
       setStatus(`已提取 ${result.candidates.length} 个候选；请在分析页勾选后写入世界观`);
     } catch (error) {
       setStatus(`提取候选失败：${error instanceof Error ? error.message : String(error)}`);
@@ -1177,32 +1482,43 @@ export default function App() {
             <Upload size={16} />
             导入文档
           </button>
-          <button onClick={() => setView("knowledge")} title="整理文档在知识库中的归属">
-            <ListTree size={16} />
-            知识库
-          </button>
-          <button onClick={exportChapterDocx} title="导出当前章节为 Word 文档">
-            <FileDown size={16} />
-            导出DOCX
-          </button>
-          <button onClick={() => void exportBookDocx()} title="导出整本小说为 Word 文档">
+          <button onClick={() => void exportBookDocx({ includeOutline: false, includeCharacters: false, includeWorld: false })} title="只导出知识库中标为正文的文档">
             <BookOpen size={16} />
-            导出整书
+            导出正文
           </button>
           <button onClick={saveChapter} title="保存当前章节，快捷键 Ctrl+S">
             <Save size={16} />
             保存
           </button>
-          <button onClick={exportBackup} title="导出压缩备份">
-            <Download size={16} />
-            备份
-          </button>
-          <button onClick={rebuildIndex} title="重建知识库索引">
-            <RefreshCcw size={16} />
-            重建索引
-          </button>
+          <details className="top-more-actions">
+            <summary title="更多项目功能">
+              <ListTree size={16} />
+              更多
+            </summary>
+            <div className="top-more-menu">
+              <button onClick={() => setView("knowledge")} title="整理文档在知识库中的归属">
+                <ListTree size={16} />
+                知识库整理
+              </button>
+              <button onClick={exportChapterDocx} title="导出当前章节为 Word 文档">
+                <FileDown size={16} />
+                导出当前DOCX
+              </button>
+              <button onClick={exportBackup} title="导出压缩备份">
+                <Download size={16} />
+                备份项目
+              </button>
+              <button onClick={rebuildIndex} title="重建知识库索引">
+                <RefreshCcw size={16} />
+                重建索引
+              </button>
+            </div>
+          </details>
         </nav>
         <div className="top-actions">
+          <button onClick={() => setShowQuickPanel(true)} title="功能面板 Ctrl+K">
+            <ListTree size={18} />
+          </button>
           <button onClick={() => setShowSettings(true)} title="模型和项目设置">
             <Settings size={18} />
           </button>
@@ -1219,10 +1535,10 @@ export default function App() {
       </header>
 
       <main
-        className="workspace"
+        className={`workspace ${aiExpanded ? "ai-expanded" : ""}`}
         ref={workspaceRef}
         style={{
-          gridTemplateColumns: focusMode ? "minmax(520px, 1fr)" : `${leftWidth}px 6px minmax(420px, 1fr) 6px ${rightWidth}px`,
+          gridTemplateColumns: focusMode ? "minmax(520px, 1fr)" : `${leftWidth}px 6px minmax(380px, 1fr) 6px ${aiExpanded ? Math.max(rightWidth, 680) : rightWidth}px`,
         }}
       >
         {!focusMode && (
@@ -1245,6 +1561,7 @@ export default function App() {
               </button>
             </div>
             <ChapterTree
+              projectPath={state.projectPath}
               chapters={state.chapters}
               selectedId={selectedChapter?.id ?? ""}
               onSelect={(id, line) => void selectChapter(id, line)}
@@ -1346,6 +1663,7 @@ export default function App() {
                     }}
                     onSelection={captureSelection}
                     onContextMenu={openRichAskSelectionMenu}
+                    onReady={handleRichEditorReady}
                   />
                 )}
               </div>
@@ -1382,7 +1700,7 @@ export default function App() {
                 if (result.sourceType === "character") setView("characters");
                 if (result.sourceType === "world") setView("world");
               }}
-              onExportBook={() => void exportBookDocx()}
+              onExportBook={() => void exportBookDocx({ includeOutline: false, includeCharacters: false, includeWorld: false })}
               onExportBookWithOptions={(options) => void exportBookDocx(options)}
               onApplyState={applyAppState}
               onStatus={setStatus}
@@ -1394,17 +1712,24 @@ export default function App() {
 
         {!focusMode && (
           <ChatPanel
+            state={state}
+            selectedChapterId={selectedChapter?.id || ""}
             messages={chatMessages}
             sessions={chatSessions}
             activeSessionId={activeChatSessionId}
             projectMemory={aiProjectMemory}
+            retrievalMode={chatRetrievalMode}
             selectedText={selectedText}
-            onSend={(question) => void sendChat(question)}
+            onRetrievalModeChange={updateChatRetrievalMode}
+            onSend={(question, mode) => void sendChat(question, selectedText, mode)}
             onClear={clearCurrentChat}
             onNewSession={createChatSession}
             onSwitchSession={switchChatSession}
             onProjectMemoryChange={updateProjectMemory}
-            onQuick={(question) => void sendChat(question, question.includes("当前章节") ? chapterContent : selectedText)}
+            onQuick={(question) => void sendChat(question, question.includes("当前章节") ? chapterContent : selectedText, chatRetrievalMode)}
+            onStatus={setStatus}
+            expanded={aiExpanded}
+            onToggleExpanded={() => setAiExpanded((value) => !value)}
           />
         )}
       </main>
@@ -1448,11 +1773,7 @@ export default function App() {
             </button>
           ))}
           <button
-            onClick={() => {
-              setContextMenu(null);
-              setView("analysis");
-              setStatus("请在“分析 / 导出/提取”中选择“仅当前文档”提取设定候选。");
-            }}
+            onClick={() => void extractWorldCardsFromSelection(contextMenu.text)}
           >
             <Boxes size={15} />
             提取设定
@@ -1471,6 +1792,121 @@ export default function App() {
           }}
         />
       )}
+      {showQuickPanel && (
+        <QuickPanelModal
+          state={state}
+          currentView={view}
+          onClose={() => setShowQuickPanel(false)}
+          onOpenView={(nextView) => {
+            setView(nextView);
+            setShowQuickPanel(false);
+          }}
+          onImport={() => {
+            setShowQuickPanel(false);
+            void importDocument();
+          }}
+          onExportChapter={() => {
+            setShowQuickPanel(false);
+            void exportChapterDocx();
+          }}
+          onExportBook={() => {
+            setShowQuickPanel(false);
+            void exportBookDocx({ includeOutline: false, includeCharacters: false, includeWorld: false });
+          }}
+          onBackup={() => {
+            setShowQuickPanel(false);
+            void exportBackup();
+          }}
+          onRebuildIndex={() => {
+            setShowQuickPanel(false);
+            void rebuildIndex();
+          }}
+          onSettings={() => {
+            setShowQuickPanel(false);
+            setShowSettings(true);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function QuickPanelModal({
+  state,
+  currentView,
+  onClose,
+  onOpenView,
+  onImport,
+  onExportChapter,
+  onExportBook,
+  onBackup,
+  onRebuildIndex,
+  onSettings,
+}: {
+  state: AppState;
+  currentView: "chapters" | "characters" | "world" | "knowledge" | "analysis";
+  onClose: () => void;
+  onOpenView: (view: "chapters" | "characters" | "world" | "knowledge" | "analysis") => void;
+  onImport: () => void;
+  onExportChapter: () => void;
+  onExportBook: () => void;
+  onBackup: () => void;
+  onRebuildIndex: () => void;
+  onSettings: () => void;
+}) {
+  const views = [
+    { id: "chapters" as const, label: "章节", icon: <BookOpen size={18} />, count: state.chapters.length },
+    { id: "characters" as const, label: "角色", icon: <UserRound size={18} />, count: state.characters.length },
+    { id: "world" as const, label: "世界", icon: <Boxes size={18} />, count: state.worldDocs.length },
+    { id: "knowledge" as const, label: "知识库", icon: <ListTree size={18} />, count: state.chapters.length },
+    { id: "analysis" as const, label: "分析", icon: <Search size={18} />, count: state.vectorStats.chunks },
+  ];
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <section className="quick-panel-modal" onClick={(event) => event.stopPropagation()}>
+        <header>
+          <div>
+            <ListTree size={18} />
+            <strong>功能面板</strong>
+          </div>
+          <button onClick={onClose}>关闭</button>
+        </header>
+        <div className="quick-panel-grid">
+          {views.map((item) => (
+            <button key={item.id} className={currentView === item.id ? "active" : ""} onClick={() => onOpenView(item.id)}>
+              {item.icon}
+              <span>{item.label}</span>
+              <small>{item.count.toLocaleString()}</small>
+            </button>
+          ))}
+        </div>
+        <div className="quick-panel-actions">
+          <button onClick={onImport}>
+            <Upload size={17} />
+            导入文档
+          </button>
+          <button onClick={onExportChapter}>
+            <FileDown size={17} />
+            导出当前 DOCX
+          </button>
+          <button onClick={onExportBook}>
+            <BookOpen size={17} />
+            导出正文
+          </button>
+          <button onClick={onBackup}>
+            <Download size={17} />
+            备份
+          </button>
+          <button onClick={onRebuildIndex}>
+            <RefreshCcw size={17} />
+            重建索引
+          </button>
+          <button onClick={onSettings}>
+            <Settings size={17} />
+            设置
+          </button>
+        </div>
+      </section>
     </div>
   );
 }
@@ -1483,6 +1919,7 @@ function RichDocumentEditor({
   onChange,
   onSelection,
   onContextMenu,
+  onReady,
 }: {
   value: string;
   fontSize: number;
@@ -1491,6 +1928,7 @@ function RichDocumentEditor({
   onChange: (value: string) => void;
   onSelection: () => void;
   onContextMenu: (event: React.MouseEvent<HTMLElement>) => void;
+  onReady?: (editor: Editor | null) => void;
 }) {
   const lastHtmlRef = useRef("");
   const editor = useEditor(
@@ -1533,6 +1971,11 @@ function RichDocumentEditor({
     },
     [],
   );
+
+  useEffect(() => {
+    onReady?.(editor);
+    return () => onReady?.(null);
+  }, [editor, onReady]);
 
   useEffect(() => {
     if (!editor) return;
@@ -1697,7 +2140,12 @@ function buildOutlineTree(items: OutlineItem[], chapterId: string) {
   return roots;
 }
 
+function flattenOutlineKeys(node: OutlineTreeNode): string[] {
+  return [node.key, ...node.children.flatMap((child) => flattenOutlineKeys(child))];
+}
+
 function ChapterTree({
+  projectPath,
   chapters,
   selectedId,
   onSelect,
@@ -1710,6 +2158,7 @@ function ChapterTree({
   onImportToVolume,
   onAdjustLevel,
 }: {
+  projectPath: string;
   chapters: Chapter[];
   selectedId: string;
   onSelect: (id: string, line?: number) => void;
@@ -1725,8 +2174,16 @@ function ChapterTree({
   const [collapsedVolumes, setCollapsedVolumes] = useState<Set<string>>(() => new Set());
   const [collapsedChapters, setCollapsedChapters] = useState<Set<string>>(() => new Set());
   const [collapsedHeadings, setCollapsedHeadings] = useState<Set<string>>(() => new Set());
+  const [collapseStateLoaded, setCollapseStateLoaded] = useState(false);
   const [dragOverVolume, setDragOverVolume] = useState("");
   const [dragHint, setDragHint] = useState("");
+  const previousChapterIdsRef = useRef<Set<string>>(new Set());
+  const collapseStorageKey = useMemo(() => `ai-novel.chapter-tree.${projectPath}`, [projectPath]);
+  const allChapterIds = useMemo(() => chapters.map((chapter) => chapter.id), [chapters]);
+  const allHeadingKeys = useMemo(
+    () => chapters.flatMap((chapter) => buildOutlineTree((chapter.outline || []).slice(1), chapter.id).flatMap((node) => flattenOutlineKeys(node))),
+    [chapters],
+  );
   const grouped = useMemo(() => {
     const map = new Map<string, Chapter[]>();
     for (const chapter of chapters) {
@@ -1735,6 +2192,60 @@ function ChapterTree({
     }
     return [...map.entries()];
   }, [chapters]);
+
+  useEffect(() => {
+    setCollapseStateLoaded(false);
+    try {
+      const saved = window.localStorage.getItem(collapseStorageKey);
+      if (saved) {
+        const parsed = JSON.parse(saved) as { volumes?: string[]; chapters?: string[]; headings?: string[] };
+        setCollapsedVolumes(new Set(parsed.volumes || []));
+        setCollapsedChapters(new Set(parsed.chapters || []));
+        setCollapsedHeadings(new Set(parsed.headings || []));
+      } else {
+        setCollapsedVolumes(new Set());
+        setCollapsedChapters(new Set(allChapterIds));
+        setCollapsedHeadings(new Set(allHeadingKeys));
+      }
+      previousChapterIdsRef.current = new Set(allChapterIds);
+    } catch {
+      setCollapsedVolumes(new Set());
+      setCollapsedChapters(new Set(allChapterIds));
+      setCollapsedHeadings(new Set(allHeadingKeys));
+      previousChapterIdsRef.current = new Set(allChapterIds);
+    } finally {
+      setCollapseStateLoaded(true);
+    }
+  }, [collapseStorageKey]);
+
+  useEffect(() => {
+    if (!collapseStateLoaded) return;
+    const previousIds = previousChapterIdsRef.current;
+    const newIds = allChapterIds.filter((id) => !previousIds.has(id));
+    setCollapsedChapters((current) => {
+      const known = new Set(allChapterIds);
+      const next = new Set([...current].filter((id) => known.has(id)));
+      for (const id of newIds) next.add(id);
+      return next;
+    });
+    previousChapterIdsRef.current = new Set(allChapterIds);
+  }, [allChapterIds, collapseStateLoaded]);
+
+  useEffect(() => {
+    if (!collapseStateLoaded) return;
+    try {
+      window.localStorage.setItem(
+        collapseStorageKey,
+        JSON.stringify({
+          volumes: [...collapsedVolumes],
+          chapters: [...collapsedChapters],
+          headings: [...collapsedHeadings],
+        }),
+      );
+    } catch {
+      // 忽略本机存储不可用的情况，目录树仍可正常手动折叠。
+    }
+  }, [collapseStorageKey, collapseStateLoaded, collapsedVolumes, collapsedChapters, collapsedHeadings]);
 
   function toggleSet(setter: (updater: (current: Set<string>) => Set<string>) => void, key: string) {
     setter((current) => {
@@ -1746,11 +2257,9 @@ function ChapterTree({
   }
 
   function collapseOrExpandAll() {
-    setCollapsedChapters((current) => {
-      if (current.size > 0) return new Set();
-      return new Set(chapters.map((chapter) => chapter.id));
-    });
-    setCollapsedHeadings(new Set());
+    const allCollapsed = chapters.length > 0 && collapsedChapters.size >= chapters.length;
+    setCollapsedChapters(allCollapsed ? new Set() : new Set(allChapterIds));
+    setCollapsedHeadings(allCollapsed ? new Set() : new Set(allHeadingKeys));
   }
 
   function renderOutlineNode(chapter: Chapter, node: OutlineTreeNode) {
@@ -1927,32 +2436,261 @@ function ChapterTree({
   );
 }
 
+function SidebarCreativeAdvisor({
+  state,
+  selectedChapterId,
+  onStatus,
+}: {
+  state: AppState;
+  selectedChapterId: string;
+  onStatus: (message: string) => void;
+}) {
+  const [creativeMode, setCreativeMode] = useState<CreativeAdviceMode>("next");
+  const [creativeFocus, setCreativeFocus] = useState("");
+  const [creativeAdvice, setCreativeAdvice] = useState<CreativeAdviceResult | null>(null);
+  const [advisorChapterId, setAdvisorChapterId] = useState(selectedChapterId || state.chapters[0]?.id || "");
+  const [busy, setBusy] = useState(false);
+  const previousSelectedRef = useRef(selectedChapterId);
+  const advisorChapter = state.chapters.find((chapter) => chapter.id === advisorChapterId) || state.chapters.find((chapter) => chapter.id === selectedChapterId) || state.chapters[0];
+
+  useEffect(() => {
+    window.novelAPI
+      .getAnalysisState()
+      .then((snapshot) => {
+        if (snapshot.creativeAdvice) setCreativeAdvice(snapshot.creativeAdvice);
+        if (snapshot.creativeOptions?.mode) setCreativeMode(snapshot.creativeOptions.mode);
+        if (typeof snapshot.creativeOptions?.focus === "string") setCreativeFocus(snapshot.creativeOptions.focus);
+        if (snapshot.creativeOptions?.chapterId && state.chapters.some((chapter) => chapter.id === snapshot.creativeOptions?.chapterId)) {
+          setAdvisorChapterId(snapshot.creativeOptions.chapterId);
+        } else {
+          setAdvisorChapterId(selectedChapterId || state.chapters[0]?.id || "");
+        }
+      })
+      .catch(() => null);
+  }, [state.projectPath]);
+
+  useEffect(() => {
+    setAdvisorChapterId((current) => {
+      const exists = current && state.chapters.some((chapter) => chapter.id === current);
+      const shouldFollowCurrent = !current || current === previousSelectedRef.current || !exists;
+      return shouldFollowCurrent ? selectedChapterId || state.chapters[0]?.id || "" : current;
+    });
+    previousSelectedRef.current = selectedChapterId;
+  }, [selectedChapterId, state.chapters]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void window.novelAPI
+        .saveAnalysisState({
+          creativeAdvice: creativeAdvice || undefined,
+          creativeOptions: { mode: creativeMode, chapterId: advisorChapter?.id || advisorChapterId, focus: creativeFocus },
+        })
+        .catch(() => null);
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [advisorChapter?.id, advisorChapterId, creativeAdvice, creativeFocus, creativeMode]);
+
+  async function runCreativeAdvice(mode = creativeMode) {
+    const targetChapterId = advisorChapter?.id || selectedChapterId;
+    if (!targetChapterId) {
+      onStatus("请先选择一个章节或大纲文档。");
+      return;
+    }
+    setCreativeMode(mode);
+    setBusy(true);
+    onStatus("创作参谋正在整理建议...");
+    try {
+      const result = await window.novelAPI.getCreativeAdvice({ mode, chapterId: targetChapterId, focus: creativeFocus });
+      setCreativeAdvice(result);
+      setAdvisorChapterId(result.chapterId);
+      onStatus(result.apiError ? `已显示本地兜底建议：${result.apiError}` : `创作参谋已生成 ${result.items.length} 条建议`);
+    } catch (error) {
+      onStatus(`生成创作建议失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveAdviceAsMaterial(item: CreativeAdviceItem) {
+    const section = (title: string, value: string | string[]) => {
+      const content = Array.isArray(value) ? value.filter(Boolean).map((entry) => `- ${entry}`).join("\n") : value;
+      return content ? `\n\n## ${title}\n${content}` : "";
+    };
+    const content = `# ${item.title}
+
+类型：${item.type}
+优先级：${item.priority}
+目标文档：${item.targetChapter || creativeAdvice?.chapterTitle || advisorChapter?.title || "未指定"}
+生成时间：${creativeAdvice?.generatedAt ? formatDateTime(creativeAdvice.generatedAt) : formatDateTime(new Date().toISOString())}
+
+## 建议
+${item.summary}${section("为什么适合", item.rationale)}${section("收益", item.benefits)}${section("风险", item.risks)}${section("相关角色", item.relatedCharacters)}${section("相关设定", item.relatedSettings)}${section("使用方式", item.suggestedUse)}`;
+    try {
+      await window.novelAPI.saveMaterial({ title: item.title, category: `创作参谋/${item.type}`, content });
+      onStatus(`已保存为素材：${item.title}`);
+    } catch (error) {
+      onStatus(`保存素材失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  return (
+    <div className="ai-advisor-panel">
+      <div className="advisor-controls">
+        <div className="advisor-mode-row">
+          {CREATIVE_ADVICE_MODES.map((mode) => (
+            <button key={mode.value} className={creativeMode === mode.value ? "active" : ""} onClick={() => setCreativeMode(mode.value)}>
+              {mode.label}
+            </button>
+          ))}
+        </div>
+        <div className="advisor-form-grid">
+          <label>
+            <span>参考文档</span>
+            <select value={advisorChapter?.id || ""} onChange={(event) => setAdvisorChapterId(event.target.value)}>
+              {state.chapters.map((chapter) => (
+                <option key={chapter.id} value={chapter.id}>
+                  {chapter.volume || "未分卷"} / {chapter.title}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>当前关注</span>
+            <textarea
+              value={creativeFocus}
+              onChange={(event) => setCreativeFocus(event.target.value)}
+              placeholder="比如：下一章事件、人物动机、节奏、伏笔回收"
+            />
+          </label>
+        </div>
+        <div className="analysis-actions advisor-actions">
+          <button onClick={() => void runCreativeAdvice()} disabled={busy}>
+            <Sparkles size={16} />
+            生成
+          </button>
+          <button onClick={() => void runCreativeAdvice("next")} disabled={busy}>
+            下一章
+          </button>
+          <button onClick={() => void runCreativeAdvice("plot")} disabled={busy}>
+            推剧情
+          </button>
+          <button onClick={() => void runCreativeAdvice("foreshadow")} disabled={busy}>
+            伏笔
+          </button>
+        </div>
+      </div>
+
+      {creativeAdvice ? (
+        <>
+          <div className="advisor-result-meta">
+            <strong>{creativeAdvice.chapterTitle}</strong>
+            <span>
+              {CREATIVE_ADVICE_MODES.find((mode) => mode.value === creativeAdvice.mode)?.label || "创作建议"} / {creativeAdvice.contextCount} 片段
+            </span>
+          </div>
+          {creativeAdvice.apiError && <div className="advisor-notice">AI 接口暂时不可用，下面显示本地兜底建议。</div>}
+          <div className="advisor-card-grid">
+            {creativeAdvice.items.map((item) => (
+              <article key={item.id} className={`advisor-card priority-${item.priority}`}>
+                <header>
+                  <div>
+                    <small>{item.type} / {item.priority}</small>
+                    <strong>{item.title}</strong>
+                  </div>
+                  <button onClick={() => void saveAdviceAsMaterial(item)}>存素材</button>
+                </header>
+                <p>{item.summary}</p>
+                {item.rationale && (
+                  <section>
+                    <strong>理由</strong>
+                    <p>{item.rationale}</p>
+                  </section>
+                )}
+                {(!!item.benefits.length || !!item.risks.length) && (
+                  <div className="advisor-columns">
+                    {!!item.benefits.length && (
+                      <section>
+                        <strong>收益</strong>
+                        {item.benefits.map((text) => (
+                          <span key={text}>{text}</span>
+                        ))}
+                      </section>
+                    )}
+                    {!!item.risks.length && (
+                      <section>
+                        <strong>注意</strong>
+                        {item.risks.map((text) => (
+                          <span key={text}>{text}</span>
+                        ))}
+                      </section>
+                    )}
+                  </div>
+                )}
+                {(!!item.relatedCharacters.length || !!item.relatedSettings.length || item.targetChapter) && (
+                  <div className="advisor-tags">
+                    {item.targetChapter && <span>{item.targetChapter}</span>}
+                    {item.relatedCharacters.map((name) => (
+                      <span key={`character_${name}`}>{name}</span>
+                    ))}
+                    {item.relatedSettings.map((name) => (
+                      <span key={`setting_${name}`}>{name}</span>
+                    ))}
+                  </div>
+                )}
+                {item.suggestedUse && <em>{item.suggestedUse}</em>}
+              </article>
+            ))}
+          </div>
+        </>
+      ) : (
+        <div className="analysis-empty">这里会按当前章节给出下一章、剧情推进和伏笔建议。</div>
+      )}
+    </div>
+  );
+}
+
 function ChatPanel({
+  state,
+  selectedChapterId,
   messages,
   sessions,
   activeSessionId,
   projectMemory,
+  retrievalMode,
   selectedText,
   onSend,
+  onRetrievalModeChange,
   onClear,
   onNewSession,
   onSwitchSession,
   onProjectMemoryChange,
   onQuick,
+  onStatus,
+  expanded,
+  onToggleExpanded,
 }: {
+  state: AppState;
+  selectedChapterId: string;
   messages: ChatMessage[];
   sessions: ChatSession[];
   activeSessionId: string;
   projectMemory: string;
+  retrievalMode: RetrievalMode;
   selectedText: string;
-  onSend: (question: string) => void;
+  onSend: (question: string, retrievalMode: RetrievalMode) => void;
+  onRetrievalModeChange: (mode: RetrievalMode) => void;
   onClear: () => void;
   onNewSession: () => void;
   onSwitchSession: (sessionId: string) => void;
   onProjectMemoryChange: (value: string) => void;
   onQuick: (question: string) => void;
+  onStatus: (message: string) => void;
+  expanded: boolean;
+  onToggleExpanded: () => void;
 }) {
   const [input, setInput] = useState("");
+  const [copiedMessageId, setCopiedMessageId] = useState("");
+  const [assistantTab, setAssistantTab] = useState<"chat" | "advisor">("chat");
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -1961,98 +2699,197 @@ function ChatPanel({
 
   function submit() {
     const value = input.trim();
-    if (!value) return;
-    onSend(value);
+    if (!value) {
+      onStatus("请先输入要问 AI 的内容。");
+      return;
+    }
+    onSend(value, retrievalMode);
     setInput("");
   }
 
+  function copyMessageAsBody(message: ChatMessage) {
+    const text = message.content
+      .replace(/^#{1,6}\s+/gm, "")
+      .replace(/\*\*([^*]+)\*\*/g, "$1")
+      .replace(/__([^_]+)__/g, "$1")
+      .replace(/^\s*[-*]\s+/gm, "• ");
+    void navigator.clipboard
+      .writeText(text)
+      .then(() => {
+        setCopiedMessageId(message.id);
+        onStatus("已复制为普通正文，不会自动变成标题格式");
+        window.setTimeout(() => setCopiedMessageId((current) => (current === message.id ? "" : current)), 1600);
+      })
+      .catch((error) => onStatus(`复制失败：${getErrorMessage(error)}`));
+  }
+
+  function formatCategoryCounts(counts?: Record<string, number>) {
+    return Object.entries(counts || {})
+      .map(([name, count]) => `${name} ${count}`)
+      .join("；");
+  }
+
   return (
-    <aside className="right-pane">
+    <aside className={`right-pane ${expanded ? "expanded" : ""}`}>
       <div className="chat-header">
         <div>
           <Bot size={18} />
-          <span>AI 对话</span>
+          <span>AI 助手</span>
         </div>
-        <button title="清空当前对话" onClick={onClear}>
-          <MessageSquarePlus size={16} />
-        </button>
-      </div>
-
-      <div className="chat-session-bar">
-        <select value={activeSessionId} onChange={(event) => onSwitchSession(event.target.value)} title="切换 AI 会话">
-          {sessions.map((session) => (
-            <option key={session.id} value={session.id}>
-              {session.title || "新会话"} · {formatDateTime(session.updatedAt)}
-            </option>
-          ))}
-        </select>
-        <button onClick={onNewSession} title="新建 AI 会话">
-          新会话
-        </button>
-      </div>
-
-      <details className="chat-memory-box">
-        <summary>项目 AI 记忆</summary>
-        <textarea
-          value={projectMemory}
-          maxLength={3000}
-          onChange={(event) => onProjectMemoryChange(event.target.value)}
-          placeholder="写下需要跨会话保留的项目内背景、偏好或已确认结论。建议简短，越短越省 token。"
-        />
-        <small>{projectMemory.length}/3000 字</small>
-      </details>
-
-      <div className="quick-prompts">
-        {QUICK_PROMPTS.map((prompt) => (
-          <button key={prompt} onClick={() => onQuick(prompt)}>
-            {prompt}
+        <div className="chat-header-actions">
+          <button title={expanded ? "收起 AI 阅读区" : "展开 AI 阅读区"} onClick={onToggleExpanded}>
+            {expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
           </button>
-        ))}
+          <button title="清空当前对话" onClick={onClear}>
+            <Trash2 size={16} />
+          </button>
+        </div>
       </div>
 
-      <div className="selected-note">{selectedText ? `已选中 ${selectedText.length} 字，可随问题发送。` : "选中正文后右键可向 AI 提问。"}</div>
-
-      <div className="messages" ref={scrollRef}>
-        {messages.length === 0 && (
-          <div className="empty-chat">
-            <Sparkles size={22} />
-            <p>提问时会先检索当前小说知识库，再把相关片段交给模型接口。</p>
-          </div>
-        )}
-        {messages.map((message) => (
-          <article className={`message ${message.role}`} key={message.id}>
-            <p>{message.content}</p>
-            {message.context && message.context.length > 0 && (
-              <details>
-                <summary>引用片段 {message.context.length}</summary>
-                {message.context.map((chunk) => (
-                  <div className="context-card" key={chunk.id}>
-                    <strong>
-                      {sourceLabel(chunk.sourceType)} · {chunk.title}
-                    </strong>
-                    <small>相关度 {chunk.score.toFixed(3)}</small>
-                    <p>{chunk.text}</p>
-                  </div>
-                ))}
-              </details>
-            )}
-          </article>
-        ))}
-      </div>
-
-      <div className="chat-input">
-        <textarea
-          value={input}
-          placeholder="问 AI..."
-          onChange={(event) => setInput(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) submit();
-          }}
-        />
-        <button title="发送" onClick={submit}>
-          <Send size={18} />
+      <div className="assistant-tabs">
+        <button className={assistantTab === "chat" ? "active" : ""} onClick={() => setAssistantTab("chat")}>
+          <MessageSquarePlus size={15} />
+          对话
+        </button>
+        <button className={assistantTab === "advisor" ? "active" : ""} onClick={() => setAssistantTab("advisor")}>
+          <Sparkles size={15} />
+          创作参谋
         </button>
       </div>
+
+      {assistantTab === "chat" ? (
+        <div className="chat-stack">
+          <div className="chat-session-bar">
+            <select value={activeSessionId} onChange={(event) => onSwitchSession(event.target.value)} title="切换 AI 会话">
+              {sessions.map((session) => (
+                <option key={session.id} value={session.id}>
+                  {session.title || "新会话"} · {formatDateTime(session.updatedAt)}
+                </option>
+              ))}
+            </select>
+            <button onClick={onNewSession} title="新建 AI 会话">
+              新会话
+            </button>
+          </div>
+
+          <details className="chat-memory-box">
+            <summary>项目 AI 记忆</summary>
+            <textarea
+              value={projectMemory}
+              maxLength={3000}
+              onChange={(event) => onProjectMemoryChange(event.target.value)}
+              placeholder="写下需要跨会话保留的项目内背景、偏好或已确认结论。建议简短，越短越省 token。"
+            />
+            <small>{projectMemory.length}/3000 字</small>
+          </details>
+
+          <div className="retrieval-mode-bar">
+            <label>
+              <span>检索模式</span>
+              <select value={retrievalMode} onChange={(event) => onRetrievalModeChange(event.target.value as RetrievalMode)} title="默认自动判断，必要时可手动指定">
+                {RETRIEVAL_MODE_OPTIONS.map((item) => (
+                  <option key={item.value} value={item.value}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <details className="quick-prompts-box">
+            <summary>常用提问</summary>
+            <div className="quick-prompts">
+              {QUICK_PROMPTS.map((prompt) => (
+                <button key={prompt} onClick={() => onQuick(prompt)}>
+                  {prompt}
+                </button>
+              ))}
+            </div>
+          </details>
+
+          <div className="selected-note">{selectedText ? `已选中 ${selectedText.length} 字，可随问题发送。` : "选中正文后右键可向 AI 提问。"}</div>
+
+          <div className="messages" ref={scrollRef}>
+            {messages.length === 0 && (
+              <div className="empty-chat">
+                <Sparkles size={22} />
+                <p>提问时会先检索当前小说知识库，再把相关片段交给模型接口。</p>
+              </div>
+            )}
+            {messages.map((message) => (
+              <article className={`message ${message.role}`} key={message.id}>
+                {message.role === "assistant" && (
+                  <div className="message-actions">
+                    <button title="复制为普通正文" onClick={() => copyMessageAsBody(message)}>
+                      <Copy size={14} />
+                      {copiedMessageId === message.id ? "已复制" : "复制正文"}
+                    </button>
+                  </div>
+                )}
+                <p>{message.content}</p>
+                {message.retrieval && (
+                  <details className="retrieval-diagnostics">
+                    <summary>
+                      检索：{message.retrieval.modeLabel} / 扫描 {message.retrieval.scannedCount} / 候选 {message.retrieval.candidateCount} / 发送 {message.retrieval.contextCount}
+                    </summary>
+                    <div className="retrieval-grid">
+                      <span>请求模式：{RETRIEVAL_MODE_OPTIONS.find((item) => item.value === message.retrieval?.requestedMode)?.label || message.retrieval.requestedMode}</span>
+                      <span>扫描上限：{message.retrieval.scanLimit}</span>
+                      <span>发送上限：{message.retrieval.sendLimit}</span>
+                      <span>命中文档：{message.retrieval.documentCount}</span>
+                      <span>目录兜底：{message.retrieval.catalogUsed ? "已使用" : "未使用"}</span>
+                      <span>分类占比：{formatCategoryCounts(message.retrieval.categoryCounts) || "无"}</span>
+                    </div>
+                    {message.retrieval.notes.length > 0 && <p className="retrieval-note">{message.retrieval.notes.join("；")}</p>}
+                    {message.retrieval.includedTitles.length > 0 && (
+                      <div className="retrieval-list">
+                        <strong>本次读取</strong>
+                        <span>{message.retrieval.includedTitles.slice(0, 36).join("；")}</span>
+                      </div>
+                    )}
+                    {message.retrieval.existingButNotRead.length > 0 && (
+                      <div className="retrieval-list">
+                        <strong>目录存在但未读原文</strong>
+                        <span>{message.retrieval.existingButNotRead.slice(0, 36).join("；")}</span>
+                      </div>
+                    )}
+                  </details>
+                )}
+                {message.context && message.context.length > 0 && (
+                  <details>
+                    <summary>引用片段 {message.context.length}</summary>
+                    {message.context.map((chunk) => (
+                      <div className="context-card" key={chunk.id}>
+                        <strong>
+                          {sourceLabel(chunk.sourceType)} · {chunk.title}
+                        </strong>
+                        <small>相关度 {chunk.score.toFixed(3)}</small>
+                        <p>{chunk.text}</p>
+                      </div>
+                    ))}
+                  </details>
+                )}
+              </article>
+            ))}
+          </div>
+
+          <div className="chat-input">
+            <textarea
+              value={input}
+              placeholder="问 AI..."
+              onChange={(event) => setInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) submit();
+              }}
+            />
+            <button title="发送" onClick={submit}>
+              <Send size={18} />
+            </button>
+          </div>
+        </div>
+      ) : (
+        <SidebarCreativeAdvisor state={state} selectedChapterId={selectedChapterId} onStatus={onStatus} />
+      )}
     </aside>
   );
 }
@@ -2211,7 +3048,7 @@ function AnalysisPanel({
   onApplyState: (state: AppState) => void;
   onStatus: (message: string) => void;
 }) {
-  const [tab, setTab] = useState<"search" | "timeline" | "relations" | "consistency" | "versions" | "export">("search");
+  const [tab, setTab] = useState<AnalysisTab>("search");
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<GlobalSearchResult[]>([]);
   const [timelineEvents, setTimelineEvents] = useState<TimelineEvent[]>([]);
@@ -2295,7 +3132,7 @@ function AnalysisPanel({
 
   function restoreAnalysisSnapshot(snapshot: AnalysisSnapshot) {
     if (snapshot.tab && ["search", "timeline", "relations", "consistency", "versions", "export"].includes(snapshot.tab)) {
-      setTab(snapshot.tab as typeof tab);
+      setTab(snapshot.tab as AnalysisTab);
     }
     if (typeof snapshot.query === "string") setQuery(snapshot.query);
     if (Array.isArray(snapshot.searchResults)) setSearchResults(snapshot.searchResults);
@@ -2384,11 +3221,15 @@ function AnalysisPanel({
     worldMapEdges,
     materials,
     materialDraft,
+    selectedChapterId,
   ]);
 
   async function runSearch() {
     const trimmed = query.trim();
-    if (!trimmed) return;
+    if (!trimmed) {
+      onStatus("请先输入要搜索的关键词。");
+      return;
+    }
     setBusy("search");
     onStatus("正在全局搜索...");
     try {
@@ -2468,9 +3309,17 @@ function AnalysisPanel({
 
   function addRelationType() {
     const value = newRelationType.trim();
-    if (!value || relationTypes.includes(value)) return;
+    if (!value) {
+      onStatus("请先输入新的关系类型。");
+      return;
+    }
+    if (relationTypes.includes(value)) {
+      onStatus(`关系类型已存在：${value}`);
+      return;
+    }
     setRelationTypes((items) => [...items, value]);
     setNewRelationType("");
+    onStatus(`已添加关系类型：${value}`);
   }
 
   async function runConsistencyCheck() {
@@ -2609,24 +3458,46 @@ function AnalysisPanel({
   }
 
   async function loadMaterials() {
-    const result = await window.novelAPI.listMaterials();
-    setMaterials(result.materials);
-    saveAnalysisDraft({ materials: result.materials });
+    setBusy("materials");
+    try {
+      const result = await window.novelAPI.listMaterials();
+      setMaterials(result.materials);
+      saveAnalysisDraft({ materials: result.materials });
+      onStatus(`素材已刷新：${result.materials.length} 条`);
+    } catch (error) {
+      onStatus(`刷新素材失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setBusy("");
+    }
   }
 
   async function saveMaterialDraft() {
-    const result = await window.novelAPI.saveMaterial(materialDraft);
-    setMaterials(result.materials);
-    setMaterialDraft({ title: "", category: "灵感", content: "" });
-    saveAnalysisDraft({ materials: result.materials, materialDraft: { title: "", category: "灵感", content: "" } });
-    onStatus(`素材已保存：${result.material.title}`);
+    setBusy("save-material");
+    try {
+      const result = await window.novelAPI.saveMaterial(materialDraft);
+      setMaterials(result.materials);
+      setMaterialDraft({ title: "", category: "灵感", content: "" });
+      saveAnalysisDraft({ materials: result.materials, materialDraft: { title: "", category: "灵感", content: "" } });
+      onStatus(`素材已保存：${result.material.title}`);
+    } catch (error) {
+      onStatus(`保存素材失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setBusy("");
+    }
   }
 
   async function deleteMaterialItem(materialId: string) {
-    const result = await window.novelAPI.deleteMaterial(materialId);
-    setMaterials(result.materials);
-    saveAnalysisDraft({ materials: result.materials });
-    onStatus("素材已删除");
+    setBusy("delete-material");
+    try {
+      const result = await window.novelAPI.deleteMaterial(materialId);
+      setMaterials(result.materials);
+      saveAnalysisDraft({ materials: result.materials });
+      onStatus("素材已删除");
+    } catch (error) {
+      onStatus(`删除素材失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setBusy("");
+    }
   }
 
   useEffect(() => {
@@ -2634,21 +3505,43 @@ function AnalysisPanel({
   }, [tab, selectedChapterId]);
 
   const graph = useMemo(() => {
-    const width = 920;
-    const height = 460;
+    const width = 1240;
+    const degree = new Map<string, number>();
+    relationshipEdges.forEach((edge) => {
+      degree.set(edge.source, (degree.get(edge.source) || 0) + edge.weight);
+      degree.set(edge.target, (degree.get(edge.target) || 0) + edge.weight);
+    });
+    const nodes = relationshipNodes
+      .slice()
+      .sort((a, b) => (degree.get(b.id) || 0) + b.size - ((degree.get(a.id) || 0) + a.size));
+    const center = nodes[0];
+    const others = nodes.slice(1);
+    const left: RelationshipNode[] = [];
+    const right: RelationshipNode[] = [];
+    others.forEach((node, index) => {
+      const target = index % 2 === 0 ? right : left;
+      target.push(node);
+    });
+    const rowGap = 82;
+    const height = Math.max(520, (Math.max(left.length, right.length, 1) - 1) * rowGap + 220);
     const centerX = width / 2;
     const centerY = height / 2;
-    const radius = Math.max(120, Math.min(190, 34 + relationshipNodes.length * 8));
-    const positions = new Map<string, { x: number; y: number }>();
-    relationshipNodes.forEach((node, index) => {
-      const angle = (Math.PI * 2 * index) / Math.max(1, relationshipNodes.length) - Math.PI / 2;
-      positions.set(node.id, {
-        x: centerX + Math.cos(angle) * radius,
-        y: centerY + Math.sin(angle) * radius,
+    const positions = new Map<string, { x: number; y: number; width: number; height: number; side: "center" | "left" | "right" }>();
+    const measure = (name: string) => Math.max(108, Math.min(190, name.length * 15 + 46));
+    if (center) {
+      positions.set(center.id, { x: centerX, y: centerY, width: measure(center.name) + 24, height: 48, side: "center" });
+    }
+    const placeSide = (items: RelationshipNode[], side: "left" | "right") => {
+      const x = centerX + (side === "right" ? 330 : -330);
+      const startY = centerY - ((items.length - 1) * rowGap) / 2;
+      items.forEach((node, index) => {
+        positions.set(node.id, { x, y: startY + index * rowGap, width: measure(node.name), height: 42, side });
       });
-    });
+    };
+    placeSide(left, "left");
+    placeSide(right, "right");
     return { width, height, positions };
-  }, [relationshipNodes]);
+  }, [relationshipNodes, relationshipEdges]);
 
   function resetGraphView() {
     setGraphScale(1);
@@ -2898,11 +3791,18 @@ function AnalysisPanel({
                       const source = graph.positions.get(edge.source);
                       const target = graph.positions.get(edge.target);
                       if (!source || !target) return null;
+                      const sourceAnchorX = source.x + (target.x >= source.x ? source.width / 2 : -source.width / 2);
+                      const targetAnchorX = target.x + (target.x >= source.x ? -target.width / 2 : target.width / 2);
+                      const curve = Math.max(80, Math.abs(targetAnchorX - sourceAnchorX) * 0.42);
                       const labelX = edge.labelX ?? (source.x + target.x) / 2;
                       const labelY = edge.labelY ?? (source.y + target.y) / 2;
                       return (
                         <g key={edge.id}>
-                          <line x1={source.x} y1={source.y} x2={target.x} y2={target.y} strokeWidth={Math.max(1.5, edge.weight / 2)} />
+                          <path
+                            className="relationship-branch"
+                            d={`M ${sourceAnchorX} ${source.y} C ${sourceAnchorX + (target.x >= source.x ? curve : -curve)} ${source.y}, ${targetAnchorX + (target.x >= source.x ? -curve : curve)} ${target.y}, ${targetAnchorX} ${target.y}`}
+                            strokeWidth={Math.max(1.6, edge.weight / 2)}
+                          />
                           <text className="relationship-edge-label" x={labelX} y={labelY - 6} textAnchor="middle">
                             {edge.label || "关系"}
                           </text>
@@ -2914,11 +3814,12 @@ function AnalysisPanel({
                       const position = graph.positions.get(node.id);
                       if (!position) return null;
                       return (
-                        <g key={node.id}>
-                          <circle cx={position.x} cy={position.y} r={node.size} />
-                          <text x={position.x} y={position.y + node.size + 15} textAnchor="middle">
+                        <g key={node.id} className={`relationship-node ${position.side}`}>
+                          <rect x={position.x - position.width / 2} y={position.y - position.height / 2} width={position.width} height={position.height} rx={8} />
+                          <text x={position.x} y={position.y + 5} textAnchor="middle">
                             {node.name}
                           </text>
+                          <title>{node.category}</title>
                         </g>
                       );
                     })}
@@ -3557,6 +4458,8 @@ function SettingsModal({
   onSave: (state: AppState) => void;
 }) {
   const [draft, setDraft] = useState(state.config);
+  const [saving, setSaving] = useState(false);
+  const [errorText, setErrorText] = useState("");
   const provider = draft.api.provider;
 
   function updateApi<K extends keyof typeof draft.api>(key: K, value: (typeof draft.api)[K]) {
@@ -3568,6 +4471,8 @@ function SettingsModal({
   }
 
   async function save() {
+    setSaving(true);
+    setErrorText("");
     const normalized = {
       ...draft,
       api: {
@@ -3575,10 +4480,17 @@ function SettingsModal({
         temperature: clampNumber(Number(draft.api.temperature), 0, 2, 0.7),
         maxTokens: Math.floor(clampNumber(Number(draft.api.maxTokens), 1, MAX_CHAT_TOKENS, 8000)),
         topK: Math.floor(clampNumber(Number(draft.api.topK), 1, MAX_RETRIEVAL_TOP_K, 5)),
+        scanK: Math.floor(clampNumber(Number(draft.api.scanK), Number(draft.api.topK) || 1, MAX_RETRIEVAL_SCAN_K, 5000)),
       },
     };
-    const next = await window.novelAPI.saveProjectSettings({ ...normalized, selectedChapterId });
-    onSave(next);
+    try {
+      const next = await window.novelAPI.saveProjectSettings({ ...normalized, selectedChapterId });
+      onSave(next);
+    } catch (error) {
+      setErrorText(`保存设置失败：${getErrorMessage(error)}`);
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -3660,13 +4572,23 @@ function SettingsModal({
             />
           </label>
           <label>
-            检索片段上限（最高 250）
+            发送片段上限（最高 1000）
             <input
               type="number"
               min="1"
               max={MAX_RETRIEVAL_TOP_K}
               value={draft.api.topK}
               onChange={(event) => updateApi("topK", Math.floor(clampNumber(Number(event.target.value), 1, MAX_RETRIEVAL_TOP_K, 5)))}
+            />
+          </label>
+          <label>
+            候选扫描上限（最高 50000）
+            <input
+              type="number"
+              min={Math.max(1, Number(draft.api.topK) || 1)}
+              max={MAX_RETRIEVAL_SCAN_K}
+              value={draft.api.scanK}
+              onChange={(event) => updateApi("scanK", Math.floor(clampNumber(Number(event.target.value), Math.max(1, Number(draft.api.topK) || 1), MAX_RETRIEVAL_SCAN_K, 5000)))}
             />
           </label>
           <label>
@@ -3708,13 +4630,14 @@ function SettingsModal({
 
         <div className="settings-help">
           <strong>接口说明</strong>
-          <p>DeepSeek 推荐：接口地址 https://api.deepseek.com/v1，聊天模型 deepseek-chat，最大输出字数 4000-8000，检索片段上限可按项目大小调整，长篇大纲可设到 250。它只是上限，实际提问时会按相关度和上下文字数预算裁剪。DeepSeek、OpenAI、Kimi、Ollama 和大多数中转接口使用 /chat/completions；Claude 使用 /v1/messages。向量接口使用 /embeddings。若不填向量接口密钥，软件会使用本地哈希向量作为临时索引。</p>
+          <p>DeepSeek 推荐：接口地址 https://api.deepseek.com/v1，聊天模型 deepseek-chat。通义千问推荐：接口地址 https://dashscope.aliyuncs.com/compatible-mode/v1，聊天模型 qwen-plus。候选扫描上限表示本地最多先看多少片段，发送片段上限表示最多交给 AI 多少片段。长篇项目建议候选扫描 5000-20000，发送片段日常 80-180，全书分析再临时提高。DeepSeek、通义千问、OpenAI、Kimi、Ollama 和大多数中转接口使用 /chat/completions；Claude 使用 /v1/messages。向量接口使用 /embeddings。若不填向量接口密钥，软件会使用本地哈希向量作为临时索引。</p>
         </div>
 
         <footer>
+          {errorText && <span className="settings-error">{errorText}</span>}
           <button onClick={onClose}>取消</button>
-          <button className="primary" onClick={() => void save()}>
-            保存设置
+          <button className="primary" onClick={() => void save()} disabled={saving}>
+            {saving ? "保存中..." : "保存设置"}
           </button>
         </footer>
       </section>
