@@ -12,5 +12,16 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return undefined;
+          if (id.includes("@tiptap") || id.includes("prosemirror")) return "editor";
+          if (id.includes("lucide-react")) return "icons";
+          if (id.includes("react") || id.includes("scheduler")) return "react-vendor";
+          return "vendor";
+        },
+      },
+    },
   },
 });

@@ -1,6 +1,6 @@
 {
   "name": "ai-novel-writing-platform",
-  "version": "0.1.28",
+  "version": "0.3.0",
   "private": true,
   "description": "本地 AI 小说创作平台，支持 Markdown 写作、本地知识库和 RAG 对话。",
   "main": "electron/main.cjs",
@@ -11,8 +11,15 @@
     "start": "concurrently -k \"npm run dev\" \"npm run electron\"",
     "build": "tsc --noEmit && vite build",
     "audit:ui": "node scripts/run-ui-button-audit.cjs",
+    "test:core": "node scripts/test-core-regression.cjs",
+    "test:agent": "node scripts/test-agent-platform.cjs",
+    "test:long-project": "node scripts/test-long-project-performance.cjs",
+    "test:export": "node scripts/test-batch-docx-export.cjs",
+    "test:regression": "node scripts/run-regression-suite.cjs",
+    "test:ui-visual": "node scripts/capture-ui-regression.cjs",
+    "scan:privacy": "node scripts/scan-release-privacy.cjs",
     "preview": "vite preview --host 127.0.0.1",
-    "dist": "npm run build && electron-builder --win nsis portable"
+    "dist": "npm run build && npm run scan:privacy && electron-builder --win nsis portable"
   },
   "dependencies": {
     "@tiptap/extension-image": "^3.29.2",

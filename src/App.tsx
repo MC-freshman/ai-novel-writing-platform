@@ -1,12 +1,16 @@
 import { marked } from "marked";
 import {
+  Activity,
   AlignCenter,
   AlignLeft,
   AlignRight,
+  ArrowDown,
+  ArrowUp,
   Bot,
   Bold,
   BookOpen,
   Boxes,
+  Check,
   ChevronDown,
   ChevronRight,
   Copy,
@@ -26,9 +30,12 @@ import {
   List,
   ListOrdered,
   ListTree,
+  ListChecks,
+  Lock,
   Maximize2,
   Minimize2,
   MessageSquarePlus,
+  Minus,
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
@@ -42,14 +49,17 @@ import {
   Send,
   Settings,
   Sparkles,
+  Square,
   Sun,
   Table2,
   Trash2,
+  Unlock,
   Underline as UnderlineIcon,
   Undo2,
   Upload,
   UserRound,
   Wand2,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Extension, type Editor } from "@tiptap/react";
@@ -62,10 +72,12 @@ import TableRow from "@tiptap/extension-table-row";
 import TextAlign from "@tiptap/extension-text-align";
 import Underline from "@tiptap/extension-underline";
 import StarterKit from "@tiptap/starter-kit";
-import { Plugin, PluginKey } from "@tiptap/pm/state";
+import { Plugin, PluginKey, TextSelection } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import type {
   AppState,
+  AgentPermissionLevel,
+  AgentScopeType,
   AnalysisSnapshot,
   Chapter,
   ChapterVersion,
@@ -77,22 +89,41 @@ import type {
   CreativeAdviceItem,
   CreativeAdviceMode,
   CreativeAdviceResult,
+  CreativeAgentRun,
   ExtractedWorldCandidate,
   GlobalSearchResult,
   AppearanceStat,
   MaterialItem,
+  MaintenanceDiagnostics,
   ProgressState,
   Provider,
   KnowledgeItem,
   KnowledgeRole,
+  KnowledgeSyncStatus,
+  ProjectHealthReport,
   RelationshipEdge,
   RelationshipNode,
   RetrievalMode,
+  RetrievalDiagnostics,
   TimelineEvent,
   WorldDoc,
   WorldMapEdge,
   WorldMapNode,
+  BackgroundTask,
+  BackgroundTaskType,
+  ChapterPreparationBoard,
+  ForeshadowItem,
+  ForeshadowStatus,
+  ProjectBranches,
+  ProjectSnapshot,
+  ProjectSnapshotComparison,
+  StoryFact,
+  StoryFactStatus,
+  StoryOverview,
+  RecoveryDraft,
+  OperationJournalItem,
 } from "./types";
+import { CreativeWorkspace, type CreativeWorkspaceTab } from "./components/CreativeWorkspace";
 
 const PROVIDER_DEFAULTS: Record<Provider, { baseUrl: string; model: string; label: string }> = {
   deepseek: { label: "DeepSeek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat" },
@@ -114,6 +145,12 @@ const QUICK_PROMPTS = [
 const MAX_CHAT_TOKENS = 393216;
 const MAX_RETRIEVAL_TOP_K = 1000;
 const MAX_RETRIEVAL_SCAN_K = 50000;
+
+interface EditorScrollAnchor {
+  key: number;
+  headingIndex?: number;
+  quote?: string;
+}
 const DEFAULT_CATEGORY_LABEL = "未分类";
 type AnalysisTab = "search" | "timeline" | "relations" | "consistency" | "versions" | "export";
 
@@ -218,14 +255,24 @@ function titleFromMessages(messages: ChatMessage[], fallback = "新会话") {
 }
 
 function compactChatMessages(messages: ChatMessage[]) {
-  return messages.slice(-40).map((message) => ({
-    ...message,
-    content: message.content.slice(0, 6000),
-    context: message.context?.slice(0, 6).map((chunk) => ({
-      ...chunk,
-      text: chunk.text.slice(0, 600),
-    })),
-  }));
+  let remainingChars = 600000;
+  return messages
+    .slice(-40)
+    .reverse()
+    .map((message) => {
+      const maxForMessage = Math.min(240000, remainingChars);
+      const content = message.content.slice(0, maxForMessage);
+      remainingChars = Math.max(0, remainingChars - content.length);
+      return {
+        ...message,
+        content,
+        context: message.context?.slice(0, 8).map((chunk) => ({
+          ...chunk,
+          text: chunk.text.slice(0, 900),
+        })),
+      };
+    })
+    .reverse();
 }
 
 function keepRecentChatSessions(sessions: ChatSession[], activeId: string) {
@@ -367,6 +414,26 @@ function replaceAllInRichEditor(editor: Editor, query: string, replacement: stri
   return matches.length;
 }
 
+function moveCurrentTopLevelBlock(editor: Editor, direction: -1 | 1) {
+  const blocks: Array<{ pos: number; node: Editor["state"]["doc"] }> = [];
+  editor.state.doc.forEach((node, offset) => blocks.push({ pos: offset, node: node as Editor["state"]["doc"] }));
+  const selectionPos = editor.state.selection.from;
+  const currentIndex = blocks.findIndex((item) => selectionPos >= item.pos && selectionPos <= item.pos + item.node.nodeSize);
+  const targetIndex = currentIndex + direction;
+  if (currentIndex < 0 || targetIndex < 0 || targetIndex >= blocks.length) return false;
+  const firstIndex = Math.min(currentIndex, targetIndex);
+  const secondIndex = Math.max(currentIndex, targetIndex);
+  const first = blocks[firstIndex];
+  const second = blocks[secondIndex];
+  const replacement = direction < 0 ? [second.node, first.node] : [second.node, first.node];
+  const transaction = editor.state.tr.replaceWith(first.pos, second.pos + second.node.nodeSize, replacement);
+  const nextPos = direction < 0 ? first.pos + 1 : first.pos + second.node.nodeSize + 1;
+  transaction.setSelection(TextSelection.near(transaction.doc.resolve(Math.min(transaction.doc.content.size, nextPos))));
+  editor.view.dispatch(transaction.scrollIntoView());
+  editor.commands.focus();
+  return true;
+}
+
 function changeHeadingLevel(content: string, headingLineOrIndex: number, nextLevel: number) {
   const level = Math.min(6, Math.max(1, Math.floor(nextLevel)));
   if (isHtmlContent(content)) {
@@ -499,6 +566,117 @@ const CollapsibleHeadings = Extension.create<Record<string, never>, { folded: Se
   },
 });
 
+interface InlineReviewItem {
+  id: string;
+  kind: "annotation" | "revision";
+  quote: string;
+  label: string;
+  status: string;
+}
+
+const inlineReviewPluginKey = new PluginKey<{ items: InlineReviewItem[]; decorations: DecorationSet }>("inlineReviews");
+
+function buildReviewTextIndex(doc: Editor["state"]["doc"]) {
+  const chars: string[] = [];
+  const positions: Array<number | null> = [];
+  let previousEnd = -1;
+  doc.descendants((node, pos) => {
+    if (!node.isText || !node.text) return true;
+    if (previousEnd >= 0 && pos > previousEnd) {
+      chars.push("\n");
+      positions.push(null);
+    }
+    for (let index = 0; index < node.text.length; index += 1) {
+      chars.push(node.text[index]);
+      positions.push(pos + index);
+    }
+    previousEnd = pos + node.text.length;
+    return true;
+  });
+  const normalized: string[] = [];
+  const normalizedPositions: Array<number | null> = [];
+  let inWhitespace = false;
+  chars.forEach((char, index) => {
+    if (/\s/.test(char)) {
+      if (!inWhitespace && normalized.length) {
+        normalized.push(" ");
+        normalizedPositions.push(positions[index]);
+      }
+      inWhitespace = true;
+      return;
+    }
+    inWhitespace = false;
+    normalized.push(char);
+    normalizedPositions.push(positions[index]);
+  });
+  return { text: normalized.join("").trim(), positions: normalizedPositions };
+}
+
+function buildInlineReviewDecorations(doc: Editor["state"]["doc"], items: InlineReviewItem[]) {
+  if (!items.length) return DecorationSet.empty;
+  const index = buildReviewTextIndex(doc);
+  const decorations: Decoration[] = [];
+  items.forEach((item) => {
+    const quote = item.quote.replace(/\s+/g, " ").trim();
+    if (!quote) return;
+    const offset = index.text.indexOf(quote);
+    if (offset < 0) return;
+    const from = index.positions[offset];
+    const last = index.positions[offset + quote.length - 1];
+    if (typeof from !== "number" || typeof last !== "number" || last < from) return;
+    decorations.push(Decoration.inline(from, last + 1, {
+      class: `inline-review inline-review-${item.kind}`,
+      "data-review-id": item.id,
+      title: `${item.status}：${item.label}`,
+    }));
+  });
+  return DecorationSet.create(doc, decorations);
+}
+
+const InlineReviews = Extension.create({
+  name: "inlineReviews",
+  addProseMirrorPlugins() {
+    return [new Plugin<{ items: InlineReviewItem[]; decorations: DecorationSet }>({
+      key: inlineReviewPluginKey,
+      state: {
+        init: () => ({ items: [] as InlineReviewItem[], decorations: DecorationSet.empty }),
+        apply(transaction, current, _oldState, nextState) {
+          const nextItems = transaction.getMeta(inlineReviewPluginKey) as InlineReviewItem[] | undefined;
+          const items = nextItems || current.items;
+          if (!transaction.docChanged && !nextItems) return current;
+          return { items, decorations: buildInlineReviewDecorations(nextState.doc, items) };
+        },
+      },
+      props: {
+        decorations(state) {
+          return inlineReviewPluginKey.getState(state)?.decorations || DecorationSet.empty;
+        },
+      },
+    })];
+  },
+});
+
+const DocxImage = Image.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      width: { default: null, parseHTML: (element) => element.getAttribute("data-docx-width") || element.getAttribute("width"), renderHTML: (attributes) => attributes.width ? { width: attributes.width, "data-docx-width": attributes.width } : {} },
+      height: { default: null, parseHTML: (element) => element.getAttribute("data-docx-height") || element.getAttribute("height"), renderHTML: (attributes) => attributes.height ? { height: attributes.height, "data-docx-height": attributes.height } : {} },
+      docxPosition: { default: "inline", parseHTML: (element) => element.getAttribute("data-docx-position") || "inline", renderHTML: (attributes) => ({ "data-docx-position": attributes.docxPosition || "inline" }) },
+      docxAlign: { default: "center", parseHTML: (element) => element.getAttribute("data-docx-align") || "center", renderHTML: (attributes) => ({ "data-docx-align": attributes.docxAlign || "center" }) },
+    };
+  },
+});
+
+const DocxTable = Table.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      docxWidth: { default: 100, parseHTML: (element) => Number(element.getAttribute("data-docx-width") || 100), renderHTML: (attributes) => ({ "data-docx-width": attributes.docxWidth || 100, style: `width:${attributes.docxWidth || 100}%` }) },
+    };
+  },
+});
+
 function sourceLabel(sourceType: string) {
   if (sourceType === "chapter") return "章节";
   if (sourceType === "character") return "角色";
@@ -528,10 +706,16 @@ export default function App() {
   const [view, setView] = useState<"chapters" | "characters" | "world" | "knowledge" | "analysis">("chapters");
   const [showSettings, setShowSettings] = useState(false);
   const [showQuickPanel, setShowQuickPanel] = useState(false);
+  const [showStoryCenter, setShowStoryCenter] = useState(false);
+  const [storyCenterInitialTab, setStoryCenterInitialTab] = useState<"facts" | "workspace">("facts");
+  const [workspaceInitialTab, setWorkspaceInitialTab] = useState<CreativeWorkspaceTab>("planning");
+  const [showTaskCenter, setShowTaskCenter] = useState(false);
+  const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
   const [focusMode, setFocusMode] = useState(false);
   const [preview, setPreview] = useState(false);
-  const [scrollAnchor, setScrollAnchor] = useState("");
+  const [scrollAnchor, setScrollAnchor] = useState<EditorScrollAnchor | null>(null);
   const [selectedText, setSelectedText] = useState("");
+  const [editorReviews, setEditorReviews] = useState<InlineReviewItem[]>([]);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; text: string } | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
@@ -539,6 +723,8 @@ export default function App() {
   const [aiProjectMemory, setAiProjectMemory] = useState("");
   const [chatRetrievalMode, setChatRetrievalMode] = useState<RetrievalMode>("auto");
   const [chatLoaded, setChatLoaded] = useState(false);
+  const [activeAiRequestId, setActiveAiRequestId] = useState("");
+  const [aiProgress, setAiProgress] = useState<{ phase: string; streamedChars: number; retrieval?: RetrievalDiagnostics } | null>(null);
   const [draggingChapterId, setDraggingChapterId] = useState<string | null>(null);
   const [importProgress, setImportProgress] = useState<ProgressState | null>(null);
   const [indexProgress, setIndexProgress] = useState<ProgressState | null>(null);
@@ -547,16 +733,26 @@ export default function App() {
   const [replaceText, setReplaceText] = useState("");
   const [leftWidth, setLeftWidth] = useState(280);
   const [rightWidth, setRightWidth] = useState(520);
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const [aiExpanded, setAiExpanded] = useState(false);
   const [previewWidth, setPreviewWidth] = useState(46);
+  const [recoveryDrafts, setRecoveryDrafts] = useState<RecoveryDraft[]>([]);
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
   const richEditorRef = useRef<Editor | null>(null);
   const workspaceRef = useRef<HTMLElement | null>(null);
   const selectedChapterIdRef = useRef("");
+  const chapterRevisionRef = useRef("");
+  const chatMessagesRef = useRef<ChatMessage[]>([]);
   const chapterDraftRef = useRef({ content: "", title: "", volume: "" });
 
   const handleRichEditorReady = useCallback((editor: Editor | null) => {
     richEditorRef.current = editor;
+  }, []);
+
+  useEffect(() => {
+    const updateViewportWidth = () => setViewportWidth(window.innerWidth);
+    window.addEventListener("resize", updateViewportWidth);
+    return () => window.removeEventListener("resize", updateViewportWidth);
   }, []);
 
   const applyAppState = useCallback((nextState: AppState) => {
@@ -565,6 +761,7 @@ export default function App() {
     setChapterContent(nextState.chapterContent);
     setChapterTitle(nextState.selectedChapter?.title ?? "");
     setChapterVolume(nextState.selectedChapter?.volume ?? "卷一");
+    chapterRevisionRef.current = nextState.chapterRevision || "";
     document.documentElement.dataset.theme = nextState.config.ui.theme;
     setDirty(false);
     setStatus(`已打开：${nextState.config.title}`);
@@ -578,9 +775,45 @@ export default function App() {
   }, [applyAppState]);
 
   useEffect(() => {
+    if (!state?.projectPath) return;
+    void window.novelAPI.getRecoveryStatus().then((recovery) => {
+      setRecoveryDrafts(recovery.drafts);
+      if (recovery.windowState) {
+        setView(recovery.windowState.view || "chapters");
+        setLeftWidth(Math.min(520, Math.max(210, recovery.windowState.leftWidth || 280)));
+        setRightWidth(Math.min(900, Math.max(360, recovery.windowState.rightWidth || 520)));
+        setPreviewWidth(Math.min(68, Math.max(28, recovery.windowState.previewWidth || 46)));
+      }
+      if (recovery.drafts.length || recovery.interruptedOperations.length) {
+        setStatus(`发现可恢复内容：${recovery.drafts.length} 份草稿，${recovery.interruptedOperations.length} 项中断操作`);
+      }
+    }).catch(() => null);
+  }, [state?.projectPath]);
+
+  useEffect(() => {
+    const chapterId = selectedChapter?.id;
+    if (!state?.projectPath || !chapterId || showStoryCenter) return;
+    void window.novelAPI.getCreativeWorkspace()
+      .then((workspace) => {
+        const annotations: InlineReviewItem[] = workspace.annotations
+          .filter((item) => item.chapterId === chapterId)
+          .map((item) => ({ id: item.id, kind: "annotation", quote: item.quote, label: item.comment, status: item.status }));
+        const revisions: InlineReviewItem[] = workspace.revisions
+          .filter((item) => item.chapterId === chapterId && ["待确认", "部分采纳"].includes(item.status) && item.original && item.replacement)
+          .map((item) => ({ id: item.id, kind: "revision", quote: item.original, label: `${item.action}：${item.replacement}`, status: item.status }));
+        setEditorReviews([...annotations, ...revisions]);
+      })
+      .catch(() => setEditorReviews([]));
+  }, [selectedChapter?.id, showStoryCenter, state?.projectPath]);
+
+  useEffect(() => {
     selectedChapterIdRef.current = selectedChapter?.id ?? "";
     chapterDraftRef.current = { content: chapterContent, title: chapterTitle, volume: chapterVolume };
   }, [chapterContent, chapterTitle, chapterVolume, selectedChapter?.id]);
+
+  useEffect(() => {
+    chatMessagesRef.current = chatMessages;
+  }, [chatMessages]);
 
   useEffect(() => {
     if (!state?.projectPath) return;
@@ -589,9 +822,31 @@ export default function App() {
       .getAnalysisState()
       .then((snapshot) => {
         const restored = keepRecentChatSessions(snapshot.chatSessions || [], snapshot.activeChatSessionId || "");
-        const initialSessions = restored.length ? restored : [makeChatSession()];
+        let initialSessions = restored.length ? restored : [makeChatSession()];
         const activeId = initialSessions.some((session) => session.id === snapshot.activeChatSessionId) ? snapshot.activeChatSessionId || initialSessions[0].id : initialSessions[0].id;
-        const active = initialSessions.find((session) => session.id === activeId) || initialSessions[0];
+        let active = initialSessions.find((session) => session.id === activeId) || initialSessions[0];
+        const recovery = snapshot.aiStreamRecovery;
+        if (recovery?.requestId && recovery.answer) {
+          const existing = active.messages.find((message) => message.id === recovery.requestId);
+          let recoveredMessages = active.messages;
+          if (existing) {
+            recoveredMessages = active.messages.map((message) =>
+              message.id === recovery.requestId && recovery.answer.length > message.content.length ? { ...message, content: recovery.answer } : message,
+            );
+          } else {
+            const lastUser = [...active.messages].reverse().find((message) => message.role === "user");
+            recoveredMessages = [
+              ...active.messages,
+              ...(lastUser?.content.startsWith(recovery.question)
+                ? []
+                : [{ id: `${recovery.requestId}_question`, role: "user" as const, content: recovery.question, createdAt: recovery.updatedAt }]),
+              { id: recovery.requestId, role: "assistant" as const, content: recovery.answer, createdAt: recovery.updatedAt },
+            ];
+          }
+          active = { ...active, messages: recoveredMessages, updatedAt: recovery.updatedAt };
+          initialSessions = initialSessions.map((session) => (session.id === active.id ? active : session));
+          if (recovery.status !== "completed") setStatus("已恢复上次生成中断前收到的 AI 内容");
+        }
         setChatSessions(initialSessions);
         setActiveChatSessionId(active.id);
         setChatMessages(active.messages || []);
@@ -607,6 +862,21 @@ export default function App() {
         setChatRetrievalMode("auto");
       })
       .finally(() => setChatLoaded(true));
+  }, [state?.projectPath]);
+
+  useEffect(() => {
+    if (!state?.projectPath) return undefined;
+    void window.novelAPI.listTasks().then((result) => setBackgroundTasks(result.tasks)).catch(() => setBackgroundTasks([]));
+    const off = window.novelAPI.onTaskProgress((task) => {
+      if (task.projectPath && task.projectPath !== state.projectPath) return;
+      setBackgroundTasks((current) => [task, ...current.filter((item) => item.id !== task.id)].slice(0, 120));
+      if (task.type === "knowledge-rebuild" && task.status === "已完成") {
+        void window.novelAPI.getAppState().then((nextState) => {
+          setState((current) => current ? { ...current, vectorStats: nextState.vectorStats, chapters: nextState.chapters, config: nextState.config } : nextState);
+        }).catch(() => null);
+      }
+    });
+    return off;
   }, [state?.projectPath]);
 
   useEffect(() => {
@@ -628,6 +898,55 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    const off = window.novelAPI.onAIStream((payload) => {
+      if (!payload.requestId) return;
+      if (payload.type === "chunk" && payload.text) {
+        setChatMessages((current) =>
+          current.map((message) => {
+            if (message.id !== payload.requestId) return message;
+            const shouldReplace = message.content.startsWith("正在检索小说知识库");
+            return { ...message, content: shouldReplace ? payload.text || "" : `${message.content}${payload.text}` };
+          }),
+        );
+      }
+      setAiProgress((current) => ({
+        phase: payload.phase || (payload.type === "chunk" ? "正在生成回答" : current?.phase || "处理中"),
+        streamedChars: payload.streamedChars ?? current?.streamedChars ?? 0,
+        retrieval: payload.retrieval || current?.retrieval,
+      }));
+    });
+    return off;
+  }, []);
+
+  useEffect(() => {
+    if (!chatLoaded || !activeChatSessionId) return;
+    const timer = window.setTimeout(() => {
+      const now = new Date().toISOString();
+      setChatSessions((current) => {
+        const active = current.find((session) => session.id === activeChatSessionId) || current[0];
+        if (!active) return current;
+        const nextSession = {
+          ...active,
+          title: titleFromMessages(chatMessages, active.title || "新会话"),
+          messages: compactChatMessages(chatMessages),
+          updatedAt: now,
+        };
+        const next = keepRecentChatSessions([nextSession, ...current.filter((session) => session.id !== active.id)], active.id);
+        void window.novelAPI
+          .saveAnalysisState({
+            chatSessions: next,
+            activeChatSessionId: active.id,
+            aiProjectMemory,
+            chatRetrievalMode,
+          })
+          .catch(() => null);
+        return next;
+      });
+    }, 900);
+    return () => window.clearTimeout(timer);
+  }, [activeChatSessionId, aiProjectMemory, chatLoaded, chatMessages, chatRetrievalMode]);
+
   const saveChapter = useCallback(async () => {
     if (!selectedChapter) {
       setStatus("请先选择一个文档再保存。");
@@ -642,6 +961,7 @@ export default function App() {
       title: chapterTitle,
       volume: chapterVolume,
       content: chapterContent,
+      expectedRevision: chapterRevisionRef.current,
     };
     setSaving(true);
     setStatus("正在保存并更新知识库...");
@@ -662,11 +982,17 @@ export default function App() {
               chapters: result.config.chapters,
               selectedChapter: current.selectedChapter?.id === draft.chapterId ? result.chapter : current.selectedChapter,
               vectorStats: result.vectorStats,
+              chapterRevision: current.selectedChapter?.id === draft.chapterId ? result.revision : current.chapterRevision,
             }
           : current,
       );
-      if (stillViewingSameChapter && draftUnchanged) {
-        setDirty(false);
+      if (stillViewingSameChapter) {
+        chapterRevisionRef.current = result.revision;
+        if (draftUnchanged) {
+          setDirty(false);
+          setRecoveryDrafts((current) => current.filter((item) => item.chapterId !== draft.chapterId));
+          void window.novelAPI.clearRecoveryDraft(draft.chapterId).catch(() => null);
+        }
       }
       const mode = result.indexResult.chunks > 0 ? `索引 ${result.indexResult.chunks} 个片段` : "暂无可索引内容";
       setStatus(draftUnchanged ? `已保存，${mode}` : "已保存此前版本，当前还有新改动待保存");
@@ -697,6 +1023,55 @@ export default function App() {
   }, [dirty, saveChapter, state?.config.ui.autosaveMs]);
 
   useEffect(() => {
+    if (!dirty || !selectedChapter?.id || state?.config.ui.recoveryEnabled === false) return;
+    const timer = window.setTimeout(() => {
+      void window.novelAPI.saveRecoveryDraft({
+        chapterId: selectedChapter.id,
+        chapterTitle,
+        volume: chapterVolume,
+        content: chapterContent,
+        baseRevision: chapterRevisionRef.current,
+        wordCount: countWords(chapterContent),
+      }).catch(() => null);
+    }, 650);
+    return () => window.clearTimeout(timer);
+  }, [chapterContent, chapterTitle, chapterVolume, dirty, selectedChapter?.id, state?.config.ui.recoveryEnabled]);
+
+  useEffect(() => {
+    if (!state?.projectPath) return;
+    const timer = window.setTimeout(() => {
+      void window.novelAPI.saveWindowRecoveryState({
+        selectedChapterId: selectedChapter?.id,
+        view,
+        leftWidth,
+        rightWidth,
+        previewWidth,
+      }).catch(() => null);
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [leftWidth, previewWidth, rightWidth, selectedChapter?.id, state?.projectPath, view]);
+
+  const activeRecoveryDraft = useMemo(
+    () => recoveryDrafts.find((item) => item.chapterId === selectedChapter?.id && item.content !== chapterContent) || null,
+    [chapterContent, recoveryDrafts, selectedChapter?.id],
+  );
+
+  function restoreRecoveryDraft(draft: RecoveryDraft) {
+    setChapterContent(draft.content);
+    setChapterTitle(draft.chapterTitle || chapterTitle);
+    setChapterVolume(draft.volume || chapterVolume);
+    setRecoveryDrafts((current) => current.filter((item) => item.chapterId !== draft.chapterId));
+    setDirty(true);
+    setStatus(draft.baseRevision && draft.baseRevision !== chapterRevisionRef.current ? "已恢复草稿；原章节保存后曾变化，请对照历史版本后再保存" : "已恢复未保存草稿");
+  }
+
+  async function discardRecoveryDraft(draft: RecoveryDraft) {
+    await window.novelAPI.clearRecoveryDraft(draft.chapterId).catch(() => null);
+    setRecoveryDrafts((current) => current.filter((item) => item.chapterId !== draft.chapterId));
+    setStatus("已放弃这份恢复草稿，当前正文未变化");
+  }
+
+  useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
@@ -712,8 +1087,17 @@ export default function App() {
   }, [saveChapter]);
 
   const currentWords = useMemo(() => countWords(chapterContent), [chapterContent]);
+  const paneWidths = useMemo(() => {
+    const centerMinimum = aiExpanded ? 240 : 380;
+    const rightMinimum = aiExpanded ? 520 : 360;
+    const sideBudget = Math.max(570, viewportWidth - centerMinimum - 12);
+    const left = Math.min(leftWidth, Math.max(210, sideBudget - rightMinimum));
+    const desiredRight = aiExpanded ? Math.max(rightWidth, 680) : rightWidth;
+    const right = Math.min(desiredRight, Math.max(rightMinimum, sideBudget - left));
+    return { left, right, centerMinimum };
+  }, [aiExpanded, leftWidth, rightWidth, viewportWidth]);
 
-  async function selectChapter(chapterId: string, line?: number) {
+  async function selectChapter(chapterId: string, line?: number, quote?: string) {
     if (!(await saveBeforeLeavingChapter())) return;
     try {
       const payload = await window.novelAPI.loadChapter(chapterId);
@@ -721,19 +1105,23 @@ export default function App() {
       setChapterContent(payload.content);
       setChapterTitle(payload.chapter?.title ?? "");
       setChapterVolume(payload.chapter?.volume ?? "卷一");
+      chapterRevisionRef.current = payload.revision || "";
       setDirty(false);
       setView("chapters");
-      if (typeof line === "number") {
-        setScrollAnchor(`${Date.now()}_${line}`);
+      if (typeof line === "number" || quote) {
+        const headingIndex = typeof line === "number" ? (payload.chapter?.outline || []).findIndex((item) => item.line === line) : -1;
+        setScrollAnchor({ key: Date.now(), headingIndex: headingIndex >= 0 ? headingIndex : undefined, quote: String(quote || "").trim() || undefined });
         window.requestAnimationFrame(() => {
           const editor = editorRef.current;
           if (!editor) return;
           const lines = payload.content.split(/\r?\n/);
-          const position = lines.slice(0, line).join("\n").length + (line > 0 ? 1 : 0);
+          const quoteIndex = quote ? payload.content.indexOf(quote) : -1;
+          const targetLine = quoteIndex >= 0 ? payload.content.slice(0, quoteIndex).split(/\r?\n/).length - 1 : Number(line || 0);
+          const position = quoteIndex >= 0 ? quoteIndex : lines.slice(0, targetLine).join("\n").length + (targetLine > 0 ? 1 : 0);
           editor.focus();
           editor.selectionStart = position;
-          editor.selectionEnd = position + (lines[line]?.length || 0);
-          const ratio = Math.max(0, line / Math.max(1, lines.length));
+          editor.selectionEnd = position + (quote?.length || lines[targetLine]?.length || 0);
+          const ratio = Math.max(0, targetLine / Math.max(1, lines.length));
           editor.scrollTop = ratio * editor.scrollHeight;
         });
       }
@@ -842,6 +1230,7 @@ export default function App() {
         title: payload.chapter.title,
         volume: payload.chapter.volume,
         content: nextContent,
+        expectedRevision: payload.revision,
       });
       setState((current) =>
         current
@@ -851,10 +1240,12 @@ export default function App() {
               chapters: result.config.chapters,
               selectedChapter: chapterId === selectedChapter?.id ? result.chapter : current.selectedChapter,
               vectorStats: result.vectorStats,
+              chapterRevision: chapterId === selectedChapter?.id ? result.revision : current.chapterRevision,
             }
           : current,
       );
       if (chapterId === selectedChapter?.id) {
+        chapterRevisionRef.current = result.revision;
         setSelectedChapter(result.chapter);
         setChapterContent(nextContent);
         setChapterTitle(result.chapter.title);
@@ -863,6 +1254,7 @@ export default function App() {
       }
       setStatus(`已把标题调整为 ${nextLevel} 级，并同步更新知识库`);
     } catch (error) {
+      if (chapterId === selectedChapter?.id) setDirty(true);
       setStatus(`调整目录等级失败：${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setSaving(false);
@@ -939,19 +1331,28 @@ export default function App() {
     }
   }
 
-  async function exportBookDocx(options?: { includeOutline?: boolean; includeCharacters?: boolean; includeWorld?: boolean }) {
+  async function exportBookDocx(options?: {
+    includeOutline?: boolean;
+    includeMaterials?: boolean;
+    includeCharacters?: boolean;
+    includeWorld?: boolean;
+  }) {
     if (!(await saveBeforeLeavingChapter())) return;
-    setStatus("正在导出整本小说 Word 文档...");
+    setStatus("正在按目录树逐篇生成 Word 文档...");
     try {
       const result = await window.novelAPI.exportBookDocx(options);
       if (result.canceled) {
-        setStatus("已取消导出整书");
+        setStatus("已取消批量导出");
         return;
       }
-      if (result.filePath) setStatus(`整书 Word 文档已导出：${result.filePath}`);
-      else setStatus("整书导出已结束，但没有收到保存位置。请重新选择导出路径。");
+      if (result.directoryPath) {
+        const failureNotice = result.failedCount ? `，${result.failedCount} 个失败` : "";
+        setStatus(`已逐篇导出 ${result.exportedCount || 0} 个 Word 文档${failureNotice}：${result.directoryPath}`);
+      } else {
+        setStatus("批量导出已结束，但没有收到保存位置。请重新选择导出目录。");
+      }
     } catch (error) {
-      setStatus(`导出整书失败：${error instanceof Error ? error.message : String(error)}`);
+      setStatus(`批量导出失败：${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -1210,6 +1611,10 @@ export default function App() {
   }
 
   function switchChatSession(sessionId: string) {
+    if (activeAiRequestId) {
+      setStatus("当前回答仍在生成，请先停止或等待完成。");
+      return;
+    }
     const session = chatSessions.find((item) => item.id === sessionId);
     if (!session) return;
     setActiveChatSessionId(session.id);
@@ -1218,6 +1623,10 @@ export default function App() {
   }
 
   function clearCurrentChat() {
+    if (activeAiRequestId) {
+      setStatus("当前回答仍在生成，请先停止后再清空。");
+      return;
+    }
     const nextMessages: ChatMessage[] = [];
     updateCurrentChat(nextMessages);
     setStatus("已清空当前 AI 会话");
@@ -1282,6 +1691,14 @@ export default function App() {
     }
   }
 
+  function openWorkspaceFromSelection(tab: CreativeWorkspaceTab, text: string) {
+    setContextMenu(null);
+    setSelectedText(text);
+    setStoryCenterInitialTab("workspace");
+    setWorkspaceInitialTab(tab);
+    setShowStoryCenter(true);
+  }
+
   function updateChatRetrievalMode(mode: RetrievalMode) {
     setChatRetrievalMode(mode);
     if (chatLoaded) {
@@ -1289,9 +1706,13 @@ export default function App() {
     }
   }
 
-  async function sendChat(question: string, selection = selectedText, retrievalMode = chatRetrievalMode) {
+  async function sendChat(question: string, selection = selectedText, retrievalMode = chatRetrievalMode, additionalSourceIds: string[] = []) {
     const trimmed = question.trim();
     if (!trimmed) return;
+    if (activeAiRequestId) {
+      setStatus("AI 正在生成上一条回答，请先停止或等待完成。");
+      return;
+    }
     const userMessage: ChatMessage = {
       id: makeMessageId(),
       role: "user",
@@ -1305,15 +1726,19 @@ export default function App() {
       userMessage,
       { id: pendingId, role: "assistant", content: "正在检索小说知识库并组织回答...", createdAt: new Date().toISOString() },
     ];
+    setActiveAiRequestId(pendingId);
+    setAiProgress({ phase: "正在规划检索范围", streamedChars: 0 });
     updateCurrentChat(startedMessages);
     try {
       const response = await window.novelAPI.askAI({
+        requestId: pendingId,
         question: trimmed,
         selectedText: selection,
         history: historyMessages.map((item) => ({ role: item.role, content: item.content })),
         projectMemory: aiProjectMemory,
         retrievalMode,
         selectedChapterId: selectedChapter?.id || "",
+        additionalSourceIds,
       });
       updateCurrentChat(
         startedMessages.map((item) =>
@@ -1333,18 +1758,33 @@ export default function App() {
       const modeLabel = response.retrieval?.modeLabel || RETRIEVAL_MODE_OPTIONS.find((item) => item.value === retrievalMode)?.label || "自动判断";
       setStatus(
         response.embeddingWarning
-          ? `检索已完成：${modeLabel}，扫描 ${scannedCount} 条，候选 ${candidateCount} 条，发送 ${contextCount} 条；本地向量回退：${response.embeddingWarning}`
-          : `检索已完成：${modeLabel}，扫描 ${scannedCount} 条，候选 ${candidateCount} 条，发送 ${contextCount} 条`,
+          ? `检索已完成：${modeLabel}，扫描 ${scannedCount} 条，候选 ${candidateCount} 条，发送 ${contextCount} 条，流式接收 ${response.streamedChars || 0} 字；本地向量回退：${response.embeddingWarning}`
+          : `检索已完成：${modeLabel}，扫描 ${scannedCount} 条，候选 ${candidateCount} 条，发送 ${contextCount} 条，流式接收 ${response.streamedChars || 0} 字`,
       );
     } catch (error) {
+      const currentMessages = chatMessagesRef.current.length ? chatMessagesRef.current : startedMessages;
       updateCurrentChat(
-        startedMessages.map((item) =>
+        currentMessages.map((item) =>
           item.id === pendingId
-            ? { ...item, content: `请求失败：${error instanceof Error ? error.message : String(error)}` }
+            ? {
+                ...item,
+                content: item.content.startsWith("正在检索小说知识库")
+                  ? `请求失败：${error instanceof Error ? error.message : String(error)}`
+                  : `${item.content}\n\n【生成中断，以上内容已自动保留。】`,
+              }
             : item,
         ),
       );
+    } finally {
+      setActiveAiRequestId("");
     }
+  }
+
+  async function stopChatGeneration() {
+    if (!activeAiRequestId) return;
+    setAiProgress((current) => ({ phase: "正在停止，已生成内容会保留", streamedChars: current?.streamedChars || 0, retrieval: current?.retrieval }));
+    const result = await window.novelAPI.cancelAI(activeAiRequestId).catch(() => ({ canceled: false }));
+    setStatus(result.canceled ? "正在停止生成，已收到的内容会保留" : "这次生成已经结束");
   }
 
   async function saveCharacter(card: Partial<CharacterCard>) {
@@ -1443,7 +1883,7 @@ export default function App() {
       if (action === "openProject") void openProject();
       if (action === "importDocument") void importDocument();
       if (action === "exportChapterDocx") void exportChapterDocx();
-      if (action === "exportBookDocx") void exportBookDocx();
+      if (action === "exportBookDocx") void exportBookDocx({ includeOutline: true, includeMaterials: true });
       if (action === "exportBackup") void exportBackup();
       if (action === "saveChapter") void saveChapter();
       if (action === "rebuildIndex") void rebuildIndex();
@@ -1482,7 +1922,7 @@ export default function App() {
             <Upload size={16} />
             导入文档
           </button>
-          <button onClick={() => void exportBookDocx({ includeOutline: false, includeCharacters: false, includeWorld: false })} title="只导出知识库中标为正文的文档">
+          <button onClick={() => void exportBookDocx({ includeOutline: false, includeMaterials: false, includeCharacters: false, includeWorld: false })} title="每篇正文分别导出为一个 Word 文档">
             <BookOpen size={16} />
             导出正文
           </button>
@@ -1538,7 +1978,7 @@ export default function App() {
         className={`workspace ${aiExpanded ? "ai-expanded" : ""}`}
         ref={workspaceRef}
         style={{
-          gridTemplateColumns: focusMode ? "minmax(520px, 1fr)" : `${leftWidth}px 6px minmax(380px, 1fr) 6px ${aiExpanded ? Math.max(rightWidth, 680) : rightWidth}px`,
+          gridTemplateColumns: focusMode ? "minmax(520px, 1fr)" : `${paneWidths.left}px 6px minmax(${paneWidths.centerMinimum}px, 1fr) 6px ${paneWidths.right}px`,
         }}
       >
         {!focusMode && (
@@ -1624,6 +2064,13 @@ export default function App() {
                   </button>
                 </div>
               </div>
+              {activeRecoveryDraft && (
+                <div className="draft-recovery-bar">
+                  <div><strong>发现未保存草稿</strong><span>{formatDateTime(activeRecoveryDraft.updatedAt)} / {activeRecoveryDraft.wordCount.toLocaleString()} 字{activeRecoveryDraft.baseRevision !== chapterRevisionRef.current ? " / 原章节已变化" : ""}</span></div>
+                  <button onClick={() => void discardRecoveryDraft(activeRecoveryDraft)}>放弃</button>
+                  <button className="primary" onClick={() => restoreRecoveryDraft(activeRecoveryDraft)}>恢复草稿</button>
+                </div>
+              )}
               {showFindReplace && (
                 <div className="find-replace-bar">
                   <input value={findText} onChange={(event) => setFindText(event.target.value)} placeholder="查找" />
@@ -1657,6 +2104,7 @@ export default function App() {
                     fontSize={state.config.ui.fontSize}
                     lineHeight={state.config.ui.lineHeight}
                     scrollAnchor={scrollAnchor}
+                    reviews={editorReviews}
                     onChange={(next) => {
                       setChapterContent(next);
                       setDirty(true);
@@ -1664,6 +2112,12 @@ export default function App() {
                     onSelection={captureSelection}
                     onContextMenu={openRichAskSelectionMenu}
                     onReady={handleRichEditorReady}
+                    onOpenReview={(review) => {
+                      setSelectedText(review.quote);
+                      setStoryCenterInitialTab("workspace");
+                      setWorkspaceInitialTab(review.kind === "revision" ? "revisions" : "annotations");
+                      setShowStoryCenter(true);
+                    }}
                   />
                 )}
               </div>
@@ -1700,7 +2154,7 @@ export default function App() {
                 if (result.sourceType === "character") setView("characters");
                 if (result.sourceType === "world") setView("world");
               }}
-              onExportBook={() => void exportBookDocx({ includeOutline: false, includeCharacters: false, includeWorld: false })}
+              onExportBook={() => void exportBookDocx({ includeOutline: false, includeMaterials: false, includeCharacters: false, includeWorld: false })}
               onExportBookWithOptions={(options) => void exportBookDocx(options)}
               onApplyState={applyAppState}
               onStatus={setStatus}
@@ -1720,8 +2174,12 @@ export default function App() {
             projectMemory={aiProjectMemory}
             retrievalMode={chatRetrievalMode}
             selectedText={selectedText}
+            generating={Boolean(activeAiRequestId)}
+            progress={aiProgress}
             onRetrievalModeChange={updateChatRetrievalMode}
             onSend={(question, mode) => void sendChat(question, selectedText, mode)}
+            onRetryWithSources={(question, sourceIds, mode) => void sendChat(question, "", mode, sourceIds)}
+            onStop={() => void stopChatGeneration()}
             onClear={clearCurrentChat}
             onNewSession={createChatSession}
             onSwitchSession={switchChatSession}
@@ -1730,6 +2188,7 @@ export default function App() {
             onStatus={setStatus}
             expanded={aiExpanded}
             onToggleExpanded={() => setAiExpanded((value) => !value)}
+            onOpenStoryCenter={() => setShowStoryCenter(true)}
           />
         )}
       </main>
@@ -1741,6 +2200,10 @@ export default function App() {
         <span>总字数：{state.config.stats.totalWords.toLocaleString()} 字</span>
         <span>知识库：{state.vectorStats.chunks} 片段</span>
         <span>模型：{state.config.api.chatModel || "未配置"}</span>
+        <button className="task-status-button" onClick={() => setShowTaskCenter(true)} title="查看后台任务">
+          <ListChecks size={13} />
+          任务 {backgroundTasks.filter((task) => ["等待中", "运行中", "正在停止", "已暂停"].includes(task.status)).length}
+        </button>
         {importProgress && (
           <span className="progress-pill">
             导入：{importProgress.current}/{importProgress.total || "?"} {importProgress.fileName || importProgress.phase}
@@ -1778,6 +2241,14 @@ export default function App() {
             <Boxes size={15} />
             提取设定
           </button>
+          <button onClick={() => openWorkspaceFromSelection("revisions", contextMenu.text)}>
+            <Save size={15} />
+            生成安全修订
+          </button>
+          <button onClick={() => openWorkspaceFromSelection("annotations", contextMenu.text)}>
+            <MessageSquarePlus size={15} />
+            添加批注
+          </button>
         </div>
       )}
 
@@ -1811,7 +2282,7 @@ export default function App() {
           }}
           onExportBook={() => {
             setShowQuickPanel(false);
-            void exportBookDocx({ includeOutline: false, includeCharacters: false, includeWorld: false });
+            void exportBookDocx({ includeOutline: false, includeMaterials: false, includeCharacters: false, includeWorld: false });
           }}
           onBackup={() => {
             setShowQuickPanel(false);
@@ -1825,6 +2296,47 @@ export default function App() {
             setShowQuickPanel(false);
             setShowSettings(true);
           }}
+        />
+      )}
+      {showStoryCenter && (
+        <StoryCenterModal
+          state={state}
+          selectedChapterId={selectedChapter?.id || ""}
+          selectedText={selectedText}
+          chapterRevision={chapterRevisionRef.current}
+          initialTab={storyCenterInitialTab}
+          workspaceInitialTab={workspaceInitialTab}
+          onClose={() => {
+            setShowStoryCenter(false);
+            setStoryCenterInitialTab("facts");
+            setWorkspaceInitialTab("planning");
+          }}
+          onOpenChapter={(chapterId) => {
+            setShowStoryCenter(false);
+            void selectChapter(chapterId);
+          }}
+          onOpenEvidence={(chapterId, quote) => {
+            setShowStoryCenter(false);
+            void selectChapter(chapterId, undefined, quote);
+          }}
+          onApplyState={applyAppState}
+          onTaskCreated={(task) => {
+            setBackgroundTasks((current) => [task, ...current.filter((item) => item.id !== task.id)]);
+            setShowTaskCenter(true);
+          }}
+          onStatus={setStatus}
+        />
+      )}
+      {showTaskCenter && (
+        <TaskCenterDrawer
+          tasks={backgroundTasks}
+          onClose={() => setShowTaskCenter(false)}
+          onChange={setBackgroundTasks}
+          onOpenStoryCenter={() => {
+            setShowTaskCenter(false);
+            setShowStoryCenter(true);
+          }}
+          onStatus={setStatus}
         />
       )}
     </div>
@@ -1911,26 +2423,789 @@ function QuickPanelModal({
   );
 }
 
+type StoryCenterTab = "facts" | "characters" | "foreshadows" | "board" | "snapshots" | "workspace";
+
+function StoryCenterModal({
+  state,
+  selectedChapterId,
+  selectedText,
+  chapterRevision,
+  initialTab = "facts",
+  workspaceInitialTab = "planning",
+  onClose,
+  onOpenChapter,
+  onOpenEvidence,
+  onApplyState,
+  onTaskCreated,
+  onStatus,
+}: {
+  state: AppState;
+  selectedChapterId: string;
+  selectedText: string;
+  chapterRevision: string;
+  initialTab?: StoryCenterTab;
+  workspaceInitialTab?: CreativeWorkspaceTab;
+  onClose: () => void;
+  onOpenChapter: (chapterId: string) => void;
+  onOpenEvidence: (chapterId: string, quote: string) => void;
+  onApplyState: (state: AppState) => void;
+  onTaskCreated: (task: BackgroundTask) => void;
+  onStatus: (message: string) => void;
+}) {
+  const [tab, setTab] = useState<StoryCenterTab>(initialTab);
+  const [overview, setOverview] = useState<StoryOverview | null>(null);
+  const [board, setBoard] = useState<ChapterPreparationBoard | null>(null);
+  const [snapshots, setSnapshots] = useState<ProjectSnapshot[]>([]);
+  const [branches, setBranches] = useState<ProjectBranches | null>(null);
+  const [snapshotComparison, setSnapshotComparison] = useState<ProjectSnapshotComparison | null>(null);
+  const [snapshotRestorePaths, setSnapshotRestorePaths] = useState<string[]>([]);
+  const [query, setQuery] = useState("");
+  const [factStatus, setFactStatus] = useState<StoryFactStatus | "全部">("全部");
+  const [foreshadowStatus, setForeshadowStatus] = useState<ForeshadowStatus | "全部">("全部");
+  const [volumeFilter, setVolumeFilter] = useState("全部");
+  const [chapterFilter, setChapterFilter] = useState("全部");
+  const [entryEditor, setEntryEditor] = useState<null | {
+    kind: "fact" | "foreshadow";
+    id?: string;
+    chapterId: string;
+    title: string;
+    subject: string;
+    type: string;
+    detail: string;
+    plannedPayoff: string;
+    userNote: string;
+  }>(null);
+  const [busy, setBusy] = useState("");
+  const [draggingBeatId, setDraggingBeatId] = useState("");
+  const overviewRequestRef = useRef(0);
+  const selectedChapter = state.chapters.find((chapter) => chapter.id === selectedChapterId) || state.chapters[0];
+
+  useEffect(() => setTab(initialTab), [initialTab]);
+
+  const loadOverview = useCallback(async () => {
+    const requestId = ++overviewRequestRef.current;
+    setBusy("overview");
+    try {
+      const result = await window.novelAPI.getStoryOverview({
+        chapterIds: chapterFilter === "全部" ? [] : [chapterFilter],
+        volume: volumeFilter === "全部" ? undefined : volumeFilter,
+        query: query.trim(),
+        factStatus: factStatus === "全部" ? undefined : factStatus,
+        foreshadowStatus: foreshadowStatus === "全部" ? undefined : foreshadowStatus,
+        factLimit: 100,
+        characterLimit: 100,
+        foreshadowLimit: 100,
+      });
+      if (requestId === overviewRequestRef.current) setOverview(result);
+    } catch (error) {
+      onStatus(`读取创作状态失败：${getErrorMessage(error)}`);
+    } finally {
+      if (requestId === overviewRequestRef.current) setBusy("");
+    }
+  }, [chapterFilter, factStatus, foreshadowStatus, onStatus, query, state.projectPath, volumeFilter]);
+
+  const loadBoard = useCallback(async () => {
+    if (!selectedChapter?.id) return;
+    const result = await window.novelAPI.getChapterBoard(selectedChapter.id);
+    setBoard(result.board);
+  }, [selectedChapter?.id]);
+
+  const loadSnapshots = useCallback(async () => {
+    const result = await window.novelAPI.listSnapshots();
+    setSnapshots(result.snapshots);
+    setBranches(result.branches);
+  }, [state.projectPath]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void loadOverview(), 180);
+    return () => window.clearTimeout(timer);
+  }, [loadOverview]);
+
+  useEffect(() => {
+    if (tab === "board") void loadBoard().catch((error) => onStatus(`读取筹备板失败：${getErrorMessage(error)}`));
+    if (tab === "snapshots") void loadSnapshots().catch((error) => onStatus(`读取快照失败：${getErrorMessage(error)}`));
+  }, [loadBoard, loadSnapshots, onStatus, tab]);
+
+  const visibleFacts = overview?.facts || [];
+  const volumes = useMemo(() => [...new Set(state.chapters.map((chapter) => chapter.volume || "未分卷"))], [state.chapters]);
+  const filterChapters = useMemo(() => state.chapters.filter((chapter) => volumeFilter === "全部" || (chapter.volume || "未分卷") === volumeFilter), [state.chapters, volumeFilter]);
+
+  async function runLocalAnalysis(chapterIds: string[]) {
+    if (!chapterIds.length) {
+      const result = await window.novelAPI.enqueueTask({
+        type: "story-analysis",
+        title: "本地更新全书创作状态",
+        total: state.chapters.length,
+        scope: { chapterIds: [] },
+        options: { useAI: false },
+      });
+      onTaskCreated(result.task);
+      onStatus("已加入后台任务：本地更新全书创作状态");
+      return;
+    }
+    setBusy("local");
+    try {
+      await window.novelAPI.analyzeStoryLocally({ chapterIds });
+      await loadOverview();
+      onStatus(`本地创作状态已更新：${chapterIds.length ? "当前文档" : "全项目"}`);
+    } catch (error) {
+      onStatus(`更新创作状态失败：${getErrorMessage(error)}`);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function enqueueDeepAnalysis(chapterIds: string[]) {
+    const total = chapterIds.length || state.chapters.length;
+    const result = await window.novelAPI.enqueueTask({
+      type: "story-analysis",
+      title: chapterIds.length === 1 ? `深度分析：${selectedChapter?.title || "当前文档"}` : "AI 深度整理全书创作状态",
+      total,
+      scope: { chapterIds },
+      options: { useAI: true },
+    });
+    onTaskCreated(result.task);
+    onStatus(`已加入后台任务：${result.task.title}`);
+  }
+
+  async function updateFactStatus(fact: StoryFact, status: StoryFactStatus) {
+    const updated = await window.novelAPI.updateStoryFact({ factId: fact.id, patch: { status } });
+    setOverview((current) => current ? { ...current, facts: current.facts.map((item) => item.id === updated.id ? updated : item) } : current);
+  }
+
+  async function updateForeshadowStatus(item: ForeshadowItem, status: ForeshadowStatus) {
+    const updated = await window.novelAPI.updateForeshadow({ foreshadowId: item.id, patch: { status } });
+    setOverview((current) => current ? { ...current, foreshadows: current.foreshadows.map((candidate) => candidate.id === updated.id ? updated : candidate) } : current);
+  }
+
+  function openEntryEditor(kind: "fact" | "foreshadow", item?: StoryFact | ForeshadowItem) {
+    const chapterId = kind === "fact" && item ? (item as StoryFact).chapterId : kind === "foreshadow" && item ? (item as ForeshadowItem).plantedAt[0]?.chapterId : selectedChapter?.id;
+    setEntryEditor({
+      kind,
+      id: item?.id,
+      chapterId: chapterId || selectedChapter?.id || "",
+      title: kind === "foreshadow" && item ? (item as ForeshadowItem).title : "",
+      subject: kind === "fact" && item ? (item as StoryFact).subject : "",
+      type: kind === "fact" && item ? (item as StoryFact).type : "剧情事件",
+      detail: kind === "fact" && item ? (item as StoryFact).object : kind === "foreshadow" && item ? (item as ForeshadowItem).description : "",
+      plannedPayoff: kind === "foreshadow" && item ? (item as ForeshadowItem).plannedPayoff || "" : "",
+      userNote: item?.userNote || "",
+    });
+  }
+
+  async function saveEntryEditor() {
+    if (!entryEditor) return;
+    setBusy("entry");
+    try {
+      if (entryEditor.kind === "fact") {
+        if (entryEditor.id) {
+          await window.novelAPI.updateStoryFact({ factId: entryEditor.id, patch: { subject: entryEditor.subject, type: entryEditor.type, predicate: entryEditor.type, object: entryEditor.detail, userNote: entryEditor.userNote } });
+        } else {
+          await window.novelAPI.createStoryFact({ chapterId: entryEditor.chapterId, subject: entryEditor.subject, type: entryEditor.type, predicate: entryEditor.type, object: entryEditor.detail, userNote: entryEditor.userNote });
+        }
+      } else if (entryEditor.id) {
+        await window.novelAPI.updateForeshadow({ foreshadowId: entryEditor.id, patch: { title: entryEditor.title, description: entryEditor.detail, plannedPayoff: entryEditor.plannedPayoff, userNote: entryEditor.userNote } });
+      } else {
+        await window.novelAPI.createForeshadow({ chapterId: entryEditor.chapterId, title: entryEditor.title, description: entryEditor.detail, plannedPayoff: entryEditor.plannedPayoff, userNote: entryEditor.userNote });
+      }
+      setEntryEditor(null);
+      await loadOverview();
+      onStatus(entryEditor.id ? "创作状态记录已更新" : "已添加人工创作状态记录");
+    } catch (error) {
+      onStatus(`保存记录失败：${getErrorMessage(error)}`);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function deleteManualEntry(kind: "fact" | "foreshadow", id: string) {
+    if (!window.confirm("确定删除这条人工记录吗？")) return;
+    try {
+      if (kind === "fact") await window.novelAPI.deleteStoryFact(id);
+      else await window.novelAPI.deleteForeshadow(id);
+      await loadOverview();
+      onStatus("人工记录已删除");
+    } catch (error) {
+      onStatus(`删除失败：${getErrorMessage(error)}`);
+    }
+  }
+
+  async function loadMore(kind: "facts" | "characters" | "foreshadows") {
+    if (!overview) return;
+    const requestId = ++overviewRequestRef.current;
+    const result = await window.novelAPI.getStoryOverview({
+      chapterIds: chapterFilter === "全部" ? [] : [chapterFilter],
+      volume: volumeFilter === "全部" ? undefined : volumeFilter,
+      query: query.trim(),
+      factStatus: factStatus === "全部" ? undefined : factStatus,
+      foreshadowStatus: foreshadowStatus === "全部" ? undefined : foreshadowStatus,
+      factOffset: kind === "facts" ? overview.facts.length : 0,
+      characterOffset: kind === "characters" ? overview.characterStates.length : 0,
+      foreshadowOffset: kind === "foreshadows" ? overview.foreshadows.length : 0,
+      factLimit: kind === "facts" ? 100 : 20,
+      characterLimit: kind === "characters" ? 100 : 20,
+      foreshadowLimit: kind === "foreshadows" ? 100 : 20,
+    });
+    if (requestId !== overviewRequestRef.current) return;
+    setOverview((current) => current ? {
+      ...current,
+      facts: kind === "facts" ? [...current.facts, ...result.facts] : current.facts,
+      characterStates: kind === "characters" ? [...current.characterStates, ...result.characterStates] : current.characterStates,
+      foreshadows: kind === "foreshadows" ? [...current.foreshadows, ...result.foreshadows] : current.foreshadows,
+      pageInfo: { facts: kind === "facts" ? result.pageInfo!.facts : current.pageInfo!.facts, characters: kind === "characters" ? result.pageInfo!.characters : current.pageInfo!.characters, foreshadows: kind === "foreshadows" ? result.pageInfo!.foreshadows : current.pageInfo!.foreshadows },
+    } : current);
+  }
+
+  async function updatePendingCoverage() {
+    const chapterIds = [...new Set([...(overview?.coverage.missing || []), ...(overview?.coverage.stale || [])])];
+    if (!chapterIds.length) return;
+    const result = await window.novelAPI.enqueueTask({ type: "story-analysis", title: `更新 ${chapterIds.length} 个待处理文档`, total: chapterIds.length, scope: { chapterIds }, options: { useAI: false } });
+    onTaskCreated(result.task);
+    onStatus(`已在后台更新 ${chapterIds.length} 个缺失或过期文档`);
+  }
+
+  async function generateBoard() {
+    if (!selectedChapter?.id) return;
+    setBusy("board");
+    try {
+      const result = await window.novelAPI.generateChapterBoard({ chapterId: selectedChapter.id });
+      setBoard(result.board);
+      onStatus("已根据当前创作状态生成筹备板");
+    } catch (error) {
+      onStatus(`生成筹备板失败：${getErrorMessage(error)}`);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function improveBoardWithAI() {
+    if (!selectedChapter?.id) return;
+    const result = await window.novelAPI.enqueueTask({
+      type: "creative-board",
+      title: `AI 完善筹备板：${selectedChapter.title}`,
+      total: 3,
+      scope: { chapterId: selectedChapter.id },
+      options: { useAI: true },
+    });
+    onTaskCreated(result.task);
+  }
+
+  function patchBoardItem(itemId: string, patch: Partial<ChapterPreparationBoard["items"][number]>) {
+    setBoard((current) => current ? { ...current, items: current.items.map((item) => item.id === itemId ? { ...item, ...patch } : item) } : current);
+  }
+
+  async function addCustomBoardItem() {
+    if (!selectedChapter?.id) return;
+    let current = board;
+    if (!current) current = (await window.novelAPI.generateChapterBoard({ chapterId: selectedChapter.id })).board;
+    const item = {
+      id: `beat_manual_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      type: "自定义",
+      title: "新的筹备项",
+      detail: "",
+      order: current.items.length,
+      locked: true,
+      completed: false,
+      sourceRefs: [],
+    };
+    setBoard({ ...current, items: [...current.items, item] });
+  }
+
+  function moveBoardItem(targetId: string) {
+    if (!board || !draggingBeatId || draggingBeatId === targetId) return;
+    const items = [...board.items];
+    const fromIndex = items.findIndex((item) => item.id === draggingBeatId);
+    const targetIndex = items.findIndex((item) => item.id === targetId);
+    if (fromIndex < 0 || targetIndex < 0) return;
+    const [moved] = items.splice(fromIndex, 1);
+    items.splice(targetIndex, 0, moved);
+    setBoard({ ...board, items: items.map((item, index) => ({ ...item, order: index })) });
+  }
+
+  async function saveBoard() {
+    if (!board) return;
+    setBusy("save-board");
+    try {
+      setBoard((await window.novelAPI.saveChapterBoard({ board })).board);
+      onStatus("下一章筹备板已保存");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function enqueueSnapshot() {
+    const result = await window.novelAPI.enqueueTask({
+      type: "snapshot",
+      title: "手动项目快照",
+      options: { name: `手动快照 ${new Date().toLocaleString("zh-CN")}`, reason: "用户手动创建" },
+    });
+    onTaskCreated(result.task);
+  }
+
+  async function restoreSnapshot(snapshot: ProjectSnapshot, paths: string[] = []) {
+    try {
+      setBusy("compare");
+      const comparison = await window.novelAPI.compareSnapshot(snapshot.id);
+      setSnapshotComparison(comparison);
+      const changeSummary = `修改 ${comparison.changed.length} 个、新增 ${comparison.added.length} 个、当前缺失 ${comparison.missing.length} 个文件`;
+      const partial = paths.length > 0;
+      if (!window.confirm(partial ? `确定从“${snapshot.name}”恢复选中的 ${paths.length} 个文件吗？恢复前会自动创建安全快照，其他文件不变。` : `快照“${snapshot.name}”与当前项目相比：${changeSummary}。\n\n确定恢复吗？恢复前会自动创建安全快照，快照后新增的受管文件会被清理。`)) return;
+      setBusy("restore");
+      const result = await window.novelAPI.restoreSnapshot({ snapshotId: snapshot.id, paths });
+      onTaskCreated(result.task);
+      onApplyState(result.state);
+      onStatus(partial ? `已从快照恢复 ${result.restored} 个文件，知识库正在后台重建` : `已恢复项目快照：${snapshot.name}；清理 ${result.removed} 个新增文件，知识库正在后台重建`);
+      onClose();
+    } catch (error) {
+      onStatus(`恢复快照失败：${getErrorMessage(error)}`);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function compareSnapshot(snapshot: ProjectSnapshot) {
+    setBusy("compare");
+    try {
+      const comparison = await window.novelAPI.compareSnapshot(snapshot.id);
+      setSnapshotComparison(comparison);
+      setSnapshotRestorePaths([...comparison.changed, ...comparison.missing]);
+    } catch (error) {
+      onStatus(`比较快照失败：${getErrorMessage(error)}`);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function compareBranch(snapshotId: string) {
+    if (!snapshotId) return onStatus("这个分支还没有可比较的起点快照。");
+    setBusy("compare");
+    try {
+      const comparison = await window.novelAPI.compareSnapshot(snapshotId);
+      setSnapshotComparison(comparison);
+      setSnapshotRestorePaths([...comparison.changed, ...comparison.missing]);
+    } catch (error) {
+      onStatus(`比较分支失败：${getErrorMessage(error)}`);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function renameSnapshot(snapshot: ProjectSnapshot) {
+    const name = window.prompt("输入新的快照名称", snapshot.name)?.trim();
+    if (!name || name === snapshot.name) return;
+    try {
+      await window.novelAPI.renameSnapshot({ snapshotId: snapshot.id, name });
+      await loadSnapshots();
+      onStatus("快照已重命名");
+    } catch (error) {
+      onStatus(`重命名快照失败：${getErrorMessage(error)}`);
+    }
+  }
+
+  async function deleteSnapshot(snapshot: ProjectSnapshot) {
+    if (!window.confirm(`确定删除快照“${snapshot.name}”吗？被创作分支使用的快照不会被删除。`)) return;
+    try {
+      const result = await window.novelAPI.deleteSnapshot(snapshot.id);
+      await loadSnapshots();
+      setSnapshotComparison((current) => current?.snapshot.id === snapshot.id ? null : current);
+      onStatus(`快照已删除，并清理 ${result.garbageCollection.removedObjects} 个不再使用的数据对象`);
+    } catch (error) {
+      onStatus(`删除快照失败：${getErrorMessage(error)}`);
+    }
+  }
+
+  async function cleanupSnapshots() {
+    try {
+      const result = await window.novelAPI.cleanupSnapshots();
+      onStatus(`快照存储清理完成：移除 ${result.removedObjects} 个无引用对象，释放 ${(result.removedBytes / 1024 / 1024).toFixed(1)} MB`);
+    } catch (error) {
+      onStatus(`清理快照存储失败：${getErrorMessage(error)}`);
+    }
+  }
+
+  async function createBranch() {
+    const name = window.prompt("输入实验分支名称", `实验分支 ${new Date().toLocaleDateString("zh-CN")}`)?.trim();
+    if (!name) return;
+    setBusy("branch");
+    try {
+      const result = await window.novelAPI.createBranch({ name });
+      setBranches(result.branches);
+      await loadSnapshots();
+      onStatus(`已创建创作分支：${result.branch.name}`);
+    } catch (error) {
+      onStatus(`创建分支失败：${getErrorMessage(error)}`);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function switchBranch(branchId: string) {
+    const branch = branches?.branches.find((item) => item.id === branchId);
+    if (!branch || branch.id === branches?.activeBranchId) return;
+    if (!window.confirm(`切换到“${branch.name}”吗？当前分支会先自动创建快照。`)) return;
+    setBusy("branch");
+    try {
+      const result = await window.novelAPI.switchBranch(branch.id);
+      setBranches(result.branches);
+      if (result.task) onTaskCreated(result.task);
+      onApplyState(result.state);
+      onStatus(`已切换创作分支：${result.activeBranch.name}；知识库正在后台重建`);
+      onClose();
+    } catch (error) {
+      onStatus(`切换分支失败：${getErrorMessage(error)}`);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function deleteBranch(branchId: string) {
+    const branch = branches?.branches.find((item) => item.id === branchId);
+    if (!branch || branch.id === "main" || branch.id === branches?.activeBranchId) return;
+    if (!window.confirm(`确定删除实验分支“${branch.name}”吗？分支对应的快照仍会保留。`)) return;
+    try {
+      const result = await window.novelAPI.deleteBranch(branch.id);
+      setBranches(result.branches);
+      onStatus(`实验分支已删除：${branch.name}`);
+    } catch (error) {
+      onStatus(`删除分支失败：${getErrorMessage(error)}`);
+    }
+  }
+
+  const tabs: Array<{ id: StoryCenterTab; label: string; count?: number }> = [
+    { id: "facts", label: "剧情事实", count: overview?.counts.facts },
+    { id: "characters", label: "角色状态", count: overview?.characterStates.length },
+    { id: "foreshadows", label: "伏笔", count: overview?.counts.foreshadows },
+    { id: "board", label: "下一章筹备", count: board?.items.length },
+    { id: "snapshots", label: "快照与分支", count: snapshots.length },
+    { id: "workspace", label: "创作工作台", count: (overview?.counts.boards || 0) + (overview?.counts.foreshadows || 0) },
+  ];
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <section className="story-center-modal" onClick={(event) => event.stopPropagation()}>
+        <header className="story-center-header">
+          <div><Activity size={18} /><strong>创作状态</strong></div>
+          <div className="story-center-summary">
+            <span>覆盖 {overview?.coverage.analyzed || 0}/{overview?.coverage.total || state.chapters.length}</span>
+            {!!overview?.coverage.stale.length && <span className="warning">{overview.coverage.stale.length} 章待更新</span>}
+            {!!overview?.coverage.missing.length && <span className="warning">{overview.coverage.missing.length} 章未整理</span>}
+          </div>
+          <button onClick={onClose} title="关闭"><X size={17} /></button>
+        </header>
+        <div className="story-center-tabs">
+          {tabs.map((item) => <button key={item.id} className={tab === item.id ? "active" : ""} onClick={() => setTab(item.id)}>{item.label}{item.count !== undefined ? ` ${item.count}` : ""}</button>)}
+        </div>
+        {tab !== "workspace" && <div className="story-center-toolbar">
+          <button onClick={() => void runLocalAnalysis(selectedChapter?.id ? [selectedChapter.id] : [])} disabled={Boolean(busy)}>更新当前文档</button>
+          <button onClick={() => void enqueueDeepAnalysis(selectedChapter?.id ? [selectedChapter.id] : [])}>AI 深度分析当前文档</button>
+          <details>
+            <summary>全书操作</summary>
+            <div>
+              <button onClick={() => void runLocalAnalysis([])} disabled={Boolean(busy)}>本地更新全书</button>
+              <button onClick={() => void enqueueDeepAnalysis([])}>AI 深度分析全书</button>
+            </div>
+          </details>
+          {!!((overview?.coverage.stale.length || 0) + (overview?.coverage.missing.length || 0)) && <button onClick={() => void updatePendingCoverage()}>更新待处理文档</button>}
+          {busy && <span>正在处理...</span>}
+        </div>}
+        <div className="story-center-body">
+          {tab === "facts" && (
+            <section className="story-facts-view">
+              <div className="story-filter-row">
+                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索人物、事件或章节" />
+                <select value={volumeFilter} onChange={(event) => { setVolumeFilter(event.target.value); setChapterFilter("全部"); }}><option value="全部">全部分卷</option>{volumes.map((volume) => <option key={volume}>{volume}</option>)}</select>
+                <select value={chapterFilter} onChange={(event) => setChapterFilter(event.target.value)}><option value="全部">全部文档</option>{filterChapters.map((chapter) => <option key={chapter.id} value={chapter.id}>{chapter.title}</option>)}</select>
+                <select value={factStatus} onChange={(event) => setFactStatus(event.target.value as StoryFactStatus | "全部")}>
+                  <option value="全部">全部状态</option><option value="AI识别">AI识别</option><option value="已确认">已确认</option><option value="已忽略">已忽略</option>
+                </select>
+                <button onClick={() => openEntryEditor("fact")}><Plus size={14} />人工事实</button>
+              </div>
+              <div className="story-list">
+                {visibleFacts.map((fact) => (
+                  <article key={fact.id} className="story-row">
+                    <div><strong>{fact.subject}</strong><span>{fact.type} / {fact.chapterTitle}{fact.stale ? " / 原文已变化，待核对" : ""}</span></div>
+                    <p>{fact.object}</p>
+                    {!!fact.evidence.length && <button className="evidence-link" onClick={() => fact.evidence[0].heading === "人工记录" ? onOpenChapter(fact.chapterId) : onOpenEvidence(fact.chapterId, fact.evidence[0].quote)} title={fact.evidence[0].quote}>{fact.evidence[0].heading === "人工记录" ? "打开关联文档" : `原文：${fact.evidence[0].quote}`}</button>}
+                    <div className="story-row-actions">
+                      <select value={fact.status} onChange={(event) => void updateFactStatus(fact, event.target.value as StoryFactStatus)}>
+                        <option value="AI识别">AI识别</option><option value="已确认">已确认</option><option value="已忽略">已忽略</option>
+                      </select>
+                      <button onClick={() => openEntryEditor("fact", fact)}>编辑</button>
+                      {fact.origin === "manual" && <button onClick={() => void deleteManualEntry("fact", fact.id)} title="删除人工事实"><Trash2 size={13} /></button>}
+                    </div>
+                  </article>
+                ))}
+                {!visibleFacts.length && <div className="analysis-empty">保存章节后会自动进行本地事实整理；AI 深度分析会补充更严格的证据。</div>}
+                {(overview?.pageInfo?.facts.total || 0) > visibleFacts.length && <button className="story-load-more" onClick={() => void loadMore("facts")}>继续显示（{visibleFacts.length}/{overview?.pageInfo?.facts.total}）</button>}
+              </div>
+            </section>
+          )}
+          {tab === "characters" && (
+            <section className="story-facts-view">
+              <div className="story-filter-row compact-filter-row">
+                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索角色、地点、目标或知情内容" />
+                <select value={volumeFilter} onChange={(event) => { setVolumeFilter(event.target.value); setChapterFilter("全部"); }}><option value="全部">全部分卷</option>{volumes.map((volume) => <option key={volume}>{volume}</option>)}</select>
+                <select value={chapterFilter} onChange={(event) => setChapterFilter(event.target.value)}><option value="全部">全部文档</option>{filterChapters.map((chapter) => <option key={chapter.id} value={chapter.id}>{chapter.title}</option>)}</select>
+              </div>
+              <div className="story-list character-state-list">
+                {(overview?.characterStates || []).map((record) => (
+                  <details key={record.characterId} className="story-row">
+                    <summary><strong>{record.characterName}</strong><span>{record.latest?.chapterTitle || "暂无状态"} / {record.latest?.location || "地点未记录"}</span></summary>
+                    {record.states.slice().reverse().map((item) => (
+                      <article key={item.id}>
+                        <button title={`打开${item.chapterTitle}`} onClick={() => onOpenChapter(item.chapterId)}><span>{item.volume}</span><span>{item.chapterTitle}</span></button>
+                        <p>目标：{item.goals.join("；") || "未记录"}</p>
+                        <p>知情：{item.knowledge.join("；") || "未记录"}</p>
+                        <p>持有：{item.possessions.join("；") || "未记录"}</p>
+                      </article>
+                    ))}
+                  </details>
+                ))}
+                {!overview?.characterStates.length && <div className="analysis-empty">角色在正文中出现并保存后，这里会按章节记录位置、目标、知情范围和持有物品。</div>}
+                {(overview?.pageInfo?.characters.total || 0) > (overview?.characterStates.length || 0) && <button className="story-load-more" onClick={() => void loadMore("characters")}>继续显示（{overview?.characterStates.length}/{overview?.pageInfo?.characters.total}）</button>}
+              </div>
+            </section>
+          )}
+          {tab === "foreshadows" && (
+            <section className="story-facts-view">
+              <div className="story-filter-row">
+                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索伏笔、计划或备注" />
+                <select value={volumeFilter} onChange={(event) => { setVolumeFilter(event.target.value); setChapterFilter("全部"); }}><option value="全部">全部分卷</option>{volumes.map((volume) => <option key={volume}>{volume}</option>)}</select>
+                <select value={chapterFilter} onChange={(event) => setChapterFilter(event.target.value)}><option value="全部">全部文档</option>{filterChapters.map((chapter) => <option key={chapter.id} value={chapter.id}>{chapter.title}</option>)}</select>
+                <select value={foreshadowStatus} onChange={(event) => setForeshadowStatus(event.target.value as ForeshadowStatus | "全部")}><option value="全部">全部状态</option>{(["AI候选", "已确认埋下", "持续强化", "等待回收", "已经回收", "已废弃"] as ForeshadowStatus[]).map((status) => <option key={status}>{status}</option>)}</select>
+                <button onClick={() => openEntryEditor("foreshadow")}><Plus size={14} />人工伏笔</button>
+              </div>
+              <div className="story-list">
+              {(overview?.foreshadows || []).map((item) => (
+                <article key={item.id} className="story-row foreshadow-row">
+                  <div><strong>{item.title}</strong><span>{item.plantedAt[0]?.chapterTitle || "未关联章节"}{item.stale ? " / 待核对" : ""}</span></div>
+                  <p>{item.description}</p>
+                  {item.plannedPayoff && <em>计划回收：{item.plannedPayoff}</em>}
+                  {!!item.plantedAt.length && <button className="evidence-link" title={item.plantedAt[0].quote} onClick={() => item.plantedAt[0].heading === "人工记录" ? onOpenChapter(item.plantedAt[0].chapterId) : onOpenEvidence(item.plantedAt[0].chapterId, item.plantedAt[0].quote)}>{item.plantedAt[0].heading === "人工记录" ? "打开关联文档" : "查看埋设原文"}</button>}
+                  <div className="story-row-actions">
+                    <select value={item.status} onChange={(event) => void updateForeshadowStatus(item, event.target.value as ForeshadowStatus)}>
+                      {(["AI候选", "已确认埋下", "持续强化", "等待回收", "已经回收", "已废弃"] as ForeshadowStatus[]).map((status) => <option key={status}>{status}</option>)}
+                    </select>
+                    <button onClick={() => openEntryEditor("foreshadow", item)}>编辑</button>
+                    {item.origin === "manual" && <button onClick={() => void deleteManualEntry("foreshadow", item.id)} title="删除人工伏笔"><Trash2 size={13} /></button>}
+                  </div>
+                </article>
+              ))}
+              {!overview?.foreshadows.length && <div className="analysis-empty">AI 或本地规则识别到的伏笔会先作为候选，不会自动认定为正式设定。</div>}
+              {(overview?.pageInfo?.foreshadows.total || 0) > (overview?.foreshadows.length || 0) && <button className="story-load-more" onClick={() => void loadMore("foreshadows")}>继续显示（{overview?.foreshadows.length}/{overview?.pageInfo?.foreshadows.total}）</button>}
+              </div>
+            </section>
+          )}
+          {tab === "board" && (
+            <section className="board-view">
+              <header><div><strong>{selectedChapter?.title || "当前章节"}</strong><span>作为下一章筹备依据</span></div><div><button onClick={() => void generateBoard()} disabled={Boolean(busy)}>生成筹备板</button><button onClick={() => void addCustomBoardItem()}><Plus size={14} />自定义项</button><button onClick={() => void improveBoardWithAI()}>AI 完善</button><button className="primary" onClick={() => void saveBoard()} disabled={!board || Boolean(busy)}>保存筹备板</button></div></header>
+              <div className="board-list">
+                {(board?.items || []).map((item) => (
+                  <article key={item.id} className={`board-item ${item.completed ? "completed" : ""}`} draggable onDragStart={() => setDraggingBeatId(item.id)} onDragOver={(event) => event.preventDefault()} onDrop={() => moveBoardItem(item.id)} onDragEnd={() => setDraggingBeatId("")}>
+                    <div className="board-item-main"><span>{item.order + 1}</span><input value={item.title} onChange={(event) => patchBoardItem(item.id, { title: event.target.value })} /><small>{item.type}</small></div>
+                    <textarea value={item.detail} onChange={(event) => patchBoardItem(item.id, { detail: event.target.value })} />
+                    {!!item.sourceRefs.length && <div className="board-source-refs">{item.sourceRefs.slice(0, 4).map((evidence, index) => <button key={`${evidence.chapterId}_${index}`} onClick={() => evidence.heading === "人工记录" ? onOpenChapter(evidence.chapterId) : onOpenEvidence(evidence.chapterId, evidence.quote)} title={evidence.quote}>{evidence.chapterTitle}</button>)}</div>}
+                    <div className="board-item-actions">
+                      <label><input type="checkbox" checked={item.completed} onChange={(event) => patchBoardItem(item.id, { completed: event.target.checked })} />完成</label>
+                      <button onClick={() => patchBoardItem(item.id, { locked: !item.locked })} title={item.locked ? "解除锁定" : "锁定后重新生成时保留"}>{item.locked ? <Lock size={14} /> : <Unlock size={14} />}</button>
+                      <button onClick={() => setBoard((current) => current ? { ...current, items: current.items.filter((candidate) => candidate.id !== item.id).map((candidate, index) => ({ ...candidate, order: index })) } : current)} title="删除筹备项"><Trash2 size={14} /></button>
+                    </div>
+                  </article>
+                ))}
+                {!board?.items.length && <div className="analysis-empty">筹备板用于安排目标、冲突、人物表现、信息释放、伏笔和结尾，不会直接改写正文。</div>}
+              </div>
+            </section>
+          )}
+          {tab === "snapshots" && (
+            <section className="snapshot-view">
+              <div className="snapshot-toolbar">
+                <button onClick={() => void enqueueSnapshot()}>创建项目快照</button><button onClick={() => void createBranch()} disabled={Boolean(busy)}>创建实验分支</button><button onClick={() => void loadSnapshots()}>刷新</button><button onClick={() => void cleanupSnapshots()}>清理存储</button>
+                <select value={branches?.activeBranchId || "main"} onChange={(event) => void switchBranch(event.target.value)}>
+                  {(branches?.branches || []).map((branch) => <option key={branch.id} value={branch.id}>{branch.name}{branch.id === branches?.activeBranchId ? "（当前）" : ""}</option>)}
+                </select>
+              </div>
+              <details className="branch-manager">
+                <summary>管理创作分支（{branches?.branches.length || 0}）</summary>
+                {(branches?.branches || []).map((branch) => <div key={branch.id}><span>{branch.name}{branch.id === branches?.activeBranchId ? "（当前）" : ""}</span><button onClick={() => void compareBranch(branch.snapshotId)} disabled={!branch.snapshotId || Boolean(busy)}>与当前比较</button>{branch.id !== "main" && branch.id !== branches?.activeBranchId && <button onClick={() => void deleteBranch(branch.id)} title="删除未使用的实验分支"><Trash2 size={13} /></button>}</div>)}
+              </details>
+              <div className="story-list">
+                {snapshots.map((snapshot) => (
+                  <article key={snapshot.id} className="story-row snapshot-row"><div><strong>{snapshot.name}</strong><span>{formatDateTime(snapshot.createdAt)} / {snapshot.fileCount} 个文件 / {(snapshot.totalBytes / 1024 / 1024).toFixed(1)} MB</span></div><p>{snapshot.reason}</p><div className="snapshot-actions"><button onClick={() => void compareSnapshot(snapshot)} disabled={Boolean(busy)}>比较</button><button onClick={() => void restoreSnapshot(snapshot)} disabled={Boolean(busy)}>恢复</button><button onClick={() => void renameSnapshot(snapshot)}>改名</button><button onClick={() => void deleteSnapshot(snapshot)} title="删除未被分支使用的快照"><Trash2 size={13} /></button></div></article>
+                ))}
+                {!snapshots.length && <div className="analysis-empty">快照按内容哈希去重；恢复前还会自动创建安全快照。</div>}
+              </div>
+              {snapshotComparison && (
+                <div className="snapshot-comparison">
+                  <header><strong>与“{snapshotComparison.snapshot.name}”比较</strong><button onClick={() => setSnapshotComparison(null)} title="关闭比较结果"><X size={14} /></button></header>
+                  <div><span>已修改 {snapshotComparison.changed.length}</span><span>快照后新增 {snapshotComparison.added.length}</span><span>当前缺失 {snapshotComparison.missing.length}</span></div>
+                  <details open={snapshotComparison.changed.length + snapshotComparison.added.length + snapshotComparison.missing.length <= 12}>
+                    <summary>选择要恢复的文件</summary>
+                    {[...snapshotComparison.changed.map((file) => ({ file, state: "已修改", restorable: true })), ...snapshotComparison.missing.map((file) => ({ file, state: "当前缺失", restorable: true })), ...snapshotComparison.added.map((file) => ({ file, state: "快照后新增", restorable: false }))].slice(0, 160).map((item) => <label key={`${item.state}_${item.file}`} className={!item.restorable ? "disabled" : ""}><input type="checkbox" disabled={!item.restorable} checked={item.restorable && snapshotRestorePaths.includes(item.file)} onChange={() => setSnapshotRestorePaths((current) => current.includes(item.file) ? current.filter((file) => file !== item.file) : [...current, item.file])} /><span>{item.state}</span><code>{item.file}</code></label>)}
+                    {snapshotComparison.changed.length + snapshotComparison.added.length + snapshotComparison.missing.length > 160 && <small>仅显示前 160 项</small>}
+                  </details>
+                  <footer><button onClick={() => setSnapshotRestorePaths([...snapshotComparison.changed, ...snapshotComparison.missing])}>全选可恢复项</button><button onClick={() => setSnapshotRestorePaths([])}>清空</button><button className="primary" disabled={!snapshotRestorePaths.length || Boolean(busy)} onClick={() => void restoreSnapshot(snapshotComparison.snapshot, snapshotRestorePaths)}>恢复选中项</button></footer>
+                </div>
+              )}
+            </section>
+          )}
+          {tab === "workspace" && (
+            <CreativeWorkspace
+              state={state}
+              selectedChapterId={selectedChapterId}
+              selectedText={selectedText}
+              chapterRevision={chapterRevision}
+              initialTab={workspaceInitialTab}
+              onApplyState={onApplyState}
+              onOpenChapter={onOpenChapter}
+              onStatus={onStatus}
+            />
+          )}
+        </div>
+        {entryEditor && (
+          <div className="story-entry-editor-backdrop" onClick={() => setEntryEditor(null)}>
+            <form className="story-entry-editor" onClick={(event) => event.stopPropagation()} onSubmit={(event) => { event.preventDefault(); void saveEntryEditor(); }}>
+              <header><strong>{entryEditor.id ? "编辑" : "新增"}{entryEditor.kind === "fact" ? "剧情事实" : "伏笔"}</strong><button type="button" onClick={() => setEntryEditor(null)} title="关闭"><X size={15} /></button></header>
+              {!entryEditor.id && <label><span>关联文档</span><select value={entryEditor.chapterId} onChange={(event) => setEntryEditor({ ...entryEditor, chapterId: event.target.value })}>{state.chapters.map((chapter) => <option key={chapter.id} value={chapter.id}>{chapter.volume || "未分卷"} / {chapter.title}</option>)}</select></label>}
+              {entryEditor.kind === "fact" ? <><label><span>主体</span><input value={entryEditor.subject} onChange={(event) => setEntryEditor({ ...entryEditor, subject: event.target.value })} placeholder="人物、势力或物品" /></label><label><span>类型</span><select value={entryEditor.type} onChange={(event) => setEntryEditor({ ...entryEditor, type: event.target.value })}>{["剧情事件", "地点变化", "物品变化", "知情变化", "关系变化", "状态变化"].map((type) => <option key={type}>{type}</option>)}</select></label></> : <label><span>标题</span><input value={entryEditor.title} onChange={(event) => setEntryEditor({ ...entryEditor, title: event.target.value })} /></label>}
+              <label className="wide"><span>{entryEditor.kind === "fact" ? "事实内容" : "伏笔内容"}</span><textarea value={entryEditor.detail} onChange={(event) => setEntryEditor({ ...entryEditor, detail: event.target.value })} /></label>
+              {entryEditor.kind === "foreshadow" && <label className="wide"><span>计划回收</span><textarea value={entryEditor.plannedPayoff} onChange={(event) => setEntryEditor({ ...entryEditor, plannedPayoff: event.target.value })} /></label>}
+              <label className="wide"><span>作者备注</span><textarea value={entryEditor.userNote} onChange={(event) => setEntryEditor({ ...entryEditor, userNote: event.target.value })} /></label>
+              <footer><button type="button" onClick={() => setEntryEditor(null)}>取消</button><button className="primary" type="submit" disabled={Boolean(busy)}><Save size={14} />保存</button></footer>
+            </form>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function TaskCenterDrawer({
+  tasks,
+  onClose,
+  onChange,
+  onOpenStoryCenter,
+  onStatus,
+}: {
+  tasks: BackgroundTask[];
+  onClose: () => void;
+  onChange: (tasks: BackgroundTask[]) => void;
+  onOpenStoryCenter: () => void;
+  onStatus: (message: string) => void;
+}) {
+  const activeCount = tasks.filter((task) => ["等待中", "运行中", "正在停止", "已暂停"].includes(task.status)).length;
+  const [operations, setOperations] = useState<OperationJournalItem[]>([]);
+
+  useEffect(() => {
+    void window.novelAPI.listOperationJournal().then((result) => setOperations(result.operations)).catch(() => setOperations([]));
+  }, []);
+
+  async function cancelTask(taskId: string) {
+    const result = await window.novelAPI.cancelTask(taskId);
+    if (result.task) onChange([result.task, ...tasks.filter((task) => task.id !== result.task?.id)]);
+  }
+
+  async function pauseTask(taskId: string) {
+    const result = await window.novelAPI.pauseTask(taskId);
+    if (result.task) onChange([result.task, ...tasks.filter((task) => task.id !== result.task?.id)]);
+  }
+
+  async function resumeTask(taskId: string) {
+    const result = await window.novelAPI.resumeTask(taskId);
+    if (result.task) onChange([result.task, ...tasks.filter((task) => task.id !== result.task?.id)]);
+  }
+
+  async function retryTask(taskId: string) {
+    try {
+      const result = await window.novelAPI.retryTask(taskId);
+      onChange([result.task, ...tasks]);
+      onStatus(`已重新加入任务：${result.task.title}`);
+    } catch (error) {
+      onStatus(`重试失败：${getErrorMessage(error)}`);
+    }
+  }
+
+  async function removeTask(taskId: string) {
+    try {
+      onChange((await window.novelAPI.removeTask(taskId)).tasks);
+    } catch (error) {
+      onStatus(`删除任务记录失败：${getErrorMessage(error)}`);
+    }
+  }
+
+  async function clearTaskHistory() {
+    try {
+      const result = await window.novelAPI.clearTaskHistory();
+      onChange(result.tasks);
+      onStatus(`已清理 ${result.removed} 条已结束任务记录`);
+    } catch (error) {
+      onStatus(`清理任务记录失败：${getErrorMessage(error)}`);
+    }
+  }
+
+  return (
+    <div className="task-drawer-backdrop" onClick={onClose}>
+      <aside className="task-center-drawer" onClick={(event) => event.stopPropagation()}>
+        <header><div><ListChecks size={18} /><strong>后台任务</strong><span>{activeCount ? `${activeCount} 个进行中或暂停` : "当前空闲"}</span></div><div><button onClick={() => void clearTaskHistory()} disabled={!tasks.some((task) => !["等待中", "运行中", "正在停止", "已暂停"].includes(task.status))}>清理记录</button><button onClick={onClose} title="关闭"><X size={17} /></button></div></header>
+        <details className="operation-history">
+          <summary>项目操作记录（{operations.length}）</summary>
+          <div>{operations.slice(0, 40).map((item) => <article key={item.id} className={`operation-${item.status}`}><strong>{item.title}</strong><span>{item.status} / {formatDateTime(item.updatedAt)}</span>{item.error && <em>{item.error}</em>}</article>)}{!operations.length && <p>暂无保存、导入、拖动或修订记录。</p>}</div>
+        </details>
+        <div className="task-list">
+          {tasks.map((task) => {
+            const active = ["等待中", "运行中", "正在停止", "已暂停"].includes(task.status);
+            const progress = task.total ? Math.min(100, Math.round((task.current / task.total) * 100)) : active ? 8 : task.status === "已完成" ? 100 : 0;
+            return (
+              <article key={task.id} className={`task-row status-${task.status}`}>
+                <div className="task-row-title"><strong>{task.title}</strong><span>{task.status}</span></div>
+                <p>{task.phase}{task.detail ? `：${task.detail}` : ""}</p>
+                <div className="task-progress"><span style={{ width: `${progress}%` }} /></div>
+                <small>{task.total ? `${task.current}/${task.total}` : ""} {formatDateTime(task.updatedAt)}{task.usage?.totalTokens ? ` / 约 ${task.usage.totalTokens.toLocaleString("zh-CN")} Token` : ""}</small>
+                {task.error && <em>{task.error}</em>}
+                {task.partialOutput && <details><summary>查看已保留的部分输出</summary><pre>{task.partialOutput.slice(-12000)}</pre></details>}
+                <div className="task-actions">
+                  {["等待中", "运行中"].includes(task.status) && <button onClick={() => void pauseTask(task.id)}>暂停</button>}
+                  {task.status === "已暂停" && <button onClick={() => void resumeTask(task.id)}>继续</button>}
+                  {active && <button onClick={() => void cancelTask(task.id)}>停止</button>}
+                  {task.canRetry && <button onClick={() => void retryTask(task.id)}>重试</button>}
+                  {task.status === "已完成" && ["story-analysis", "creative-board"].includes(task.type) && <button onClick={onOpenStoryCenter}>查看结果</button>}
+                  {!active && <button onClick={() => void removeTask(task.id)} title="删除任务记录"><Trash2 size={14} /></button>}
+                </div>
+              </article>
+            );
+          })}
+          {!tasks.length && <div className="analysis-empty">长篇分析、知识库重建和项目快照会在这里运行，不阻塞正文编辑。</div>}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
 function RichDocumentEditor({
   value,
   fontSize,
   lineHeight,
   scrollAnchor,
+  reviews,
   onChange,
   onSelection,
   onContextMenu,
   onReady,
+  onOpenReview,
 }: {
   value: string;
   fontSize: number;
   lineHeight: number;
-  scrollAnchor: string;
+  scrollAnchor: EditorScrollAnchor | null;
+  reviews: InlineReviewItem[];
   onChange: (value: string) => void;
   onSelection: () => void;
   onContextMenu: (event: React.MouseEvent<HTMLElement>) => void;
   onReady?: (editor: Editor | null) => void;
+  onOpenReview: (review: InlineReviewItem) => void;
 }) {
   const lastHtmlRef = useRef("");
+  const [activeReviewId, setActiveReviewId] = useState("");
+  const activeReview = reviews.find((item) => item.id === activeReviewId) || null;
   const editor = useEditor(
     {
       extensions: [
@@ -1939,12 +3214,13 @@ function RichDocumentEditor({
         }),
         Underline,
         TextAlign.configure({ types: ["heading", "paragraph"] }),
-        Image.configure({ allowBase64: true, inline: false }),
-        Table.configure({ resizable: true }),
+        DocxImage.configure({ allowBase64: true, inline: false }),
+        DocxTable.configure({ resizable: true }),
         TableRow,
         TableHeader,
         TableCell,
         CollapsibleHeadings,
+        InlineReviews,
       ],
       content: contentToHtml(value || "<p></p>"),
       editorProps: {
@@ -1986,16 +3262,46 @@ function RichDocumentEditor({
   }, [editor, value]);
 
   useEffect(() => {
+    if (!editor) return;
+    editor.view.dispatch(editor.state.tr.setMeta(inlineReviewPluginKey, reviews));
+    if (activeReviewId && !reviews.some((item) => item.id === activeReviewId)) setActiveReviewId("");
+  }, [activeReviewId, editor, reviews]);
+
+  useEffect(() => {
     if (!editor || !scrollAnchor) return;
-    const [, index] = scrollAnchor.split("_");
-    const headings = editor.view.dom.querySelectorAll("h1,h2,h3,h4,h5,h6");
-    const target = headings[Number(index)] as HTMLElement | undefined;
-    target?.scrollIntoView({ block: "center", behavior: "smooth" });
+    let target: HTMLElement | undefined;
+    if (scrollAnchor.quote) {
+      const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
+      const needle = normalize(scrollAnchor.quote).slice(0, 120);
+      const blocks = Array.from(editor.view.dom.querySelectorAll<HTMLElement>("p,li,td,th,blockquote,h1,h2,h3,h4,h5,h6"));
+      target = blocks.find((item) => normalize(item.textContent || "").includes(needle));
+    }
+    if (!target && typeof scrollAnchor.headingIndex === "number") {
+      target = editor.view.dom.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6")[scrollAnchor.headingIndex];
+    }
+    if (!target) return;
+    target.scrollIntoView({ block: "center", behavior: "smooth" });
+    try {
+      const from = editor.view.posAtDOM(target, 0);
+      const length = Math.min(String(target.textContent || "").length, 160);
+      editor.commands.setTextSelection({ from, to: Math.min(editor.state.doc.content.size, from + length) });
+      editor.commands.focus();
+    } catch {
+      target.focus();
+    }
   }, [editor, scrollAnchor]);
 
   return (
-    <article className="rich-document-editor" onContextMenu={onContextMenu}>
+    <article
+      className="rich-document-editor"
+      onContextMenu={onContextMenu}
+      onClick={(event) => {
+        const marker = (event.target as HTMLElement).closest<HTMLElement>("[data-review-id]");
+        if (marker?.dataset.reviewId) setActiveReviewId(marker.dataset.reviewId);
+      }}
+    >
       <RichEditorToolbar editor={editor} />
+      {activeReview && <div className={`inline-review-popover ${activeReview.kind}`}><div><strong>{activeReview.kind === "revision" ? "待确认修订" : "正文批注"}</strong><span>{activeReview.status}</span><p>{activeReview.label}</p></div><button onClick={() => onOpenReview(activeReview)}>查看处理</button><button title="关闭" onClick={() => setActiveReviewId("")}><X size={14} /></button></div>}
       <div className="rich-page-shell" style={{ fontSize: `${fontSize}px`, lineHeight }}>
         <EditorContent editor={editor} />
       </div>
@@ -2019,6 +3325,11 @@ function RichEditorToolbar({ editor }: { editor: Editor | null }) {
             : activeEditor.isActive("heading", { level: 6 })
               ? "h6"
               : "paragraph";
+  const headings: Array<{ pos: number; label: string }> = [];
+  activeEditor.state.doc.descendants((node, pos) => {
+    if (node.type.name === "heading") headings.push({ pos, label: `${"　".repeat(Math.max(0, Number(node.attrs.level || 1) - 1))}${node.textContent || "未命名标题"}` });
+    return true;
+  });
 
   function run(command: () => void) {
     return (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -2046,6 +3357,10 @@ function RichEditorToolbar({ editor }: { editor: Editor | null }) {
         <option value="h4">标题 4</option>
         <option value="h5">标题 5</option>
         <option value="h6">标题 6</option>
+      </select>
+      <select title="跳转到文档标题" value="" onChange={(event) => { const pos = Number(event.target.value); if (!Number.isFinite(pos)) return; activeEditor.commands.setTextSelection(pos + 1); activeEditor.commands.focus(); scrollRichSelectionIntoView(activeEditor, pos + 1); }}>
+        <option value="">章节导航</option>
+        {headings.map((item) => <option key={`${item.pos}-${item.label}`} value={item.pos}>{item.label}</option>)}
       </select>
       <button title="正文" className={headingValue === "paragraph" ? "active" : ""} onMouseDown={run(() => activeEditor.chain().focus().setParagraph().run())}>
         <Pilcrow size={16} />
@@ -2078,6 +3393,15 @@ function RichEditorToolbar({ editor }: { editor: Editor | null }) {
       </button>
       <button title="编号列表" className={activeEditor.isActive("orderedList") ? "active" : ""} onMouseDown={run(() => activeEditor.chain().focus().toggleOrderedList().run())}>
         <ListOrdered size={17} />
+      </button>
+      <button title="插入场景分隔线" onMouseDown={run(() => activeEditor.chain().focus().setHorizontalRule().run())}>
+        <Minus size={17} />
+      </button>
+      <button title="当前段落上移" onMouseDown={run(() => { moveCurrentTopLevelBlock(activeEditor, -1); })}>
+        <ArrowUp size={17} />
+      </button>
+      <button title="当前段落下移" onMouseDown={run(() => { moveCurrentTopLevelBlock(activeEditor, 1); })}>
+        <ArrowDown size={17} />
       </button>
       <button title="左对齐" className={activeEditor.isActive({ textAlign: "left" }) ? "active" : ""} onMouseDown={run(() => activeEditor.chain().focus().setTextAlign("left").run())}>
         <AlignLeft size={17} />
@@ -2439,19 +3763,36 @@ function ChapterTree({
 function SidebarCreativeAdvisor({
   state,
   selectedChapterId,
+  selectedText,
+  selectedTextRevision,
   onStatus,
 }: {
   state: AppState;
   selectedChapterId: string;
+  selectedText: string;
+  selectedTextRevision: string;
   onStatus: (message: string) => void;
 }) {
   const [creativeMode, setCreativeMode] = useState<CreativeAdviceMode>("next");
   const [creativeFocus, setCreativeFocus] = useState("");
   const [creativeAdvice, setCreativeAdvice] = useState<CreativeAdviceResult | null>(null);
+  const [agentPlan, setAgentPlan] = useState<CreativeAgentRun | null>(null);
+  const [agentHistory, setAgentHistory] = useState<CreativeAgentRun[]>([]);
+  const [contextOverview, setContextOverview] = useState<StoryOverview | null>(null);
+  const [creativeContextIds, setCreativeContextIds] = useState<string[]>([]);
+  const [creativeIncludeSourceIds, setCreativeIncludeSourceIds] = useState<string[]>([]);
+  const [creativeExcludeSourceIds, setCreativeExcludeSourceIds] = useState<string[]>([]);
   const [advisorChapterId, setAdvisorChapterId] = useState(selectedChapterId || state.chapters[0]?.id || "");
   const [busy, setBusy] = useState(false);
+  const [permissionLevel, setPermissionLevel] = useState<AgentPermissionLevel>(state.config.agent.permissionLevel || "只读分析");
+  const [scopeType, setScopeType] = useState<AgentScopeType | "auto">("auto");
   const previousSelectedRef = useRef(selectedChapterId);
   const advisorChapter = state.chapters.find((chapter) => chapter.id === advisorChapterId) || state.chapters.find((chapter) => chapter.id === selectedChapterId) || state.chapters[0];
+  const advisorSources = useMemo(() => [
+    ...state.chapters.map((item) => ({ id: item.id, label: item.title, group: `${item.knowledgeRole || "正文"} / ${item.volume || "未分卷"}` })),
+    ...state.characters.map((item) => ({ id: item.id, label: item.name, group: `角色 / ${item.category || "未分类"}` })),
+    ...state.worldDocs.map((item) => ({ id: item.id, label: item.title, group: `世界 / ${item.category || "未分类"}` })),
+  ], [state.chapters, state.characters, state.worldDocs]);
 
   useEffect(() => {
     window.novelAPI
@@ -2460,11 +3801,21 @@ function SidebarCreativeAdvisor({
         if (snapshot.creativeAdvice) setCreativeAdvice(snapshot.creativeAdvice);
         if (snapshot.creativeOptions?.mode) setCreativeMode(snapshot.creativeOptions.mode);
         if (typeof snapshot.creativeOptions?.focus === "string") setCreativeFocus(snapshot.creativeOptions.focus);
+        if (Array.isArray(snapshot.creativeOptions?.contextIds)) setCreativeContextIds(snapshot.creativeOptions.contextIds);
+        if (Array.isArray(snapshot.creativeOptions?.includeSourceIds)) setCreativeIncludeSourceIds(snapshot.creativeOptions.includeSourceIds);
+        if (Array.isArray(snapshot.creativeOptions?.excludeSourceIds)) setCreativeExcludeSourceIds(snapshot.creativeOptions.excludeSourceIds);
+        if (["auto", "chapter", "volume", "book"].includes(String(snapshot.creativeOptions?.scopeType || ""))) setScopeType(snapshot.creativeOptions?.scopeType as AgentScopeType | "auto");
         if (snapshot.creativeOptions?.chapterId && state.chapters.some((chapter) => chapter.id === snapshot.creativeOptions?.chapterId)) {
           setAdvisorChapterId(snapshot.creativeOptions.chapterId);
         } else {
           setAdvisorChapterId(selectedChapterId || state.chapters[0]?.id || "");
         }
+      })
+      .catch(() => null);
+    void window.novelAPI.getCreativeWorkspace()
+      .then((workspace) => {
+        setAgentHistory(workspace.agentRuns);
+        setAgentPlan(workspace.agentRuns.find((item) => item.status === "待确认") || null);
       })
       .catch(() => null);
   }, [state.projectPath]);
@@ -2479,18 +3830,25 @@ function SidebarCreativeAdvisor({
   }, [selectedChapterId, state.chapters]);
 
   useEffect(() => {
+    if (!advisorChapter?.id) return;
+    void window.novelAPI.getStoryOverview({ chapterIds: [advisorChapter.id], factLimit: 40, characterLimit: 30, foreshadowLimit: 40 })
+      .then(setContextOverview)
+      .catch(() => setContextOverview(null));
+  }, [advisorChapter?.id, state.projectPath]);
+
+  useEffect(() => {
     const timer = window.setTimeout(() => {
       void window.novelAPI
         .saveAnalysisState({
           creativeAdvice: creativeAdvice || undefined,
-          creativeOptions: { mode: creativeMode, chapterId: advisorChapter?.id || advisorChapterId, focus: creativeFocus },
+          creativeOptions: { mode: creativeMode, chapterId: advisorChapter?.id || advisorChapterId, focus: creativeFocus, contextIds: creativeContextIds, includeSourceIds: creativeIncludeSourceIds, excludeSourceIds: creativeExcludeSourceIds, scopeType },
         })
         .catch(() => null);
     }, 700);
     return () => window.clearTimeout(timer);
-  }, [advisorChapter?.id, advisorChapterId, creativeAdvice, creativeFocus, creativeMode]);
+  }, [advisorChapter?.id, advisorChapterId, creativeAdvice, creativeContextIds, creativeExcludeSourceIds, creativeFocus, creativeIncludeSourceIds, creativeMode, scopeType]);
 
-  async function runCreativeAdvice(mode = creativeMode) {
+  async function prepareCreativeAdvice(mode = creativeMode) {
     const targetChapterId = advisorChapter?.id || selectedChapterId;
     if (!targetChapterId) {
       onStatus("请先选择一个章节或大纲文档。");
@@ -2498,18 +3856,77 @@ function SidebarCreativeAdvisor({
     }
     setCreativeMode(mode);
     setBusy(true);
-    onStatus("创作参谋正在整理建议...");
+    onStatus("正在预检参谋需要的资料与工具...");
     try {
-      const result = await window.novelAPI.getCreativeAdvice({ mode, chapterId: targetChapterId, focus: creativeFocus });
-      setCreativeAdvice(result);
-      setAdvisorChapterId(result.chapterId);
-      onStatus(result.apiError ? `已显示本地兜底建议：${result.apiError}` : `创作参谋已生成 ${result.items.length} 条建议`);
+      const plan = await window.novelAPI.prepareCreativeAgent({
+        mode,
+        chapterId: targetChapterId,
+        focus: creativeFocus,
+        contextIds: creativeContextIds,
+        includeSourceIds: creativeIncludeSourceIds,
+        excludeSourceIds: creativeExcludeSourceIds,
+        permissionLevel,
+        scopeType,
+        selectedText,
+        selectedTextRevision,
+      });
+      setAgentPlan(plan);
+      setAgentHistory((current) => [plan, ...current.filter((item) => item.id !== plan.id)].slice(0, 80));
+      onStatus("参谋计划已准备，请确认资料范围和预计 Token 后执行");
     } catch (error) {
-      onStatus(`生成创作建议失败：${error instanceof Error ? error.message : String(error)}`);
+      onStatus(`准备参谋计划失败：${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setBusy(false);
     }
   }
+
+  async function executeCreativeAdvice() {
+    if (!agentPlan) return;
+    setBusy(true);
+    onStatus("创作参谋正在按已确认计划执行...");
+    try {
+      const result = await window.novelAPI.executeCreativeAgent(agentPlan.id);
+      setAgentPlan(result.run);
+      setAgentHistory((current) => [result.run, ...current.filter((item) => item.id !== result.run.id)].slice(0, 80));
+      onStatus("创作 Agent 已进入后台任务，可继续编辑正文");
+    } catch (error) {
+      onStatus(`执行参谋计划失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function retryAgentTool(runId: string, tool: string) {
+    setBusy(true);
+    try {
+      const result = await window.novelAPI.retryCreativeAgentTool({ runId, tool });
+      setAgentPlan(result.run);
+      setAgentHistory((current) => [result.run, ...current.filter((item) => item.id !== result.run.id)].slice(0, 80));
+      onStatus("失败的 Agent 工具已重新进入任务中心");
+    } catch (error) {
+      onStatus(`重试工具失败：${getErrorMessage(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  useEffect(() => window.novelAPI.onTaskProgress((task) => {
+    if (task.type !== "agent-workflow") return;
+    const runId = String(task.options?.runId || "");
+    if (!runId || !agentHistory.some((item) => item.id === runId) && agentPlan?.id !== runId) return;
+    if (!["已完成", "失败", "已停止", "已中断"].includes(task.status)) return;
+    void window.novelAPI.getCreativeWorkspace().then((workspace) => {
+      const run = workspace.agentRuns.find((item) => item.id === runId);
+      if (!run) return;
+      setAgentPlan(run);
+      setAgentHistory((current) => [run, ...current.filter((item) => item.id !== run.id)].slice(0, 80));
+      if (run.result) {
+        setCreativeAdvice(run.result);
+        setAdvisorChapterId(run.chapterId);
+      }
+      onStatus(run.status === "已完成" ? "创作 Agent 已完成，结果已保留" : `创作 Agent ${run.status}，已完成的阶段结果仍然保留`);
+    }).catch((error) => onStatus(`刷新 Agent 结果失败：${getErrorMessage(error)}`));
+  }), [agentHistory, agentPlan?.id, onStatus]);
 
   async function saveAdviceAsMaterial(item: CreativeAdviceItem) {
     const section = (title: string, value: string | string[]) => {
@@ -2533,12 +3950,57 @@ ${item.summary}${section("为什么适合", item.rationale)}${section("收益", 
     }
   }
 
+  function toggleCreativeContext(id: string) {
+    setAgentPlan(null);
+    setCreativeContextIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id].slice(-60));
+  }
+
+  function addCreativeSourceRule(id: string, rule: "include" | "exclude") {
+    if (!id) return;
+    setAgentPlan(null);
+    if (rule === "include") {
+      setCreativeIncludeSourceIds((items) => [...new Set([...items, id])]);
+      setCreativeExcludeSourceIds((items) => items.filter((item) => item !== id));
+    } else {
+      setCreativeExcludeSourceIds((items) => [...new Set([...items, id])]);
+      setCreativeIncludeSourceIds((items) => items.filter((item) => item !== id));
+    }
+  }
+
+  async function addAdviceToBoard(item: CreativeAdviceItem) {
+    const chapterId = creativeAdvice?.chapterId || advisorChapter?.id;
+    if (!chapterId) return;
+    try {
+      let board = (await window.novelAPI.getChapterBoard(chapterId)).board;
+      if (!board) board = (await window.novelAPI.generateChapterBoard({ chapterId })).board;
+      const boardItemId = `beat_advice_${item.id}`;
+      if (board.items.some((candidate) => candidate.id === boardItemId)) {
+        onStatus("这条建议已经在下一章筹备板中");
+        return;
+      }
+      board.items.push({
+        id: boardItemId,
+        type: item.type,
+        title: item.title,
+        detail: `${item.summary}${item.suggestedUse ? `\n使用建议：${item.suggestedUse}` : ""}${item.risks.length ? `\n注意：${item.risks.join("；")}` : ""}`,
+        order: board.items.length,
+        locked: true,
+        completed: false,
+        sourceRefs: item.sourceRefs || [],
+      });
+      await window.novelAPI.saveChapterBoard({ board });
+      onStatus(`已加入下一章筹备板：${item.title}`);
+    } catch (error) {
+      onStatus(`加入筹备板失败：${getErrorMessage(error)}`);
+    }
+  }
+
   return (
     <div className="ai-advisor-panel">
       <div className="advisor-controls">
         <div className="advisor-mode-row">
           {CREATIVE_ADVICE_MODES.map((mode) => (
-            <button key={mode.value} className={creativeMode === mode.value ? "active" : ""} onClick={() => setCreativeMode(mode.value)}>
+            <button key={mode.value} className={creativeMode === mode.value ? "active" : ""} onClick={() => { setCreativeMode(mode.value); setAgentPlan(null); }}>
               {mode.label}
             </button>
           ))}
@@ -2546,7 +4008,7 @@ ${item.summary}${section("为什么适合", item.rationale)}${section("收益", 
         <div className="advisor-form-grid">
           <label>
             <span>参考文档</span>
-            <select value={advisorChapter?.id || ""} onChange={(event) => setAdvisorChapterId(event.target.value)}>
+            <select value={advisorChapter?.id || ""} onChange={(event) => { setAdvisorChapterId(event.target.value); setAgentPlan(null); }}>
               {state.chapters.map((chapter) => (
                 <option key={chapter.id} value={chapter.id}>
                   {chapter.volume || "未分卷"} / {chapter.title}
@@ -2558,27 +4020,87 @@ ${item.summary}${section("为什么适合", item.rationale)}${section("收益", 
             <span>当前关注</span>
             <textarea
               value={creativeFocus}
-              onChange={(event) => setCreativeFocus(event.target.value)}
+              onChange={(event) => { setCreativeFocus(event.target.value); setAgentPlan(null); }}
               placeholder="比如：下一章事件、人物动机、节奏、伏笔回收"
             />
           </label>
         </div>
+        <details className="advisor-context-picker">
+          <summary>指定参谋依据{creativeContextIds.length ? `（已选 ${creativeContextIds.length} 项）` : "（自动判断）"}</summary>
+          <div>
+            {!!contextOverview?.facts.length && <section><strong>剧情事实</strong>{contextOverview.facts.filter((item) => item.status !== "已忽略").slice(0, 16).map((item) => <label key={item.id}><input type="checkbox" checked={creativeContextIds.includes(item.id)} onChange={() => toggleCreativeContext(item.id)} /><span>{item.subject}：{item.object}</span></label>)}</section>}
+            {!!contextOverview?.characterStates.length && <section><strong>角色状态</strong>{contextOverview.characterStates.slice(0, 12).map((record) => record.latest && <label key={record.latest.id}><input type="checkbox" checked={creativeContextIds.includes(record.latest.id)} onChange={() => toggleCreativeContext(record.latest!.id)} /><span>{record.characterName}：{record.latest.location || "地点未记录"} / {record.latest.goals[0] || "目标未记录"}</span></label>)}</section>}
+            {!!contextOverview?.foreshadows.length && <section><strong>伏笔</strong>{contextOverview.foreshadows.filter((item) => !["已经回收", "已废弃"].includes(item.status)).slice(0, 16).map((item) => <label key={item.id}><input type="checkbox" checked={creativeContextIds.includes(item.id)} onChange={() => toggleCreativeContext(item.id)} /><span>{item.title}（{item.status}）</span></label>)}</section>}
+            {!contextOverview?.facts.length && !contextOverview?.characterStates.length && !contextOverview?.foreshadows.length && <span>当前文档还没有创作状态记录。</span>}
+          </div>
+        </details>
+        <details className="advisor-context-picker">
+          <summary>Agent 权限与选区</summary>
+          <div className="advisor-permission-row">
+            <label>
+              <span>分析范围</span>
+              <select value={scopeType} onChange={(event) => { setScopeType(event.target.value as AgentScopeType | "auto"); setAgentPlan(null); }}>
+                <option value="auto">自动推荐</option>
+                <option value="chapter">当前章节</option>
+                <option value="volume">当前分卷</option>
+                <option value="book">全书</option>
+              </select>
+            </label>
+            <label>
+              <span>本次权限</span>
+              <select value={permissionLevel} onChange={(event) => { setPermissionLevel(event.target.value as AgentPermissionLevel); setAgentPlan(null); }}>
+                <option value="只读分析">只读分析</option>
+                <option value="可创建规划">可创建规划</option>
+                <option value="可生成修订候选">可生成修订候选</option>
+              </select>
+            </label>
+            <span>{selectedText ? `已选中 ${countWords(selectedText)} 字` : "未选中文字"}；任何权限都不会直接覆盖正文</span>
+          </div>
+          <div className="advisor-source-rules">
+            <label><span>强制纳入资料</span><select value="" onChange={(event) => addCreativeSourceRule(event.target.value, "include")}><option value="">选择一份资料...</option>{advisorSources.filter((item) => !creativeIncludeSourceIds.includes(item.id)).map((item) => <option key={`include_${item.id}`} value={item.id}>{item.group} / {item.label}</option>)}</select></label>
+            <label><span>排除资料</span><select value="" onChange={(event) => addCreativeSourceRule(event.target.value, "exclude")}><option value="">选择一份资料...</option>{advisorSources.filter((item) => !creativeExcludeSourceIds.includes(item.id)).map((item) => <option key={`exclude_${item.id}`} value={item.id}>{item.group} / {item.label}</option>)}</select></label>
+            {(creativeIncludeSourceIds.length > 0 || creativeExcludeSourceIds.length > 0) && <div className="advisor-source-rule-chips">{creativeIncludeSourceIds.map((id) => { const source = advisorSources.find((item) => item.id === id); return <button key={`included_${id}`} onClick={() => setCreativeIncludeSourceIds((items) => items.filter((item) => item !== id))} title="点击取消强制纳入">纳入：{source?.label || id} ×</button>; })}{creativeExcludeSourceIds.map((id) => { const source = advisorSources.find((item) => item.id === id); return <button key={`excluded_${id}`} className="excluded" onClick={() => setCreativeExcludeSourceIds((items) => items.filter((item) => item !== id))} title="点击取消排除">排除：{source?.label || id} ×</button>; })}</div>}
+          </div>
+        </details>
         <div className="analysis-actions advisor-actions">
-          <button onClick={() => void runCreativeAdvice()} disabled={busy}>
+          <button onClick={() => void prepareCreativeAdvice()} disabled={busy} title="先检查资料范围和预计消耗，再由你确认执行">
             <Sparkles size={16} />
-            生成
-          </button>
-          <button onClick={() => void runCreativeAdvice("next")} disabled={busy}>
-            下一章
-          </button>
-          <button onClick={() => void runCreativeAdvice("plot")} disabled={busy}>
-            推剧情
-          </button>
-          <button onClick={() => void runCreativeAdvice("foreshadow")} disabled={busy}>
-            伏笔
+            {busy ? "正在处理" : "准备参谋计划"}
           </button>
         </div>
       </div>
+
+      {agentPlan?.status === "待确认" && (
+        <section className="agent-plan-review">
+          <header><strong>执行前确认</strong><span>{agentPlan.scopeLabel} / {agentPlan.permissionLevel} / 预计约 {agentPlan.retrievalAudit?.estimatedPromptTokens.toLocaleString() || 0} Token</span></header>
+          <div>{agentPlan.steps.map((step, index) => <p key={`${step.tool}_${index}`}><b>{index + 1}. {step.label}</b><span>{step.reason}</span></p>)}</div>
+          {!!agentPlan.retrievalAudit?.selectedSources.length && <details><summary>将读取 {agentPlan.retrievalAudit.selectedChunks} 个片段 / {agentPlan.retrievalAudit.selectedSources.length} 份资料</summary><span>{agentPlan.retrievalAudit.selectedSources.join("；")}</span></details>}
+          {agentPlan.retrievalAudit && <small>证据置信度 {agentPlan.retrievalAudit.evidenceConfidence || "未评估"}；首轮 {agentPlan.retrievalAudit.firstPassCount || agentPlan.retrievalAudit.selectedChunks}，第二轮补证 {agentPlan.retrievalAudit.secondPassCount || 0}</small>}
+          {!!agentPlan.retrievalAudit?.warnings.length && <p className="agent-plan-warning">{agentPlan.retrievalAudit.warnings.join("；")}</p>}
+          <footer><button onClick={() => setAgentPlan(null)}>取消</button><button className="primary" onClick={() => void executeCreativeAdvice()} disabled={busy}><Check size={14} />确认执行</button></footer>
+        </section>
+      )}
+
+      {agentPlan && (["等待中", "运行中", "已中断", "失败"].includes(agentPlan.status) || agentPlan.toolStates.some((item) => item.status === "失败")) && (
+        <details className="agent-workflow-progress" open={agentPlan.status === "运行中" || agentPlan.status === "失败" || agentPlan.toolStates.some((item) => item.status === "失败")}>
+          <summary>Agent 工作流：{agentPlan.status} / {agentPlan.scopeLabel}</summary>
+          <div>{(agentPlan.stageCheckpoints?.length ? agentPlan.stageCheckpoints : agentPlan.toolStates.map((item) => ({ id: item.tool, ...item }))).map((item) => (
+            <p key={item.id}>
+              <strong>{item.label}</strong>
+              <span>{item.status}{item.error ? `：${item.error}` : item.detail ? `：${item.detail}` : ""}</span>
+              {item.status === "失败" && item.id !== "creative_advisor" && <button disabled={busy} onClick={() => void retryAgentTool(agentPlan.id, item.id)}>重试</button>}
+            </p>
+          ))}</div>
+          {agentPlan.taskId && <small>停止或重试整个工作流请打开底部“任务”。</small>}
+        </details>
+      )}
+
+      {!!agentHistory.length && (
+        <details className="agent-history">
+          <summary>参谋历史（{agentHistory.length}）</summary>
+          <div>{agentHistory.slice(0, 12).map((run) => <button key={run.id} title={`回看${run.chapterTitle}的参谋结果`} disabled={!run.result} onClick={() => { if (run.result) { setCreativeAdvice(run.result); setAdvisorChapterId(run.chapterId); } }}><span>{run.chapterTitle}</span><small><span>{run.scopeLabel || "当前章节"} / {run.status}</span><time>{formatDateTime(run.updatedAt)}</time></small></button>)}</div>
+        </details>
+      )}
 
       {creativeAdvice ? (
         <>
@@ -2588,6 +4110,25 @@ ${item.summary}${section("为什么适合", item.rationale)}${section("收益", 
               {CREATIVE_ADVICE_MODES.find((mode) => mode.value === creativeAdvice.mode)?.label || "创作建议"} / {creativeAdvice.contextCount} 片段
             </span>
           </div>
+          {!!creativeAdvice.toolReport?.length && (
+            <details className="advisor-tool-report">
+              <summary>本次 Agent 查阅了 {creativeAdvice.toolReport.length} 项资料</summary>
+              {creativeAdvice.toolReport.map((item) => (
+                <p key={item.name}><strong>{item.name}</strong><span>{item.detail}</span></p>
+              ))}
+            </details>
+          )}
+          {creativeAdvice.retrievalAudit && (
+            <details className="advisor-tool-report">
+              <summary>检索审计：{creativeAdvice.retrievalAudit.selectedChunks} 个片段 / {creativeAdvice.retrievalAudit.selectedSources.length} 份资料</summary>
+              <p><strong>检索问题</strong><span>{creativeAdvice.retrievalAudit.query}</span></p>
+              <p><strong>资料范围</strong><span>{creativeAdvice.retrievalAudit.selectedSources.join("；") || "未命中"}</span></p>
+              <p><strong>分层记忆</strong><span>{creativeAdvice.retrievalAudit.memoryCount} 条</span></p>
+              <p><strong>证据覆盖</strong><span>{creativeAdvice.retrievalAudit.evidenceConfidence || "未评估"}；首轮 {creativeAdvice.retrievalAudit.firstPassCount || creativeAdvice.retrievalAudit.selectedChunks}，第二轮补证 {creativeAdvice.retrievalAudit.secondPassCount || 0}</span></p>
+              {!!creativeAdvice.retrievalAudit.uncoveredTargets?.length && <p><strong>仍缺证据</strong><span>{creativeAdvice.retrievalAudit.uncoveredTargets.join("；")}</span></p>}
+              {!!creativeAdvice.retrievalAudit.warnings.length && <p><strong>提醒</strong><span>{creativeAdvice.retrievalAudit.warnings.join("；")}</span></p>}
+            </details>
+          )}
           {creativeAdvice.apiError && <div className="advisor-notice">AI 接口暂时不可用，下面显示本地兜底建议。</div>}
           <div className="advisor-card-grid">
             {creativeAdvice.items.map((item) => (
@@ -2597,7 +4138,7 @@ ${item.summary}${section("为什么适合", item.rationale)}${section("收益", 
                     <small>{item.type} / {item.priority}</small>
                     <strong>{item.title}</strong>
                   </div>
-                  <button onClick={() => void saveAdviceAsMaterial(item)}>存素材</button>
+                  <div><button onClick={() => void addAdviceToBoard(item)}>加入筹备板</button><button onClick={() => void saveAdviceAsMaterial(item)}>存素材</button></div>
                 </header>
                 <p>{item.summary}</p>
                 {item.rationale && (
@@ -2638,6 +4179,7 @@ ${item.summary}${section("为什么适合", item.rationale)}${section("收益", 
                   </div>
                 )}
                 {item.suggestedUse && <em>{item.suggestedUse}</em>}
+                {!!item.sourceRefs?.length && <small className="advisor-evidence-count">依据 {item.sourceRefs.length} 处已选原文</small>}
               </article>
             ))}
           </div>
@@ -2658,7 +4200,11 @@ function ChatPanel({
   projectMemory,
   retrievalMode,
   selectedText,
+  generating,
+  progress,
   onSend,
+  onRetryWithSources,
+  onStop,
   onRetrievalModeChange,
   onClear,
   onNewSession,
@@ -2668,6 +4214,7 @@ function ChatPanel({
   onStatus,
   expanded,
   onToggleExpanded,
+  onOpenStoryCenter,
 }: {
   state: AppState;
   selectedChapterId: string;
@@ -2677,7 +4224,11 @@ function ChatPanel({
   projectMemory: string;
   retrievalMode: RetrievalMode;
   selectedText: string;
+  generating: boolean;
+  progress: { phase: string; streamedChars: number; retrieval?: RetrievalDiagnostics } | null;
   onSend: (question: string, retrievalMode: RetrievalMode) => void;
+  onRetryWithSources: (question: string, sourceIds: string[], retrievalMode: RetrievalMode) => void;
+  onStop: () => void;
   onRetrievalModeChange: (mode: RetrievalMode) => void;
   onClear: () => void;
   onNewSession: () => void;
@@ -2687,10 +4238,12 @@ function ChatPanel({
   onStatus: (message: string) => void;
   expanded: boolean;
   onToggleExpanded: () => void;
+  onOpenStoryCenter: () => void;
 }) {
   const [input, setInput] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState("");
   const [assistantTab, setAssistantTab] = useState<"chat" | "advisor">("chat");
+  const [supplementSourceByMessage, setSupplementSourceByMessage] = useState<Record<string, string>>({});
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -2729,6 +4282,26 @@ function ChatPanel({
       .join("；");
   }
 
+  function retryWithSupplement(message: ChatMessage) {
+    const sourceId = supplementSourceByMessage[message.id];
+    if (!sourceId) {
+      onStatus("请先选择要补读的文档。");
+      return;
+    }
+    const messageIndex = messages.findIndex((item) => item.id === message.id);
+    const previousQuestion = messages
+      .slice(0, Math.max(0, messageIndex))
+      .reverse()
+      .find((item) => item.role === "user")
+      ?.content.split("\n\n【选中文字】")[0]
+      .trim();
+    if (!previousQuestion) {
+      onStatus("没有找到这条回答对应的问题。");
+      return;
+    }
+    onRetryWithSources(previousQuestion, [sourceId], retrievalMode);
+  }
+
   return (
     <aside className={`right-pane ${expanded ? "expanded" : ""}`}>
       <div className="chat-header">
@@ -2737,10 +4310,13 @@ function ChatPanel({
           <span>AI 助手</span>
         </div>
         <div className="chat-header-actions">
+          <button title="打开创作状态" onClick={onOpenStoryCenter}>
+            <Activity size={16} />
+          </button>
           <button title={expanded ? "收起 AI 阅读区" : "展开 AI 阅读区"} onClick={onToggleExpanded}>
             {expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
           </button>
-          <button title="清空当前对话" onClick={onClear}>
+          <button title="清空当前对话" onClick={onClear} disabled={generating}>
             <Trash2 size={16} />
           </button>
         </div>
@@ -2760,31 +4336,21 @@ function ChatPanel({
       {assistantTab === "chat" ? (
         <div className="chat-stack">
           <div className="chat-session-bar">
-            <select value={activeSessionId} onChange={(event) => onSwitchSession(event.target.value)} title="切换 AI 会话">
+            <select value={activeSessionId} onChange={(event) => onSwitchSession(event.target.value)} title="切换 AI 会话" disabled={generating}>
               {sessions.map((session) => (
                 <option key={session.id} value={session.id}>
                   {session.title || "新会话"} · {formatDateTime(session.updatedAt)}
                 </option>
               ))}
             </select>
-            <button onClick={onNewSession} title="新建 AI 会话">
+            <button onClick={onNewSession} title="新建 AI 会话" disabled={generating}>
               新会话
             </button>
           </div>
 
           <details className="chat-memory-box">
-            <summary>项目 AI 记忆</summary>
-            <textarea
-              value={projectMemory}
-              maxLength={3000}
-              onChange={(event) => onProjectMemoryChange(event.target.value)}
-              placeholder="写下需要跨会话保留的项目内背景、偏好或已确认结论。建议简短，越短越省 token。"
-            />
-            <small>{projectMemory.length}/3000 字</small>
-          </details>
-
-          <div className="retrieval-mode-bar">
-            <label>
+            <summary>AI 范围与记忆</summary>
+            <label className="chat-option-row">
               <span>检索模式</span>
               <select value={retrievalMode} onChange={(event) => onRetrievalModeChange(event.target.value as RetrievalMode)} title="默认自动判断，必要时可手动指定">
                 {RETRIEVAL_MODE_OPTIONS.map((item) => (
@@ -2794,7 +4360,14 @@ function ChatPanel({
                 ))}
               </select>
             </label>
-          </div>
+            <textarea
+              value={projectMemory}
+              maxLength={3000}
+              onChange={(event) => onProjectMemoryChange(event.target.value)}
+              placeholder="写下需要跨会话保留的项目内背景、偏好或已确认结论。建议简短，越短越省 token。"
+            />
+            <small>{projectMemory.length}/3000 字</small>
+          </details>
 
           <details className="quick-prompts-box">
             <summary>常用提问</summary>
@@ -2808,6 +4381,23 @@ function ChatPanel({
           </details>
 
           <div className="selected-note">{selectedText ? `已选中 ${selectedText.length} 字，可随问题发送。` : "选中正文后右键可向 AI 提问。"}</div>
+
+          {progress && (generating || progress.phase === "已停止，内容已保留") && (
+            <details className="ai-progress-strip" open={generating}>
+              <summary>
+                <span>{progress.phase}</span>
+                <small>{progress.streamedChars ? `${progress.streamedChars.toLocaleString()} 字` : ""}</small>
+              </summary>
+              {progress.retrieval && (
+                <div>
+                  <span>{progress.retrieval.modeLabel}</span>
+                  <span>候选 {progress.retrieval.candidateCount}</span>
+                  <span>发送 {progress.retrieval.contextCount}</span>
+                  <span>{progress.retrieval.layersUsed?.join(" + ") || "原始片段"}</span>
+                </div>
+              )}
+            </details>
+          )}
 
           <div className="messages" ref={scrollRef}>
             {messages.length === 0 && (
@@ -2839,8 +4429,54 @@ function ChatPanel({
                       <span>命中文档：{message.retrieval.documentCount}</span>
                       <span>目录兜底：{message.retrieval.catalogUsed ? "已使用" : "未使用"}</span>
                       <span>分类占比：{formatCategoryCounts(message.retrieval.categoryCounts) || "无"}</span>
+                      <span>知识层级：{message.retrieval.layersUsed?.join(" + ") || "原始片段"}</span>
+                      <span>证据覆盖：{message.retrieval.evidenceConfidence || "未评估"}{typeof message.retrieval.evidenceCoverageRatio === "number" ? ` / ${Math.round(message.retrieval.evidenceCoverageRatio * 100)}%` : ""}</span>
+                      <span>两轮检索：首轮 {message.retrieval.firstPassCount || message.retrieval.contextCount} / 补证 {message.retrieval.secondPassCount || 0}</span>
+                      {message.retrieval.freshness && <span>索引预检：更新 {message.retrieval.freshness.repairedSourceCount} / 延后 {message.retrieval.freshness.deferredSourceCount}</span>}
+                      {!!message.retrieval.rawChapterCoverage?.total && (
+                        <span>正文原文：{message.retrieval.rawChapterCoverage.selected}/{message.retrieval.rawChapterCoverage.total} 章</span>
+                      )}
+                      {!!message.retrieval.coverageByVolume?.length && <span>分卷覆盖：{message.retrieval.coverageByVolume.length} 组</span>}
                     </div>
                     {message.retrieval.notes.length > 0 && <p className="retrieval-note">{message.retrieval.notes.join("；")}</p>}
+                    {!!message.retrieval.subQueries?.length && (
+                      <details className="retrieval-audit-details">
+                        <summary>检索子问题（{message.retrieval.subQueries.length}）</summary>
+                        <div>{message.retrieval.subQueries.map((item) => <p key={item.id}><strong>{item.label}</strong><span>{item.query}</span></p>)}</div>
+                      </details>
+                    )}
+                    {!!message.retrieval.coverageByVolume?.length && (
+                      <details className="retrieval-audit-details">
+                        <summary>分卷与分类覆盖</summary>
+                        <div>{message.retrieval.coverageByVolume.map((item) => (
+                          <p key={item.volume}>
+                            <strong>{item.volume}</strong>
+                            <span>原文 {item.selectedSources}/{item.indexedSources} 份，{item.selectedChunks} 个片段；分组摘要{item.summaryAvailable ? "已读取" : "不可用"}</span>
+                          </p>
+                        ))}</div>
+                        {!!message.retrieval.coverageWarnings?.length && <small>{message.retrieval.coverageWarnings.join("；")}</small>}
+                      </details>
+                    )}
+                    {!!message.retrieval.selectedSourceReasons?.length && (
+                      <details className="retrieval-audit-details">
+                        <summary>为什么读取这些资料</summary>
+                        <div>{message.retrieval.selectedSourceReasons.slice(0, 60).map((item) => (
+                          <p key={item.sourceId}><strong>{item.group} / {item.title}</strong><span>{item.reasons.join("、")}；{item.chunks} 个片段</span></p>
+                        ))}</div>
+                      </details>
+                    )}
+                    {!!message.retrieval.uncoveredTargets?.length && (
+                      <div className="retrieval-list">
+                        <strong>证据仍不足</strong>
+                        <span>{message.retrieval.uncoveredTargets.join("；")}</span>
+                      </div>
+                    )}
+                    {!!message.retrieval.addedSources?.length && (
+                      <div className="retrieval-list">
+                        <strong>第二轮补读</strong>
+                        <span>{message.retrieval.addedSources.join("；")}</span>
+                      </div>
+                    )}
                     {message.retrieval.includedTitles.length > 0 && (
                       <div className="retrieval-list">
                         <strong>本次读取</strong>
@@ -2851,6 +4487,22 @@ function ChatPanel({
                       <div className="retrieval-list">
                         <strong>目录存在但未读原文</strong>
                         <span>{message.retrieval.existingButNotRead.slice(0, 36).join("；")}</span>
+                      </div>
+                    )}
+                    {!!message.retrieval.existingButNotReadSources?.length && (
+                      <div className="retrieval-supplement">
+                        <select
+                          value={supplementSourceByMessage[message.id] || ""}
+                          onChange={(event) => setSupplementSourceByMessage((current) => ({ ...current, [message.id]: event.target.value }))}
+                        >
+                          <option value="">补选一个未读文档...</option>
+                          {message.retrieval.existingButNotReadSources.map((source) => (
+                            <option key={source.sourceId} value={source.sourceId}>
+                              {source.group} / {source.title}
+                            </option>
+                          ))}
+                        </select>
+                        <button onClick={() => retryWithSupplement(message)} disabled={generating}>补读后重问</button>
                       </div>
                     )}
                   </details>
@@ -2882,13 +4534,13 @@ function ChatPanel({
                 if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) submit();
               }}
             />
-            <button title="发送" onClick={submit}>
-              <Send size={18} />
+            <button title={generating ? "停止生成" : "发送"} onClick={generating ? onStop : submit} className={generating ? "stop" : ""}>
+              {generating ? <Square size={17} /> : <Send size={18} />}
             </button>
           </div>
         </div>
       ) : (
-        <SidebarCreativeAdvisor state={state} selectedChapterId={selectedChapterId} onStatus={onStatus} />
+        <SidebarCreativeAdvisor state={state} selectedChapterId={selectedChapterId} selectedText={selectedText} selectedTextRevision={state.chapterRevision || ""} onStatus={onStatus} />
       )}
     </aside>
   );
@@ -2919,6 +4571,10 @@ function KnowledgeOrganizer({
   const [filter, setFilter] = useState("");
   const [roleFilter, setRoleFilter] = useState<KnowledgeRole | "全部">("全部");
   const [saving, setSaving] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<KnowledgeSyncStatus | null>(null);
+  const [healthReport, setHealthReport] = useState<ProjectHealthReport | null>(null);
+  const [maintenance, setMaintenance] = useState<MaintenanceDiagnostics | null>(null);
+  const [checking, setChecking] = useState(false);
   const volumes = useMemo(() => [...new Set(items.map((item) => item.volume || "未分卷"))].sort((a, b) => a.localeCompare(b, "zh-CN")), [items]);
   const visibleItems = useMemo(() => {
     const keyword = filter.trim().toLowerCase();
@@ -2935,11 +4591,77 @@ function KnowledgeOrganizer({
   }, [visibleItems]);
 
   useEffect(() => {
-    window.novelAPI
-      .listKnowledgeItems()
-      .then((result) => setItems(result.items))
+    Promise.all([window.novelAPI.listKnowledgeItems(), window.novelAPI.getKnowledgeStatus(), window.novelAPI.getProjectHealth(), window.novelAPI.getMaintenanceDiagnostics()])
+      .then(([result, status, health, diagnostics]) => {
+        setItems(result.items);
+        setSyncStatus(status);
+        setHealthReport(health);
+        setMaintenance(diagnostics);
+      })
       .catch((error) => onStatus(`读取知识库整理信息失败：${error instanceof Error ? error.message : String(error)}`));
   }, [state.projectPath]);
+
+  async function checkKnowledge() {
+    setChecking(true);
+    try {
+      const [status, health, diagnostics] = await Promise.all([window.novelAPI.getKnowledgeStatus(), window.novelAPI.getProjectHealth(), window.novelAPI.getMaintenanceDiagnostics()]);
+      setSyncStatus(status);
+      setHealthReport(health);
+      setMaintenance(diagnostics);
+      onStatus(`检查完成：${status.counts.synced}/${status.counts.total} 份资料已同步，${health.issues.length} 个章节结构提示，${diagnostics.issues.length} 个维护提示`);
+    } catch (error) {
+      onStatus(`检查失败：${getErrorMessage(error)}`);
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  async function repairKnowledge() {
+    setChecking(true);
+    onStatus("正在增量补齐知识库...");
+    try {
+      const result = await window.novelAPI.repairKnowledge();
+      setSyncStatus(result.status);
+      onApplyState(result.state);
+      setItems((await window.novelAPI.listKnowledgeItems()).items);
+      onStatus(`知识库已补齐：${result.status.counts.synced}/${result.status.counts.total} 份资料已同步`);
+    } catch (error) {
+      onStatus(`补齐知识库失败：${getErrorMessage(error)}`);
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  async function repairHealth() {
+    if (!window.confirm("将自动拆分共用文件，并尝试从最新历史版本恢复缺失章节。当前内容不会被无提示覆盖。继续吗？")) return;
+    setChecking(true);
+    try {
+      const result = await window.novelAPI.repairProjectHealth();
+      setHealthReport(result.health);
+      onApplyState(result.state);
+      onStatus(result.health.healthy ? "章节健康修复完成，未发现高风险问题" : "自动修复完成，仍有问题需要人工确认");
+    } catch (error) {
+      onStatus(`章节健康修复失败：${getErrorMessage(error)}`);
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  async function repairMaintenance() {
+    setChecking(true);
+    onStatus("正在校验并修复索引与检索缓存...");
+    try {
+      const result = await window.novelAPI.repairMaintenance();
+      setMaintenance(result.diagnostics);
+      setSyncStatus(result.status);
+      onApplyState(result.state);
+      onStatus(result.diagnostics.healthy ? "索引与检索缓存维护完成" : `维护完成，仍有 ${result.diagnostics.issues.length} 项需要确认`);
+    } catch (error) {
+      onStatus(`维护失败：${getErrorMessage(error)}`);
+    } finally {
+      setChecking(false);
+    }
+  }
 
   function updateItem(id: string, patch: Partial<KnowledgeItem>) {
     setItems((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)));
@@ -2957,6 +4679,7 @@ function KnowledgeOrganizer({
       const result = await window.novelAPI.updateKnowledgeItems({ items });
       setItems(result.items);
       onApplyState(result.state);
+      setSyncStatus(await window.novelAPI.getKnowledgeStatus());
       onStatus(`知识库整理完成：${result.items.length} 个文档已同步到目录树`);
     } catch (error) {
       onStatus(`保存知识库分类失败：${error instanceof Error ? error.message : String(error)}`);
@@ -2977,6 +4700,46 @@ function KnowledgeOrganizer({
           保存整理
         </button>
       </header>
+      <details className="knowledge-status-panel">
+        <summary>
+          <span className="knowledge-sync-primary">
+            <span className={`sync-dot ${syncStatus?.counts.errors ? "error" : syncStatus?.counts.pending ? "pending" : "ok"}`} />
+            <strong>{syncStatus ? `知识库 ${syncStatus.counts.synced}/${syncStatus.counts.total} 已同步` : "正在读取知识库状态"}</strong>
+          </span>
+          {syncStatus && <span className="knowledge-status-meta">文档摘要 {syncStatus.hierarchy.sourceSummaries} / 分组摘要 {syncStatus.hierarchy.volumeSummaries} / 全书摘要 {syncStatus.hierarchy.hasBookSummary ? "可用" : "待建立"}</span>}
+          {healthReport && <span className="knowledge-status-meta">章节健康：{healthReport.healthy ? "正常" : `${healthReport.issues.length} 项待确认`}</span>}
+          {maintenance && <span className="knowledge-status-meta">检索维护：{maintenance.healthy ? "正常" : `${maintenance.issues.length} 项提示`}</span>}
+        </summary>
+        <div className="knowledge-status-actions">
+          <button onClick={() => void checkKnowledge()} disabled={checking}><RefreshCcw size={14} />重新检查</button>
+          <button onClick={() => void repairKnowledge()} disabled={checking || !syncStatus?.counts.pending}>补齐未同步资料</button>
+          <button onClick={() => void repairHealth()} disabled={checking || !healthReport?.issues.some((item) => item.repairable)}>修复可恢复问题</button>
+          <button onClick={() => void repairMaintenance()} disabled={checking}><Activity size={14} />修复索引与缓存</button>
+        </div>
+        {!!syncStatus?.items.some((item) => !["已同步", "空文档"].includes(item.status)) && (
+          <div className="knowledge-status-list">
+            {syncStatus.items.filter((item) => !["已同步", "空文档"].includes(item.status)).slice(0, 80).map((item) => (
+              <span key={item.sourceId}><strong>{item.status}</strong> {item.group} / {item.title}：{item.detail}</span>
+            ))}
+          </div>
+        )}
+        {!!healthReport?.issues.length && (
+          <div className="knowledge-status-list health">
+            {healthReport.issues.slice(0, 50).map((item, index) => (
+              <span key={`${item.code}_${index}`}><strong>{item.severity}</strong> {item.title}：{item.detail}</span>
+            ))}
+          </div>
+        )}
+        {maintenance && (
+          <div className="knowledge-status-list maintenance">
+            <span><strong>向量索引</strong> {maintenance.vectorIndex.sources} 份资料 / {maintenance.vectorIndex.chunks} 个片段</span>
+            <span><strong>分卷缓存</strong> {maintenance.retrievalCache.valid ? `正常，${maintenance.retrievalCache.groups} 组` : "需要刷新"}</span>
+            <span><strong>新鲜度缓存</strong> {maintenance.freshnessCache.entries} 份；过期资料 {maintenance.staleSourceCount} 份</span>
+            <span><strong>Agent</strong> 中断或失败 {maintenance.interruptedAgentRuns.length} 次；引用异常 {maintenance.invalidReferences.length} 条</span>
+            {maintenance.issues.map((item) => <span key={item}><strong>提示</strong> {item}</span>)}
+          </div>
+        )}
+      </details>
       <div className="knowledge-toolbar">
         <input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="搜索文档或分卷" />
         <select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value as KnowledgeRole | "全部")}>
@@ -2985,9 +4748,14 @@ function KnowledgeOrganizer({
           <option value="正文">正文</option>
           <option value="补充材料">补充材料</option>
         </select>
-        <button onClick={() => applyRoleToVisible("大纲")}>当前列表设为大纲</button>
-        <button onClick={() => applyRoleToVisible("正文")}>当前列表设为正文</button>
-        <button onClick={() => applyRoleToVisible("补充材料")}>当前列表设为补充材料</button>
+        <details className="knowledge-batch-actions">
+          <summary>批量设置</summary>
+          <div>
+            <button onClick={() => applyRoleToVisible("大纲")}>设为大纲</button>
+            <button onClick={() => applyRoleToVisible("正文")}>设为正文</button>
+            <button onClick={() => applyRoleToVisible("补充材料")}>设为补充材料</button>
+          </div>
+        </details>
       </div>
       <div className="knowledge-list">
         {groupedItems.map(([volume, groupItems]) => (
@@ -2999,7 +4767,7 @@ function KnowledgeOrganizer({
             {groupItems.map((item) => (
               <article key={item.id} className="knowledge-row">
                 <div>
-                  <strong>{item.title}</strong>
+                  <strong>{item.title} <span className={`sync-label ${(syncStatus?.items.find((status) => status.sourceId === item.id)?.status || "").replace(/\s/g, "-")}`}>{syncStatus?.items.find((status) => status.sourceId === item.id)?.status || ""}</span></strong>
                   <small>{item.wordCount.toLocaleString()} 字 / {formatDateTime(item.updatedAt)}</small>
                 </div>
                 <label>
@@ -3044,7 +4812,12 @@ function AnalysisPanel({
   onSelectChapter: (chapterId: string) => void;
   onOpenSource: (result: GlobalSearchResult) => void;
   onExportBook: () => void;
-  onExportBookWithOptions: (options: { includeOutline?: boolean; includeCharacters?: boolean; includeWorld?: boolean }) => void;
+  onExportBookWithOptions: (options: {
+    includeOutline?: boolean;
+    includeMaterials?: boolean;
+    includeCharacters?: boolean;
+    includeWorld?: boolean;
+  }) => void;
   onApplyState: (state: AppState) => void;
   onStatus: (message: string) => void;
 }) {
@@ -3064,7 +4837,7 @@ function AnalysisPanel({
   const [selectedRelationNames, setSelectedRelationNames] = useState<string[]>([]);
   const [relationTypes, setRelationTypes] = useState<string[]>(["同盟", "敌对", "师徒", "亲属", "感情", "交易", "背叛"]);
   const [newRelationType, setNewRelationType] = useState("");
-  const [exportOptions, setExportOptions] = useState({ includeOutline: false, includeCharacters: false, includeWorld: false });
+  const [exportOptions, setExportOptions] = useState({ includeOutline: true, includeMaterials: true, includeCharacters: false, includeWorld: false });
   const [extractScope, setExtractScope] = useState<"book" | "chapter">("book");
   const [worldCandidates, setWorldCandidates] = useState<ExtractedWorldCandidate[]>([]);
   const [appearanceStats, setAppearanceStats] = useState<AppearanceStat[]>([]);
@@ -3079,6 +4852,10 @@ function AnalysisPanel({
   const [graphScale, setGraphScale] = useState(1);
   const [graphOffset, setGraphOffset] = useState({ x: 0, y: 0 });
   const [graphDragStart, setGraphDragStart] = useState<{ x: number; y: number; offsetX: number; offsetY: number } | null>(null);
+  const [graphNodeDrag, setGraphNodeDrag] = useState<{ startX: number; startY: number; positions: Record<string, { x: number; y: number }> } | null>(null);
+  const [graphSelection, setGraphSelection] = useState<{ startX: number; startY: number; currentX: number; currentY: number } | null>(null);
+  const [selectedGraphNodeIds, setSelectedGraphNodeIds] = useState<string[]>([]);
+  const [editingRelationEdgeId, setEditingRelationEdgeId] = useState("");
   const graphShellRef = useRef<HTMLDivElement | null>(null);
   const [consistencyChapterIds, setConsistencyChapterIds] = useState<string[]>([]);
   const [consistencySourceIds, setConsistencySourceIds] = useState<string[]>([]);
@@ -3147,7 +4924,17 @@ function AnalysisPanel({
     if (snapshot.consistency?.notice || snapshot.consistency?.apiError) setConsistencyNotice(snapshot.consistency.notice || `AI 暂时不可用，已显示本地检查结果：${snapshot.consistency.apiError}`);
     if (Array.isArray(snapshot.consistencyOptions?.chapterIds)) setConsistencyChapterIds(snapshot.consistencyOptions.chapterIds);
     if (Array.isArray(snapshot.consistencyOptions?.knowledgeSourceIds)) setConsistencySourceIds(snapshot.consistencyOptions.knowledgeSourceIds);
-    if (snapshot.exportOptions) setExportOptions({ includeOutline: false, includeCharacters: false, includeWorld: false, ...snapshot.exportOptions });
+    if (snapshot.exportOptions) {
+      const legacyOptions = snapshot.exportOptions.includeMaterials === undefined;
+      setExportOptions({
+        includeOutline: legacyOptions ? true : false,
+        includeMaterials: true,
+        includeCharacters: false,
+        includeWorld: false,
+        ...snapshot.exportOptions,
+        ...(legacyOptions ? { includeOutline: true, includeMaterials: true } : {}),
+      });
+    }
     if (snapshot.extractScope === "book" || snapshot.extractScope === "chapter") setExtractScope(snapshot.extractScope);
     if (Array.isArray(snapshot.worldCandidates)) setWorldCandidates(snapshot.worldCandidates);
     if (Array.isArray(snapshot.appearanceStats)) setAppearanceStats(snapshot.appearanceStats);
@@ -3285,10 +5072,18 @@ function AnalysisPanel({
         relationTypes,
         refresh: true,
       });
-      setRelationshipNodes(result.nodes);
-      setRelationshipEdges(result.edges);
+      const mergedNodes = result.nodes.map((node) => {
+        const saved = relationshipNodes.find((item) => item.id === node.id);
+        return saved ? { ...node, x: saved.x, y: saved.y, color: saved.color } : node;
+      });
+      const mergedEdges = result.edges.map((edge) => {
+        const saved = relationshipEdges.find((item) => item.id === edge.id);
+        return saved ? { ...edge, label: saved.label || edge.label, labelX: saved.labelX, labelY: saved.labelY, color: saved.color, direction: saved.direction } : edge;
+      });
+      setRelationshipNodes(mergedNodes);
+      setRelationshipEdges(mergedEdges);
       saveAnalysisDraft({
-        relationships: result,
+        relationships: { ...result, nodes: mergedNodes, edges: mergedEdges },
         relationshipOptions: {
           characterNames: selectedRelationNames,
           categoryFilter: relationCategoryFilter,
@@ -3392,6 +5187,22 @@ function AnalysisPanel({
       onStatus(`版本对比完成：新增 ${result.added} 行，删除 ${result.removed} 行`);
     } catch (error) {
       onStatus(`版本对比失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function restoreVersion() {
+    if (!selectedChapterId || !selectedVersionId) return;
+    if (!window.confirm("恢复后，当前内容会先自动保存为一个历史版本。确认恢复所选版本吗？")) return;
+    setBusy("restore-version");
+    try {
+      const result = await window.novelAPI.restoreChapterVersion({ chapterId: selectedChapterId, versionId: selectedVersionId });
+      onApplyState(result.state);
+      setVersionCompare(null);
+      onStatus(`已恢复 ${formatDateTime(result.restoredVersion.createdAt)} 的版本，恢复前内容也已备份`);
+    } catch (error) {
+      onStatus(`恢复版本失败：${getErrorMessage(error)}`);
     } finally {
       setBusy("");
     }
@@ -3540,12 +5351,24 @@ function AnalysisPanel({
     };
     placeSide(left, "left");
     placeSide(right, "right");
+    nodes.forEach((node) => {
+      if (!Number.isFinite(node.x) || !Number.isFinite(node.y)) return;
+      const current = positions.get(node.id);
+      if (current) positions.set(node.id, { ...current, x: Number(node.x), y: Number(node.y) });
+    });
     return { width, height, positions };
   }, [relationshipNodes, relationshipEdges]);
 
   function resetGraphView() {
     setGraphScale(1);
     setGraphOffset({ x: 0, y: 0 });
+  }
+
+  function autoLayoutGraph() {
+    setRelationshipNodes((items) => items.map(({ x: _x, y: _y, ...item }) => item));
+    setSelectedGraphNodeIds([]);
+    resetGraphView();
+    onStatus("关系图已重新自动布局");
   }
 
   function zoomGraphByWheel(deltaY: number) {
@@ -3575,10 +5398,35 @@ function AnalysisPanel({
     event.preventDefault();
     event.stopPropagation();
     if (event.button !== 0) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (event.shiftKey) {
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+      setGraphSelection({ startX: x, startY: y, currentX: x, currentY: y });
+      return;
+    }
     setGraphDragStart({ x: event.clientX, y: event.clientY, offsetX: graphOffset.x, offsetY: graphOffset.y });
   }
 
   function moveGraphPan(event: React.MouseEvent<HTMLDivElement>) {
+    if (graphNodeDrag) {
+      event.preventDefault();
+      event.stopPropagation();
+      const svg = graphShellRef.current?.querySelector("svg");
+      const ratio = svg ? graph.width / Math.max(1, svg.getBoundingClientRect().width) : 1;
+      const dx = ((event.clientX - graphNodeDrag.startX) * ratio) / graphScale;
+      const dy = ((event.clientY - graphNodeDrag.startY) * ratio) / graphScale;
+      setRelationshipNodes((items) => items.map((item) => {
+        const start = graphNodeDrag.positions[item.id];
+        return start ? { ...item, x: start.x + dx, y: start.y + dy } : item;
+      }));
+      return;
+    }
+    if (graphSelection) {
+      const rect = event.currentTarget.getBoundingClientRect();
+      setGraphSelection({ ...graphSelection, currentX: event.clientX - rect.left, currentY: event.clientY - rect.top });
+      return;
+    }
     if (!graphDragStart) return;
     event.preventDefault();
     event.stopPropagation();
@@ -3589,7 +5437,54 @@ function AnalysisPanel({
   }
 
   function stopGraphPan() {
+    if (graphSelection) {
+      const svg = graphShellRef.current?.querySelector("svg");
+      if (svg) {
+        const rect = svg.getBoundingClientRect();
+        const ratioX = graph.width / Math.max(1, rect.width);
+        const ratioY = graph.height / Math.max(1, rect.height);
+        const left = (Math.min(graphSelection.startX, graphSelection.currentX) * ratioX - graphOffset.x) / graphScale;
+        const right = (Math.max(graphSelection.startX, graphSelection.currentX) * ratioX - graphOffset.x) / graphScale;
+        const top = (Math.min(graphSelection.startY, graphSelection.currentY) * ratioY - graphOffset.y) / graphScale;
+        const bottom = (Math.max(graphSelection.startY, graphSelection.currentY) * ratioY - graphOffset.y) / graphScale;
+        setSelectedGraphNodeIds(relationshipNodes.filter((node) => { const position = graph.positions.get(node.id); return position && position.x >= left && position.x <= right && position.y >= top && position.y <= bottom; }).map((node) => node.id));
+      }
+    }
     setGraphDragStart(null);
+    setGraphNodeDrag(null);
+    setGraphSelection(null);
+  }
+
+  function startGraphNodeDrag(event: React.MouseEvent<SVGGElement>, nodeId: string) {
+    event.preventDefault();
+    event.stopPropagation();
+    const nextSelected = selectedGraphNodeIds.includes(nodeId) ? selectedGraphNodeIds : event.ctrlKey ? [...selectedGraphNodeIds, nodeId] : [nodeId];
+    setSelectedGraphNodeIds(nextSelected);
+    const positions = Object.fromEntries(nextSelected.map((id) => { const position = graph.positions.get(id); return [id, { x: position?.x || 0, y: position?.y || 0 }]; }));
+    setGraphNodeDrag({ startX: event.clientX, startY: event.clientY, positions });
+  }
+
+  async function saveRelationshipEdge(edge: RelationshipEdge) {
+    const label = String(edge.label || "关系").trim() || "关系";
+    setRelationshipEdges((items) => items.map((item) => item.id === edge.id ? { ...edge, label } : item));
+    const source = state.characters.find((card) => card.name === edge.source);
+    const target = state.characters.find((card) => card.name === edge.target);
+    try {
+      let nextState: AppState | null = null;
+      if (source) {
+        const line = `${target?.name || edge.target}：${label}`;
+        nextState = await window.novelAPI.saveCharacter({ ...source, relationships: source.relationships.includes(line) ? source.relationships : [source.relationships.trim(), line].filter(Boolean).join("\n") });
+      }
+      if (target) {
+        const line = `${source?.name || edge.source}：${label}`;
+        nextState = await window.novelAPI.saveCharacter({ ...target, relationships: target.relationships.includes(line) ? target.relationships : [target.relationships.trim(), line].filter(Boolean).join("\n") });
+      }
+      if (nextState) onApplyState(nextState);
+      setEditingRelationEdgeId("");
+      onStatus(`关系“${label}”已同步到角色卡`);
+    } catch (error) {
+      onStatus(`保存关系失败：${getErrorMessage(error)}`);
+    }
   }
 
   function toggleConsistencyChapter(chapterId: string) {
@@ -3774,7 +5669,7 @@ function AnalysisPanel({
             <>
               <div
                 ref={graphShellRef}
-                className={`relationship-graph-shell ${graphDragStart ? "dragging" : ""}`}
+                className={`relationship-graph-shell ${graphDragStart || graphNodeDrag ? "dragging" : ""}`}
                 onWheel={zoomGraph}
                 onMouseDown={startGraphPan}
                 onMouseMove={moveGraphPan}
@@ -3784,8 +5679,10 @@ function AnalysisPanel({
                 <div className="relationship-graph-tools">
                   <span>{Math.round(graphScale * 100)}%</span>
                   <button onMouseDown={(event) => event.stopPropagation()} onClick={resetGraphView}>重置视图</button>
+                  <button onMouseDown={(event) => event.stopPropagation()} onClick={autoLayoutGraph}>自动布局</button>
                 </div>
                 <svg className="relationship-graph" viewBox={`0 0 ${graph.width} ${graph.height}`} role="img">
+                  <defs><marker id="relationship-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" /></marker></defs>
                   <g transform={`translate(${graphOffset.x} ${graphOffset.y}) scale(${graphScale})`}>
                     {relationshipEdges.map((edge) => {
                       const source = graph.positions.get(edge.source);
@@ -3802,8 +5699,11 @@ function AnalysisPanel({
                             className="relationship-branch"
                             d={`M ${sourceAnchorX} ${source.y} C ${sourceAnchorX + (target.x >= source.x ? curve : -curve)} ${source.y}, ${targetAnchorX + (target.x >= source.x ? -curve : curve)} ${target.y}, ${targetAnchorX} ${target.y}`}
                             strokeWidth={Math.max(1.6, edge.weight / 2)}
+                            stroke={edge.color || undefined}
+                            markerEnd={["forward", "both"].includes(edge.direction || "none") ? "url(#relationship-arrow)" : undefined}
+                            markerStart={["backward", "both"].includes(edge.direction || "none") ? "url(#relationship-arrow)" : undefined}
                           />
-                          <text className="relationship-edge-label" x={labelX} y={labelY - 6} textAnchor="middle">
+                          <text className="relationship-edge-label" x={labelX} y={labelY - 6} textAnchor="middle" onMouseDown={(event) => event.stopPropagation()} onClick={() => setEditingRelationEdgeId(edge.id)}>
                             {edge.label || "关系"}
                           </text>
                           <title>{edge.evidence[0] || "来自角色关系或正文同场统计"}</title>
@@ -3814,8 +5714,8 @@ function AnalysisPanel({
                       const position = graph.positions.get(node.id);
                       if (!position) return null;
                       return (
-                        <g key={node.id} className={`relationship-node ${position.side}`}>
-                          <rect x={position.x - position.width / 2} y={position.y - position.height / 2} width={position.width} height={position.height} rx={8} />
+                        <g key={node.id} className={`relationship-node ${position.side} ${selectedGraphNodeIds.includes(node.id) ? "selected" : ""}`} onMouseDown={(event) => startGraphNodeDrag(event, node.id)}>
+                          <rect x={position.x - position.width / 2} y={position.y - position.height / 2} width={position.width} height={position.height} rx={8} style={node.color ? { fill: node.color } : undefined} />
                           <text x={position.x} y={position.y + 5} textAnchor="middle">
                             {node.name}
                           </text>
@@ -3825,6 +5725,8 @@ function AnalysisPanel({
                     })}
                   </g>
                 </svg>
+                {graphSelection && <div className="graph-selection-box" style={{ left: Math.min(graphSelection.startX, graphSelection.currentX), top: Math.min(graphSelection.startY, graphSelection.currentY), width: Math.abs(graphSelection.currentX - graphSelection.startX), height: Math.abs(graphSelection.currentY - graphSelection.startY) }} />}
+                {editingRelationEdgeId && (() => { const edge = relationshipEdges.find((item) => item.id === editingRelationEdgeId); if (!edge) return null; return <div className="graph-edge-editor" onMouseDown={(event) => event.stopPropagation()}><strong>{edge.source} / {edge.target}</strong><input value={edge.label} onChange={(event) => setRelationshipEdges((items) => items.map((item) => item.id === edge.id ? { ...item, label: event.target.value } : item))} placeholder="关系类型" /><input type="color" title="连线颜色" value={edge.color || "#64748b"} onChange={(event) => setRelationshipEdges((items) => items.map((item) => item.id === edge.id ? { ...item, color: event.target.value } : item))} /><select value={edge.direction || "none"} onChange={(event) => setRelationshipEdges((items) => items.map((item) => item.id === edge.id ? { ...item, direction: event.target.value as RelationshipEdge["direction"] } : item))}><option value="none">无方向</option><option value="forward">正向</option><option value="backward">反向</option><option value="both">双向</option></select><button onClick={() => void saveRelationshipEdge(relationshipEdges.find((item) => item.id === edge.id) || edge)}>保存并同步</button><button title="关闭" onClick={() => setEditingRelationEdgeId("")}><X size={14} /></button></div>; })()}
               </div>
               <div className="relationship-edges">
                 {relationshipEdges.slice(0, 24).map((edge) => (
@@ -3934,6 +5836,9 @@ function AnalysisPanel({
             <button onClick={() => void compareVersion()} disabled={!selectedVersionId || busy === "compare"}>
               对比当前版本
             </button>
+            <button onClick={() => void restoreVersion()} disabled={!selectedVersionId || busy === "restore-version"}>
+              恢复此版本
+            </button>
           </div>
           {versionCompare ? (
             <div className="diff-view">
@@ -3959,10 +5864,14 @@ function AnalysisPanel({
           <div className="tool-grid">
             <div className="tool-card">
               <FileDown size={22} />
-              <strong>导出整书 DOCX</strong>
+              <strong>按文档批量导出 DOCX</strong>
               <label>
                 <input type="checkbox" checked={exportOptions.includeOutline} onChange={(event) => setExportOptions((value) => ({ ...value, includeOutline: event.target.checked }))} />
                 带大纲
+              </label>
+              <label>
+                <input type="checkbox" checked={exportOptions.includeMaterials} onChange={(event) => setExportOptions((value) => ({ ...value, includeMaterials: event.target.checked }))} />
+                带补充材料
               </label>
               <label>
                 <input type="checkbox" checked={exportOptions.includeCharacters} onChange={(event) => setExportOptions((value) => ({ ...value, includeCharacters: event.target.checked }))} />
@@ -3972,7 +5881,7 @@ function AnalysisPanel({
                 <input type="checkbox" checked={exportOptions.includeWorld} onChange={(event) => setExportOptions((value) => ({ ...value, includeWorld: event.target.checked }))} />
                 带世界观资料
               </label>
-              <button onClick={() => onExportBookWithOptions(exportOptions)}>开始导出</button>
+              <button onClick={() => onExportBookWithOptions(exportOptions)}>按选项逐篇导出</button>
               <button onClick={() => onExportBook()}>只导出正文</button>
             </div>
             <div className="tool-card">
@@ -4460,6 +6369,9 @@ function SettingsModal({
   const [draft, setDraft] = useState(state.config);
   const [saving, setSaving] = useState(false);
   const [errorText, setErrorText] = useState("");
+  const [securityStatus, setSecurityStatus] = useState("");
+  const [securityBusy, setSecurityBusy] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<Awaited<ReturnType<typeof window.novelAPI.checkForUpdate>> | null>(null);
   const provider = draft.api.provider;
 
   function updateApi<K extends keyof typeof draft.api>(key: K, value: (typeof draft.api)[K]) {
@@ -4468,6 +6380,10 @@ function SettingsModal({
 
   function updateUi<K extends keyof typeof draft.ui>(key: K, value: (typeof draft.ui)[K]) {
     setDraft((config) => ({ ...config, ui: { ...config.ui, [key]: value } }));
+  }
+
+  function updateAgent<K extends keyof typeof draft.agent>(key: K, value: (typeof draft.agent)[K]) {
+    setDraft((config) => ({ ...config, agent: { ...config.agent, [key]: value } }));
   }
 
   async function save() {
@@ -4490,6 +6406,47 @@ function SettingsModal({
       setErrorText(`保存设置失败：${getErrorMessage(error)}`);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function checkUpdate() {
+    setSecurityBusy(true);
+    setSecurityStatus("正在检查 GitHub 发布版本...");
+    try {
+      const result = await window.novelAPI.checkForUpdate();
+      setUpdateInfo(result);
+      setSecurityStatus(result.updateAvailable ? `发现新版本 ${result.latestVersion}` : `当前 ${result.currentVersion} 已是最新公开版本`);
+    } catch (error) {
+      setSecurityStatus(`检查更新失败：${getErrorMessage(error)}`);
+    } finally {
+      setSecurityBusy(false);
+    }
+  }
+
+  async function downloadUpdate() {
+    if (!updateInfo?.downloadUrl) return;
+    if (!window.confirm(`确认下载 ${updateInfo.releaseName} 吗？下载完成后仍会再次询问是否打开更新程序。`)) return;
+    setSecurityBusy(true);
+    try {
+      const result = await window.novelAPI.downloadUpdate({ url: updateInfo.downloadUrl, assetName: updateInfo.assetName });
+      if (!result.canceled) setSecurityStatus(`更新已下载：${result.filePath}`);
+    } catch (error) {
+      setSecurityStatus(`下载更新失败：${getErrorMessage(error)}`);
+    } finally {
+      setSecurityBusy(false);
+    }
+  }
+
+  async function scanPrivacy() {
+    setSecurityBusy(true);
+    setSecurityStatus("正在扫描发布输入文件...");
+    try {
+      const report = await window.novelAPI.scanReleasePrivacy();
+      setSecurityStatus(report.ok ? `隐私扫描通过：已检查 ${report.scannedFiles} 个发布输入文件` : `发现 ${report.findings.length} 个风险项：${report.findings.slice(0, 3).map((item) => `${item.file}:${item.line} ${item.label}`).join("；")}`);
+    } catch (error) {
+      setSecurityStatus(`隐私扫描失败：${getErrorMessage(error)}`);
+    } finally {
+      setSecurityBusy(false);
     }
   }
 
@@ -4626,11 +6583,51 @@ function SettingsModal({
             <input type="checkbox" checked={draft.ui.backupOnSave} onChange={(event) => updateUi("backupOnSave", event.target.checked)} />
             每次保存后自动备份
           </label>
+          <label className="checkbox-line">
+            <input type="checkbox" checked={draft.ui.recoveryEnabled !== false} onChange={(event) => updateUi("recoveryEnabled", event.target.checked)} />
+            保留异常退出恢复草稿和窗口状态
+          </label>
         </div>
+
+        <details className="settings-agent-panel">
+          <summary>创作 Agent 与数据保护</summary>
+          <div>
+            <label>
+              默认执行权限
+              <select value={draft.agent.permissionLevel} onChange={(event) => updateAgent("permissionLevel", event.target.value as AgentPermissionLevel)}>
+                <option value="只读分析">只读分析</option>
+                <option value="可创建规划">可创建规划和素材</option>
+                <option value="可生成修订候选">可生成待确认修订</option>
+              </select>
+            </label>
+            <label className="checkbox-line">
+              <input type="checkbox" checked={draft.agent.autoLocalAnalysis} onChange={(event) => updateAgent("autoLocalAnalysis", event.target.checked)} />
+              保存后自动更新本地剧情事实与角色状态
+            </label>
+            <label className="checkbox-line">
+              <input type="checkbox" checked={draft.agent.autoDeepAnalysis} onChange={(event) => updateAgent("autoDeepAnalysis", event.target.checked)} />
+              章节停止修改 45 秒后自动加入 AI 深度分析
+            </label>
+            <label className="checkbox-line">
+              <input type="checkbox" checked={draft.agent.snapshotBeforeBulkChanges} onChange={(event) => updateAgent("snapshotBeforeBulkChanges", event.target.checked)} />
+              批量导入或 AI 批量写入前自动创建项目快照
+            </label>
+          </div>
+        </details>
+
+        <details className="settings-agent-panel settings-security-panel">
+          <summary>发布、密钥与软件更新</summary>
+          <div>
+            <p>接口密钥：{draft.api.credentialStorage === "windows" ? "保存在 Windows 凭据管理器" : draft.api.credentialStorage === "legacy" ? "当前环境使用兼容存储" : "尚未保存"}{draft.api.credentialError ? `；凭据管理器提示：${draft.api.credentialError}` : ""}</p>
+            <div className="settings-security-actions"><button disabled={securityBusy} onClick={() => void checkUpdate()}>检查更新</button>{updateInfo?.updateAvailable && updateInfo.downloadUrl && <button className="primary" disabled={securityBusy} onClick={() => void downloadUpdate()}>下载 {updateInfo.latestVersion}</button>}<button disabled={securityBusy} onClick={() => void scanPrivacy()}>运行发布隐私扫描</button></div>
+            {securityStatus && <p className="settings-security-status">{securityStatus}</p>}
+            {updateInfo?.notes && <details><summary>版本说明</summary><pre>{updateInfo.notes}</pre></details>}
+          </div>
+        </details>
 
         <div className="settings-help">
           <strong>接口说明</strong>
-          <p>DeepSeek 推荐：接口地址 https://api.deepseek.com/v1，聊天模型 deepseek-chat。通义千问推荐：接口地址 https://dashscope.aliyuncs.com/compatible-mode/v1，聊天模型 qwen-plus。候选扫描上限表示本地最多先看多少片段，发送片段上限表示最多交给 AI 多少片段。长篇项目建议候选扫描 5000-20000，发送片段日常 80-180，全书分析再临时提高。DeepSeek、通义千问、OpenAI、Kimi、Ollama 和大多数中转接口使用 /chat/completions；Claude 使用 /v1/messages。向量接口使用 /embeddings。若不填向量接口密钥，软件会使用本地哈希向量作为临时索引。</p>
+          <p>DeepSeek 推荐：接口地址 https://api.deepseek.com/v1，聊天模型 deepseek-chat。通义千问推荐：接口地址 https://dashscope.aliyuncs.com/compatible-mode/v1，聊天模型 qwen-plus。候选扫描上限表示本地最多先看多少片段，发送片段上限表示最多交给 AI 多少片段。长篇项目建议候选扫描 5000-20000，发送片段日常 80-180，全书分析再临时提高。聊天问答会流式显示，默认不再因本地等待超时而中断；如果网络在生成中断开，已收到的内容会保留下来。DeepSeek、通义千问、OpenAI、Kimi、Ollama 和大多数中转接口使用 /chat/completions；Claude 使用 /v1/messages。向量接口使用 /embeddings。若不填向量接口密钥，软件会使用本地哈希向量作为临时索引。</p>
         </div>
 
         <footer>

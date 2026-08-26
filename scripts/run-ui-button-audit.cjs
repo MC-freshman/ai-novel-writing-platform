@@ -181,6 +181,18 @@ function auditFeatureCoverage() {
     ["知识库整理", /<KnowledgeOrganizer|知识库整理/],
     ["AI 对话", /<ChatPanel|AI 助手|askAI/],
     ["创作参谋", /创作参谋|getCreativeAdvice/],
+    ["Agent 自动工具", /章节规划器|toolStates|retryCreativeAgentTool/],
+    ["Agent 权限", /Agent 权限与选区|permissionLevel/],
+    ["剧情事实账本", /剧情事实|getStoryOverview/],
+    ["角色状态追踪", /角色状态|characterStates/],
+    ["伏笔管理", /等待回收|updateForeshadow/],
+    ["下一章筹备板", /下一章筹备|generateChapterBoard/],
+    ["后台任务中心", /后台任务|listTasks/],
+    ["任务暂停继续", /pauseTask|resumeTask/],
+    ["项目快照", /项目快照|createSnapshot/],
+    ["创作分支", /实验分支|switchBranch/],
+    ["长篇检索设置", /候选扫描上限|scanK/],
+    ["检索覆盖审计", /分卷与分类覆盖|selectedSourceReasons/],
     ["全局搜索", /全局搜索|globalSearch/],
     ["时间线", /时间线|buildTimeline/],
     ["关系网", /关系网|buildRelationshipGraph/],
@@ -203,7 +215,7 @@ function auditDuplicateLabels() {
     if (!key) continue;
     map.set(key, [...(map.get(key) || []), button.line]);
   }
-  const allowed = new Set(["关闭", "删除", "取消", "全选", "导出正文", "导出当前DOCX", "备份", "重建索引", "设置", "导入文档", "保存素材", "开始检查", "刷新关系网", "保存并加入知识库"]);
+  const allowed = new Set(["关闭", "删除", "取消", "全选", "保存", "编辑", "刷新", "重试", "继续显示（/）", "导出正文", "导出当前DOCX", "备份", "重建索引", "设置", "导入文档", "保存素材", "开始检查", "刷新关系网", "保存并加入知识库"]);
   const duplicates = [...map.entries()]
     .filter(([label, lines]) => lines.length > 1 && !allowed.has(label))
     .map(([label, lines]) => `${label}：第 ${lines.join("、")} 行`);

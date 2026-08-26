@@ -1,17 +1,41 @@
 const { app, BrowserWindow, dialog, ipcMain, Menu, shell } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs/promises");
-const { existsSync } = require("node:fs");
+const { createWriteStream, existsSync } = require("node:fs");
+const { Readable } = require("node:stream");
+const { pipeline } = require("node:stream/promises");
 const crypto = require("node:crypto");
 const { fileURLToPath, pathToFileURL } = require("node:url");
+const { toUSVString } = require("node:util");
 const AdmZip = require("adm-zip");
 const mammoth = require("mammoth");
 const { parse: parseHtml } = require("node-html-parser");
+const { writeJsonAtomic } = require("./services/project-storage.cjs");
+const storyState = require("./services/story-state.cjs");
+const { PersistentTaskCenter } = require("./services/task-center.cjs");
+const projectSnapshots = require("./services/project-snapshots.cjs");
+const vectorShards = require("./services/vector-shards.cjs");
+const creativeWorkspace = require("./services/creative-workspace.cjs");
+const operationJournal = require("./services/operation-journal.cjs");
+const projectMigrations = require("./services/project-migrations.cjs");
+const retrievalPlanner = require("./services/retrieval-planner.cjs");
+const novelAgent = require("./services/novel-agent.cjs");
+const knowledgeFreshness = require("./services/knowledge-freshness.cjs");
+const creativeStatistics = require("./services/creative-statistics.cjs");
+const windowsCredentials = require("./services/windows-credentials.cjs");
+const exchangeSecurity = require("./services/project-exchange-security.cjs");
+const docxFidelity = require("./services/docx-fidelity.cjs");
+const releasePrivacy = require("./services/release-privacy.cjs");
 const {
   AlignmentType,
+  CommentRangeEnd,
+  CommentRangeStart,
+  CommentReference,
+  DeletedTextRun,
   Document,
   HeadingLevel,
   ImageRun,
+  InsertedTextRun,
   Packer,
   Paragraph,
   Table,
@@ -33,7 +57,7 @@ const MAX_RETRIEVAL_SCAN_K = 50000;
 const DEFAULT_RETRIEVAL_SCAN_K = 5000;
 const CHAT_CONTEXT_MIN_CHUNKS = 30;
 const CHAT_CONTEXT_CHAR_BUDGET = 130000;
-const CHAT_API_TIMEOUT_MS = Number(process.env.NOVEL_CHAT_TIMEOUT_MS || 300000);
+const CHAT_API_TIMEOUT_MS = Number(process.env.NOVEL_CHAT_TIMEOUT_MS || 0);
 const CHAT_HISTORY_MESSAGE_MAX_CHARS = 3500;
 const CHAT_HISTORY_TOTAL_MAX_CHARS = 14000;
 const USER_QUESTION_SYSTEM_PREVIEW_CHARS = 1200;
@@ -41,10 +65,21 @@ const SELECTED_TEXT_PROMPT_MAX_CHARS = 12000;
 const STRUCTURING_CONTEXT_CHAR_BUDGET = 45000;
 const DEFAULT_CATEGORY = "未分类";
 const EMBEDDING_INDEX_CONCURRENCY = 4;
+const CREDENTIAL_CHAT_REF = "credential://windows/chat";
+const CREDENTIAL_EMBEDDING_REF = "credential://windows/embedding";
 
 let mainWindow;
 let currentProjectPath = "";
 let importCancelRequested = false;
+const activeAiRequests = new Map();
+const analysisSaveQueues = new Map();
+const projectTaskCenters = new Map();
+const deepAnalysisTimers = new Map();
+const chapterRevisionCache = new Map();
+const pendingExchangeImports = new Map();
+const projectSessions = new Map();
+const credentialSecretsCache = new Map();
+let gracefulShutdownStarted = false;
 
 function sendRendererEvent(channel, payload) {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -54,6 +89,36 @@ function sendRendererEvent(channel, payload) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+async function activateProjectSession(projectPath) {
+  const key = path.resolve(projectPath);
+  if (projectSessions.has(key)) return projectSessions.get(key);
+  for (const [otherPath, session] of projectSessions) {
+    await operationJournal.endSession(otherPath, session.id).catch(() => null);
+    projectSessions.delete(otherPath);
+  }
+  const result = await operationJournal.startSession(projectPath, app.getVersion?.() || "");
+  projectSessions.set(key, result.session);
+  return result.session;
+}
+
+async function finishProjectSessions() {
+  const entries = [...projectSessions.entries()];
+  projectSessions.clear();
+  await Promise.all(entries.map(([projectPath, session]) => operationJournal.endSession(projectPath, session.id).catch(() => null)));
+}
+
+async function withJournalOperation(projectPath, payload, action, summarize = () => null) {
+  const operation = await operationJournal.beginOperation(projectPath, payload);
+  try {
+    const result = await action(operation);
+    await operationJournal.completeOperation(projectPath, operation.id, summarize(result));
+    return result;
+  } catch (error) {
+    await operationJournal.failOperation(projectPath, operation.id, error).catch(() => null);
+    throw error;
+  }
 }
 
 function todayKey() {
@@ -84,11 +149,116 @@ function decodeSecret(value) {
   }
 }
 
+function runtimeSecret(apiConfig, kind = "chat") {
+  const runtimeKey = kind === "embedding" ? "__embeddingSecret" : "__chatSecret";
+  return String(apiConfig?.[runtimeKey] || decodeSecret(kind === "embedding" ? apiConfig?.embeddingApiKey : apiConfig?.apiKey) || "");
+}
+
+async function loadCredentialSecrets(projectPath, config) {
+  const cacheKey = path.resolve(projectPath);
+  const legacyChat = config.api.apiKey && config.api.apiKey !== CREDENTIAL_CHAT_REF ? decodeSecret(config.api.apiKey) : "";
+  const legacyEmbedding = config.api.embeddingApiKey && config.api.embeddingApiKey !== CREDENTIAL_EMBEDDING_REF ? decodeSecret(config.api.embeddingApiKey) : "";
+  if (process.env.NOVEL_PLATFORM_TEST === "1" || process.platform !== "win32") {
+    Object.defineProperty(config.api, "__chatSecret", { value: legacyChat, configurable: true, writable: true, enumerable: false });
+    Object.defineProperty(config.api, "__embeddingSecret", { value: legacyEmbedding, configurable: true, writable: true, enumerable: false });
+    return config;
+  }
+  let cached = credentialSecretsCache.get(cacheKey);
+  let credentialError = "";
+  try {
+    if (!cached) {
+      cached = {
+        chat: config.api.apiKey === CREDENTIAL_CHAT_REF ? await windowsCredentials.getSecret(projectPath, "chat") : legacyChat,
+        embedding: config.api.embeddingApiKey === CREDENTIAL_EMBEDDING_REF ? await windowsCredentials.getSecret(projectPath, "embedding") : legacyEmbedding,
+      };
+      if (legacyChat) {
+        await windowsCredentials.setSecret(projectPath, "chat", legacyChat);
+        config.api.apiKey = CREDENTIAL_CHAT_REF;
+      }
+      if (legacyEmbedding) {
+        await windowsCredentials.setSecret(projectPath, "embedding", legacyEmbedding);
+        config.api.embeddingApiKey = CREDENTIAL_EMBEDDING_REF;
+      }
+      credentialSecretsCache.set(cacheKey, cached);
+      if (legacyChat || legacyEmbedding) await writeJson(getConfigPath(projectPath), config);
+    }
+  } catch (error) {
+    credentialError = error?.message || String(error);
+    cached = cached || { chat: legacyChat, embedding: legacyEmbedding };
+  }
+  Object.defineProperty(config.api, "__chatSecret", { value: String(cached?.chat || ""), configurable: true, writable: true, enumerable: false });
+  Object.defineProperty(config.api, "__embeddingSecret", { value: String(cached?.embedding || ""), configurable: true, writable: true, enumerable: false });
+  Object.defineProperty(config.api, "__credentialError", { value: credentialError, configurable: true, writable: true, enumerable: false });
+  return config;
+}
+
+async function saveCredentialSecrets(projectPath, apiPatch = {}, existingConfig = null) {
+  const current = existingConfig?.api || {};
+  const chat = String(apiPatch.apiKey ?? runtimeSecret(current, "chat") ?? "");
+  const embedding = String(apiPatch.embeddingApiKey ?? runtimeSecret(current, "embedding") ?? "");
+  if (process.env.NOVEL_PLATFORM_TEST === "1" || process.platform !== "win32") return { chatRef: encodeSecret(chat), embeddingRef: encodeSecret(embedding), chat, embedding, storage: "legacy" };
+  await Promise.all([
+    chat ? windowsCredentials.setSecret(projectPath, "chat", chat) : windowsCredentials.deleteSecret(projectPath, "chat"),
+    embedding ? windowsCredentials.setSecret(projectPath, "embedding", embedding) : windowsCredentials.deleteSecret(projectPath, "embedding"),
+  ]);
+  credentialSecretsCache.set(path.resolve(projectPath), { chat, embedding });
+  return { chatRef: chat ? CREDENTIAL_CHAT_REF : "", embeddingRef: embedding ? CREDENTIAL_EMBEDDING_REF : "", chat, embedding, storage: "windows" };
+}
+
 function sanitizeFileName(name) {
   return String(name || "未命名")
     .replace(/[\\/:*?"<>|]/g, "_")
     .replace(/\s+/g, "_")
     .slice(0, 80);
+}
+
+function sanitizeExportPathSegment(value, fallback = "未分类") {
+  let segment = String(value || fallback)
+    .replace(/[\u0000-\u001f\\/:*?"<>|]/g, "_")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[. ]+$/g, "")
+    .slice(0, 80);
+  if (!segment || segment === "." || segment === "..") segment = fallback;
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i.test(segment)) segment = `_${segment}`;
+  return segment;
+}
+
+function exportCategorySegments(value, fallback = "未分类") {
+  const segments = String(value || "")
+    .split(/[\\/]+/)
+    .map((item) => item.trim())
+    .filter((item) => item && item !== "." && item !== "..")
+    .map((item) => sanitizeExportPathSegment(item, fallback));
+  return segments.length ? segments : [sanitizeExportPathSegment(fallback, "未分类")];
+}
+
+function exportTimestamp(date = new Date()) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}_${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+}
+
+async function createUniqueDirectory(parentDirectory, baseName) {
+  const safeBaseName = sanitizeExportPathSegment(baseName, "小说导出");
+  let directoryPath = path.join(parentDirectory, safeBaseName);
+  let index = 2;
+  while (existsSync(directoryPath)) {
+    directoryPath = path.join(parentDirectory, `${safeBaseName}_${index}`);
+    index += 1;
+  }
+  await fs.mkdir(directoryPath, { recursive: true });
+  return directoryPath;
+}
+
+async function uniqueExportFileName(directory, title, extension = ".docx") {
+  const safeTitle = sanitizeExportPathSegment(title, "未命名文档");
+  let fileName = `${safeTitle}${extension}`;
+  let index = 2;
+  while (existsSync(path.join(directory, fileName))) {
+    fileName = `${safeTitle}_${index}${extension}`;
+    index += 1;
+  }
+  return fileName;
 }
 
 function normalizeCategory(value) {
@@ -120,6 +290,34 @@ async function mapWithConcurrency(items, limit, mapper) {
   return results;
 }
 
+function sanitizeDocxText(value) {
+  return toUSVString(String(value || ""))
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\uFFFE\uFFFF]/g, "");
+}
+
+function stripWordBookmarkXml(xml) {
+  return String(xml || "")
+    .replace(/<w:bookmarkStart\b[^>]*\/>/g, "")
+    .replace(/<w:bookmarkStart\b[^>]*>[\s\S]*?<\/w:bookmarkStart>/g, "")
+    .replace(/<w:bookmarkEnd\b[^>]*\/>/g, "");
+}
+
+async function normalizeExportedDocxBuffer(buffer) {
+  const zip = new AdmZip(buffer);
+  let changed = false;
+  for (const entry of zip.getEntries()) {
+    if (!/^word\/(document|header\d+|footer\d+|footnotes|endnotes)\.xml$/.test(entry.entryName)) continue;
+    const original = entry.getData().toString("utf8");
+    const cleaned = stripWordBookmarkXml(original);
+    if (cleaned !== original) {
+      zip.updateFile(entry.entryName, Buffer.from(cleaned, "utf8"));
+      changed = true;
+    }
+  }
+  return changed ? zip.toBuffer() : buffer;
+}
+
 function countWords(text) {
   const clean = contentToPlainText(text);
   const cjk = (clean.match(/[\u4e00-\u9fff]/g) || []).length;
@@ -141,8 +339,7 @@ async function readJson(file, fallback) {
 }
 
 async function writeJson(file, data) {
-  await ensureDir(path.dirname(file));
-  await fs.writeFile(file, JSON.stringify(data, null, 2), "utf8");
+  await writeJsonAtomic(file, data);
 }
 
 async function backupUnreadableConfig(projectPath, configPath, error) {
@@ -174,6 +371,10 @@ function getVectorsPath(projectPath) {
   return path.join(projectPath, "vector_db", "vectors.json");
 }
 
+function getKnowledgeSummariesPath(projectPath) {
+  return path.join(projectPath, "vector_db", "summaries.json");
+}
+
 function getAnalysisDir(projectPath) {
   return path.join(projectPath, "analysis");
 }
@@ -196,6 +397,27 @@ function normalizeChapterFileName(fileName) {
 
 function getChapterPath(projectPath, chapter) {
   return path.join(projectPath, "chapters", normalizeChapterFileName(chapter?.fileName));
+}
+
+function contentRevision(value) {
+  return crypto.createHash("sha256").update(String(value || ""), "utf8").digest("hex");
+}
+
+async function cachedChapterRevision(projectPath, chapter) {
+  const filePath = getChapterPath(projectPath, chapter);
+  const stat = await fs.stat(filePath).catch(() => null);
+  if (!stat) {
+    chapterRevisionCache.delete(filePath);
+    return contentRevision("");
+  }
+  const signature = `${stat.size}|${stat.mtimeMs}|${stat.ctimeMs}`;
+  const cached = chapterRevisionCache.get(filePath);
+  if (cached?.signature === signature) return cached.revision;
+  const content = await fs.readFile(filePath, "utf8").catch(() => "");
+  const revision = contentRevision(content);
+  chapterRevisionCache.set(filePath, { signature, revision });
+  if (chapterRevisionCache.size > 3000) chapterRevisionCache.delete(chapterRevisionCache.keys().next().value);
+  return revision;
 }
 
 function getOriginalDocumentPath(projectPath, chapter) {
@@ -623,11 +845,50 @@ function compactChatHistory(history = []) {
   return compact.reverse();
 }
 
-async function fetchJsonWithDiagnostics(url, payload, headers, label) {
+async function fetchJsonWithDiagnostics(url, payload, headers, label, options = {}) {
   const body = JSON.stringify(payload);
   const bodyBytes = Buffer.byteLength(body, "utf8");
+  const timeoutMs = Math.max(0, Number(CHAT_API_TIMEOUT_MS) || 0);
+  const controller = timeoutMs > 0 ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers,
+      body,
+      signal: options.signal || controller?.signal,
+    });
+    return { response, bodyBytes };
+  } catch (error) {
+    const timeoutHint = error?.name === "AbortError" && timeoutMs > 0 ? `请求超过 ${Math.round(timeoutMs / 1000)} 秒未完成，已自动中断。` : "";
+    const sizeHint = bodyBytes > 1024 * 1024 ? "请求体超过 1MB，可能被本地代理、网关或安全软件中断。" : "如果问题很长，可减少引用片段上限或拆成几次提问。";
+    throw new Error(`${label}本地连接失败：${describeFetchError(error)}\n请求地址：${safeEndpointLabel(url)}\n请求体大小：${formatBytes(bodyBytes)}。${timeoutHint}${sizeHint}`);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function extractOpenAiCompatibleAnswer(data) {
+  return String(data?.choices?.[0]?.message?.content || data?.message?.content || data?.output_text || "").trim();
+}
+
+function extractOpenAiCompatibleDelta(data) {
+  const choice = data?.choices?.[0] || {};
+  return String(choice.delta?.content || choice.message?.content || data?.message?.content || data?.output_text || "");
+}
+
+async function fetchOpenAiCompatibleStream(url, payload, headers, label, onToken, options = {}) {
+  const body = JSON.stringify({ ...payload, stream: true });
+  const bodyBytes = Buffer.byteLength(body, "utf8");
+  const timeoutMs = Math.max(0, Number(CHAT_API_TIMEOUT_MS) || 0);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), CHAT_API_TIMEOUT_MS);
+  const externalSignal = options.signal;
+  const abortFromExternal = () => controller.abort(externalSignal?.reason);
+  if (externalSignal?.aborted) abortFromExternal();
+  else externalSignal?.addEventListener("abort", abortFromExternal, { once: true });
+  const timer = timeoutMs > 0 ? setTimeout(() => controller.abort(new Error("timeout")), timeoutMs) : null;
+  let answer = "";
+
   try {
     const response = await fetch(url, {
       method: "POST",
@@ -635,13 +896,67 @@ async function fetchJsonWithDiagnostics(url, payload, headers, label) {
       body,
       signal: controller.signal,
     });
-    return { response, bodyBytes };
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(`${label}请求失败：${response.status} ${detail.slice(0, 400)}\n请求地址：${safeEndpointLabel(url)}\n请求体大小：${formatBytes(bodyBytes)}`);
+    }
+
+    const contentType = response.headers.get("content-type") || "";
+    if (!response.body || contentType.includes("application/json")) {
+      const data = await response.json();
+      answer = extractOpenAiCompatibleAnswer(data);
+      if (answer) onToken?.(answer);
+      return answer || "模型返回了空内容。";
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder("utf8");
+    let buffer = "";
+
+    const consumeLine = (line) => {
+      const trimmed = String(line || "").trim();
+      if (!trimmed || !trimmed.startsWith("data:")) return;
+      const raw = trimmed.replace(/^data:\s*/, "");
+      if (!raw || raw === "[DONE]") return;
+      try {
+        const data = JSON.parse(raw);
+        const token = extractOpenAiCompatibleDelta(data);
+        if (!token) return;
+        answer += token;
+        onToken?.(token);
+      } catch {
+        // Some gateways include keep-alive or non-JSON diagnostic frames in SSE streams.
+      }
+    };
+
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() || "";
+        lines.forEach(consumeLine);
+      }
+      buffer += decoder.decode();
+      buffer.split(/\r?\n/).forEach(consumeLine);
+    } catch (error) {
+      if (answer.trim()) {
+        const reason = externalSignal?.aborted ? "用户已停止生成" : `连接中断：${describeFetchError(error)}`;
+        return `${answer.trim()}\n\n【提示：${reason}，以上内容已保留。】`;
+      }
+      throw error;
+    }
+
+    return answer.trim() || "模型返回了空内容。";
   } catch (error) {
-    const timeoutHint = error?.name === "AbortError" ? `请求超过 ${Math.round(CHAT_API_TIMEOUT_MS / 1000)} 秒未完成，已自动中断。` : "";
-    const sizeHint = bodyBytes > 1024 * 1024 ? "请求体超过 1MB，可能被本地代理、网关或安全软件中断。" : "如果问题很长，可减少引用片段上限或拆成几次提问。";
-    throw new Error(`${label}本地连接失败：${describeFetchError(error)}\n请求地址：${safeEndpointLabel(url)}\n请求体大小：${formatBytes(bodyBytes)}。${timeoutHint}${sizeHint}`);
+    if (externalSignal?.aborted) return answer.trim() || "【已停止生成，停止前尚未收到模型输出。】";
+    if (String(error?.message || "").includes(`${label}请求失败`)) throw error;
+    const timeoutHint = error?.name === "AbortError" && timeoutMs > 0 ? `请求超过 ${Math.round(timeoutMs / 1000)} 秒未完成，已自动中断。` : "";
+    throw new Error(`${label}本地连接失败：${describeFetchError(error)}\n请求地址：${safeEndpointLabel(url)}\n请求体大小：${formatBytes(bodyBytes)}。${timeoutHint}如果网络中断，但模型已经开始输出，软件会保留已经收到的内容。`);
   } finally {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
+    externalSignal?.removeEventListener("abort", abortFromExternal);
   }
 }
 
@@ -683,14 +998,25 @@ async function loadAnalysisState(projectPath) {
 }
 
 async function saveAnalysisState(projectPath, patch) {
-  const previous = await loadAnalysisState(projectPath);
-  const next = {
-    ...previous,
-    ...(patch || {}),
-    updatedAt: nowIso(),
-  };
-  await writeJson(getAnalysisStatePath(projectPath), next);
-  return next;
+  const previousTask = analysisSaveQueues.get(projectPath) || Promise.resolve();
+  const task = previousTask
+    .catch(() => null)
+    .then(async () => {
+      const previous = await loadAnalysisState(projectPath);
+      const next = {
+        ...previous,
+        ...(patch || {}),
+        updatedAt: nowIso(),
+      };
+      await writeJson(getAnalysisStatePath(projectPath), next);
+      return next;
+    });
+  analysisSaveQueues.set(projectPath, task);
+  try {
+    return await task;
+  } finally {
+    if (analysisSaveQueues.get(projectPath) === task) analysisSaveQueues.delete(projectPath);
+  }
 }
 
 function applyIssueStatuses(issues, statuses) {
@@ -768,29 +1094,20 @@ async function listKnowledgeItems(projectPath) {
 }
 
 async function updateVectorKnowledgeMetadata(projectPath, chapters) {
-  const byId = new Map(chapters.map((chapter) => [chapter.id, chapter]));
-  const store = await loadVectorStore(projectPath);
-  let changed = false;
-  store.vectors = store.vectors.map((entry) => {
-    const chapter = byId.get(entry.sourceId);
-    if (!chapter) return entry;
-    changed = true;
-    return {
-      ...entry,
-      title: chapter.title,
-      volume: chapter.volume || "未分卷",
-      category: chapter.volume || "未分卷",
-      knowledgeRole: getKnowledgeRole(chapter),
-      updatedAt: nowIso(),
-    };
-  });
-  if (changed) await saveVectorStore(projectPath, store);
+  const metadata = new Map(chapters.map((chapter) => [String(chapter.id), {
+    title: chapter.title,
+    volume: chapter.volume || "未分卷",
+    category: chapter.volume || "未分卷",
+    knowledgeRole: getKnowledgeRole(chapter),
+  }]));
+  await vectorShards.updateSourcesMetadata(projectPath, metadata);
 }
 
 async function updateKnowledgeItems(projectPath, items) {
   const updates = new Map((Array.isArray(items) ? items : []).map((item) => [String(item.id || item.sourceId || ""), item]));
   const config = await loadConfig(projectPath);
   let changed = false;
+  const changedChapterIds = new Set();
   config.chapters = config.chapters.map((chapter) => {
     const patch = updates.get(chapter.id);
     if (!patch) return chapter;
@@ -798,6 +1115,7 @@ async function updateKnowledgeItems(projectPath, items) {
     const nextRole = normalizeKnowledgeRole(patch.knowledgeRole || chapter.knowledgeRole);
     if (nextVolume === chapter.volume && nextRole === getKnowledgeRole(chapter)) return chapter;
     changed = true;
+    changedChapterIds.add(chapter.id);
     return {
       ...chapter,
       volume: nextVolume,
@@ -808,7 +1126,21 @@ async function updateKnowledgeItems(projectPath, items) {
   if (changed) {
     await calculateTotalWords(projectPath, config);
     await saveConfig(projectPath, config);
-    await updateVectorKnowledgeMetadata(projectPath, config.chapters);
+    await updateVectorKnowledgeMetadata(projectPath, config.chapters.filter((chapter) => changedChapterIds.has(chapter.id)));
+    const projectSources = await loadProjectSources(projectPath);
+    await updateKnowledgeSummaries(
+      projectPath,
+      projectSources.sources.map((source) => ({
+        id: source.id,
+        type: source.sourceType,
+        title: source.title,
+        volume: source.volume,
+        category: source.category,
+        knowledgeRole: source.knowledgeRole,
+        content: source.rawContent,
+      })),
+      { replaceAll: true },
+    );
   }
   return {
     items: await listKnowledgeItems(projectPath),
@@ -816,10 +1148,345 @@ async function updateKnowledgeItems(projectPath, items) {
   };
 }
 
+async function buildKnowledgeSourceDescriptors(projectPath, supplied = {}) {
+  const config = supplied.config || await loadConfig(projectPath);
+  const characters = supplied.characters || await loadCharacters(projectPath);
+  const worldDocs = supplied.worldDocs || await loadWorldDocs(projectPath);
+  const descriptors = config.chapters.slice().sort((a, b) => a.order - b.order).map((chapter) => ({
+    sourceId: chapter.id,
+    sourceType: "chapter",
+    title: chapter.title,
+    volume: chapter.volume || "未分卷",
+    category: chapter.volume || "未分卷",
+    group: chapter.volume || "未分卷",
+    knowledgeRole: getKnowledgeRole(chapter),
+    filePath: getChapterPath(projectPath, chapter),
+    getContent: () => fs.readFile(getChapterPath(projectPath, chapter), "utf8").catch(() => ""),
+  }));
+  for (const card of characters) {
+    descriptors.push({
+      sourceId: card.id,
+      sourceType: "character",
+      title: card.name,
+      category: normalizeCategory(card.category),
+      group: `角色卡/${normalizeCategory(card.category)}`,
+      filePath: getCharacterPath(projectPath, card),
+      content: characterToMarkdown(card),
+    });
+  }
+  for (const doc of worldDocs) {
+    descriptors.push({
+      sourceId: doc.id,
+      sourceType: "world",
+      title: doc.title,
+      category: normalizeCategory(doc.category),
+      group: `世界观/${normalizeCategory(doc.category)}`,
+      filePath: getWorldDocPath(projectPath, doc),
+      content: doc.content,
+    });
+  }
+  return { config, characters, worldDocs, descriptors };
+}
+
+async function inspectKnowledgeFreshness(projectPath, supplied = {}) {
+  const sourceSet = await buildKnowledgeSourceDescriptors(projectPath, supplied);
+  const manifest = supplied.manifest || await vectorShards.migrateLegacyIfNeeded(projectPath);
+  const summaries = supplied.summaries || await loadKnowledgeSummaries(projectPath);
+  const freshness = await knowledgeFreshness.inspectSources(projectPath, sourceSet.descriptors, {
+    vectorManifest: manifest,
+    summaries,
+    normalizeContent: contentToPlainText,
+    persist: supplied.persist !== false,
+  });
+  return {
+    ...freshness,
+    hierarchy: {
+      sourceSummaries: summaries.sources.length,
+      volumeSummaries: summaries.volumes.length,
+      hasBookSummary: Boolean(summaries.book?.summary),
+      updatedAt: summaries.updatedAt,
+    },
+    sourceSet,
+    manifest,
+    summaries,
+  };
+}
+
+async function indexFreshnessItems(projectPath, sourceSet, sourceIds, options = {}) {
+  const wanted = new Set((sourceIds || []).map(String));
+  const selected = sourceSet.descriptors.filter((item) => wanted.has(String(item.sourceId)));
+  const sources = [];
+  for (const descriptor of selected) {
+    const content = typeof descriptor.getContent === "function" ? await descriptor.getContent() : String(descriptor.content || "");
+    if (!contentToPlainText(content).trim()) continue;
+    sources.push({
+      id: descriptor.sourceId,
+      type: descriptor.sourceType,
+      title: descriptor.title,
+      volume: descriptor.volume,
+      category: descriptor.category,
+      knowledgeRole: descriptor.knowledgeRole,
+      content,
+    });
+  }
+  if (sources.length) await indexSources(projectPath, sources, options);
+  return sources.map((item) => item.id);
+}
+
+async function ensureKnowledgeFreshnessForRetrieval(projectPath, options = {}) {
+  const before = await inspectKnowledgeFreshness(projectPath, options);
+  const stale = before.items.filter((item) => ["未索引", "等待更新", "摘要待更新"].includes(item.status));
+  if (!stale.length) {
+    return { checked: true, checkedAt: before.checkedAt, staleSourceCount: 0, repairedSourceCount: 0, deferredSourceCount: 0, repairedSourceIds: [], deferredSources: [], reusedHashes: before.reusedHashes, recalculatedHashes: before.recalculatedHashes };
+  }
+  const explicitIds = new Set([
+    ...(options.sourceIds || []),
+    ...(options.candidateSourceIds || []),
+    ...(options.boostSourceIds || []),
+    ...(options.requiredSourceIds || []),
+  ].map(String));
+  const question = String(options.question || "");
+  const broad = ["book", "inventory"].includes(options.mode) || options.repairAll === true;
+  const relevant = stale.filter((item) => broad
+    || explicitIds.has(String(item.sourceId))
+    || lexicalRelevanceScore({ title: item.title, volume: item.group, category: item.group, text: "" }, question) > 0);
+  if (!relevant.length && stale.length <= 3) relevant.push(...stale);
+  const repairedSourceIds = await indexFreshnessItems(projectPath, before.sourceSet, relevant.map((item) => item.sourceId), { signal: options.signal });
+  const repairedSet = new Set(repairedSourceIds);
+  const deferredSources = stale.filter((item) => !repairedSet.has(item.sourceId)).map((item) => ({ sourceId: item.sourceId, title: item.title, status: item.status }));
+  return {
+    checked: true,
+    checkedAt: before.checkedAt,
+    staleSourceCount: stale.length,
+    repairedSourceCount: repairedSourceIds.length,
+    deferredSourceCount: deferredSources.length,
+    repairedSourceIds,
+    deferredSources,
+    reusedHashes: before.reusedHashes,
+    recalculatedHashes: before.recalculatedHashes,
+  };
+}
+
+async function getKnowledgeSyncStatus(projectPath) {
+  const result = await inspectKnowledgeFreshness(projectPath);
+  return {
+    updatedAt: result.checkedAt,
+    counts: result.counts,
+    items: result.items,
+    orphanSourceIds: result.orphanSourceIds,
+    hierarchy: result.hierarchy,
+    freshness: {
+      reusedHashes: result.reusedHashes,
+      recalculatedHashes: result.recalculatedHashes,
+    },
+  };
+}
+
+async function repairKnowledgeSync(projectPath) {
+  const inspection = await inspectKnowledgeFreshness(projectPath);
+  const before = {
+    counts: inspection.counts,
+    items: inspection.items,
+    orphanSourceIds: inspection.orphanSourceIds,
+  };
+  const pending = before.items.filter((item) => !["已同步", "空文档", "文件缺失"].includes(item.status));
+  sendRendererEvent("index:progress", { active: true, phase: "补齐知识库", current: 0, total: pending.length, detail: "检查遗漏与过期文档" });
+  await indexFreshnessItems(projectPath, inspection.sourceSet, pending.map((item) => item.sourceId), {
+    onProgress: (progress) => sendRendererEvent("index:progress", { active: true, phase: "整理待更新资料", ...progress }),
+  });
+  for (const sourceId of before.orphanSourceIds) await removeSourceFromIndex(projectPath, sourceId);
+  const status = await getKnowledgeSyncStatus(projectPath);
+  sendRendererEvent("index:progress", { active: false, phase: "完成", current: status.counts.synced, total: status.counts.total, detail: "知识库已校验" });
+  return { status, state: await buildAppState(projectPath) };
+}
+
+async function getMaintenanceDiagnostics(projectPath) {
+  const [config, status, manifest, summaries, workspaceState, taskList] = await Promise.all([
+    loadConfig(projectPath),
+    getKnowledgeSyncStatus(projectPath),
+    vectorShards.migrateLegacyIfNeeded(projectPath),
+    loadKnowledgeSummaries(projectPath),
+    creativeWorkspace.loadWorkspace(projectPath),
+    getProjectTaskCenter(projectPath).then((center) => center.list()),
+  ]);
+  const [retrievalCache, freshnessCache] = await Promise.all([
+    retrievalPlanner.inspectVolumeCache(projectPath, { manifest, summaries, config }),
+    knowledgeFreshness.cacheHealth(projectPath, status.items.map((item) => item.sourceId)),
+  ]);
+  const taskIds = new Set(taskList.tasks.map((item) => item.id));
+  const runIds = new Set(workspaceState.agentRuns.map((item) => item.id));
+  const invalidReferences = [];
+  for (const run of workspaceState.agentRuns) {
+    if (run.taskId && !taskIds.has(run.taskId)) invalidReferences.push({ type: "Agent", id: run.id, title: run.chapterTitle, detail: "Agent 记录指向的后台任务已不存在" });
+    const missingScopeIds = (run.scopeIds || []).filter((id) => !config.chapters.some((item) => item.id === id));
+    if (missingScopeIds.length) invalidReferences.push({ type: "Agent", id: run.id, title: run.chapterTitle, detail: `分析范围中有 ${missingScopeIds.length} 个已删除文档` });
+  }
+  for (const task of taskList.tasks.filter((item) => item.type === "agent-workflow")) {
+    const runId = String(task.options?.runId || "");
+    if (runId && !runIds.has(runId)) invalidReferences.push({ type: "任务", id: task.id, title: task.title, detail: "后台任务对应的 Agent 记录已不存在" });
+  }
+  const interruptedAgentRuns = workspaceState.agentRuns.filter((item) => ["已中断", "失败"].includes(item.status)).map((item) => ({ id: item.id, title: item.chapterTitle, status: item.status, updatedAt: item.updatedAt }));
+  const staleSourceCount = status.items.filter((item) => ["未索引", "等待更新", "摘要待更新"].includes(item.status)).length;
+  const issues = [
+    ...(!retrievalCache.valid ? ["分卷检索缓存需要刷新"] : []),
+    ...(staleSourceCount ? [`${staleSourceCount} 份资料等待更新`] : []),
+    ...(status.counts.orphans ? [`${status.counts.orphans} 个孤立索引来源`] : []),
+    ...(freshnessCache.missingEntries.length || freshnessCache.orphanEntries.length ? ["新鲜度缓存与当前目录不一致"] : []),
+    ...(invalidReferences.length ? [`${invalidReferences.length} 条任务/Agent 引用异常`] : []),
+  ];
+  return {
+    checkedAt: nowIso(),
+    healthy: issues.length === 0,
+    issues,
+    staleSourceCount,
+    interruptedAgentRuns,
+    invalidReferences,
+    retrievalCache,
+    freshnessCache,
+    vectorIndex: { sources: manifest.sources.length, chunks: Number(manifest.totalChunks || 0), updatedAt: manifest.updatedAt || "" },
+  };
+}
+
+async function repairMaintenance(projectPath) {
+  const knowledge = await repairKnowledgeSync(projectPath);
+  const [config, manifest, summaries] = await Promise.all([loadConfig(projectPath), vectorShards.migrateLegacyIfNeeded(projectPath), loadKnowledgeSummaries(projectPath)]);
+  await retrievalPlanner.ensureVolumeCache(projectPath, { manifest, summaries, config });
+  const workspaceState = await creativeWorkspace.loadWorkspace(projectPath);
+  const center = await getProjectTaskCenter(projectPath);
+  const taskList = await center.list();
+  const taskIds = new Set(taskList.tasks.map((item) => item.id));
+  const runIds = new Set(workspaceState.agentRuns.map((item) => item.id));
+  for (const run of workspaceState.agentRuns) {
+    const validScopeIds = (run.scopeIds || []).filter((id) => config.chapters.some((item) => item.id === id));
+    const taskMissing = Boolean(run.taskId && !taskIds.has(run.taskId));
+    if (!taskMissing && validScopeIds.length === (run.scopeIds || []).length) continue;
+    const active = taskMissing && ["等待中", "运行中"].includes(run.status);
+    await creativeWorkspace.upsertItem(projectPath, "agentRuns", {
+      ...run,
+      scopeIds: validScopeIds.length ? validScopeIds : config.chapters.some((item) => item.id === run.chapterId) ? [run.chapterId] : [],
+      taskId: taskMissing ? "" : run.taskId,
+      status: active ? "已中断" : run.status,
+      error: active ? "原后台任务记录已丢失，已标记为中断；可重新准备计划。" : run.error,
+    });
+  }
+  for (const task of taskList.tasks.filter((item) => item.type === "agent-workflow" && item.options?.runId && !runIds.has(String(item.options.runId)))) {
+    if (["等待中", "已暂停"].includes(task.status)) await center.cancel(task.id);
+    const latest = (await center.list()).tasks.find((item) => item.id === task.id);
+    if (latest && !["等待中", "运行中", "正在停止", "已暂停"].includes(latest.status)) await center.remove(task.id);
+  }
+  return { diagnostics: await getMaintenanceDiagnostics(projectPath), status: knowledge.status, state: await buildAppState(projectPath) };
+}
+
+function assertExpectedChapterRevision(expectedRevision, currentContent) {
+  if (!expectedRevision) return;
+  const actualRevision = contentRevision(currentContent);
+  if (expectedRevision !== actualRevision) {
+    throw new Error("检测到该章节在本次编辑期间已被其他操作修改。为避免覆盖内容，保存已停止；请重新打开章节后对比历史版本。");
+  }
+}
+
+async function inspectProjectHealth(projectPath) {
+  const config = await loadConfig(projectPath);
+  const issues = [];
+  const idGroups = new Map();
+  const fileGroups = new Map();
+  const contentGroups = new Map();
+  for (const chapter of config.chapters) {
+    if (!idGroups.has(chapter.id)) idGroups.set(chapter.id, []);
+    idGroups.get(chapter.id).push(chapter);
+    const fileName = normalizeChapterFileName(chapter.fileName);
+    if (!fileGroups.has(fileName)) fileGroups.set(fileName, []);
+    fileGroups.get(fileName).push(chapter);
+    const filePath = getChapterPath(projectPath, chapter);
+    if (!fileName || !existsSync(filePath)) {
+      issues.push({ code: "missing-file", severity: "高", title: chapter.title, detail: "章节正文文件缺失", chapterId: chapter.id, repairable: true });
+      continue;
+    }
+    const content = await fs.readFile(filePath, "utf8").catch(() => "");
+    if (contentToPlainText(content).trim().length >= 100) {
+      const hash = contentRevision(content);
+      if (!contentGroups.has(hash)) contentGroups.set(hash, []);
+      contentGroups.get(hash).push(chapter);
+    }
+  }
+  for (const [id, chapters] of idGroups) {
+    if (chapters.length > 1) issues.push({ code: "duplicate-id", severity: "高", title: id, detail: `${chapters.length} 个目录项使用同一章节编号`, repairable: false });
+  }
+  for (const [fileName, chapters] of fileGroups) {
+    if (fileName && chapters.length > 1) issues.push({ code: "shared-file", severity: "高", title: fileName, detail: `${chapters.map((item) => item.title).join("、")}共用一个文件`, repairable: true });
+  }
+  for (const chapters of contentGroups.values()) {
+    if (chapters.length > 1) {
+      issues.push({ code: "duplicate-content", severity: "中", title: chapters.map((item) => item.title).join("、"), detail: "多个章节当前内容完全相同，请确认是否误覆盖", repairable: false });
+    }
+  }
+  const sortedOrders = config.chapters.map((item) => Number(item.order)).sort((a, b) => a - b);
+  if (sortedOrders.some((order, index) => order !== index)) {
+    issues.push({ code: "invalid-order", severity: "中", title: "目录顺序异常", detail: "章节顺序存在重复或断号，可自动重新编号", repairable: true });
+  }
+  const migrationState = await projectMigrations.loadMigrationState(projectPath);
+  if (Number(migrationState.schemaVersion || 0) < projectMigrations.CURRENT_PROJECT_SCHEMA) {
+    issues.push({ code: "migration-pending", severity: "高", title: "项目结构尚未升级", detail: `当前 ${migrationState.schemaVersion || 0}，需要 ${projectMigrations.CURRENT_PROJECT_SCHEMA}`, repairable: true });
+  }
+  const recovery = await operationJournal.getRecoveryStatus(projectPath);
+  if (recovery.interruptedOperations.length) {
+    issues.push({ code: "interrupted-operations", severity: "中", title: "存在中断操作", detail: `${recovery.interruptedOperations.length} 项操作在异常退出前未完成，请检查恢复中心`, repairable: false });
+  }
+  const chapterIds = new Set(config.chapters.map((item) => item.id));
+  const workspace = await creativeWorkspace.loadWorkspace(projectPath);
+  const orphanWorkspaceItems = [
+    ...workspace.scenes,
+    ...workspace.arcs,
+    ...workspace.annotations,
+    ...workspace.revisions,
+    ...workspace.agentRuns,
+  ].filter((item) => item.chapterId && !chapterIds.has(item.chapterId));
+  if (orphanWorkspaceItems.length) {
+    issues.push({ code: "orphan-workspace", severity: "中", title: "创作工作台存在失效引用", detail: `${orphanWorkspaceItems.length} 条记录指向已删除章节`, repairable: true });
+  }
+  return {
+    checkedAt: nowIso(),
+    healthy: issues.every((item) => item.severity !== "高"),
+    chapterCount: config.chapters.length,
+    recovery: { drafts: recovery.drafts.length, interruptedOperations: recovery.interruptedOperations.length },
+    schemaVersion: migrationState.schemaVersion || 0,
+    issues,
+  };
+}
+
+async function repairProjectHealth(projectPath) {
+  const config = await loadConfig(projectPath);
+  await repairSharedChapterFiles(projectPath, config);
+  for (const chapter of config.chapters) {
+    if (existsSync(getChapterPath(projectPath, chapter))) continue;
+    const versions = await listChapterVersions(projectPath, chapter.id);
+    const latest = versions[0];
+    if (!latest) continue;
+    const content = await fs.readFile(getChapterVersionContentPath(projectPath, chapter.id, latest), "utf8").catch(() => "");
+    if (content) await fs.writeFile(getChapterPath(projectPath, chapter), content, "utf8");
+  }
+  config.chapters = config.chapters.slice().sort((a, b) => Number(a.order || 0) - Number(b.order || 0)).map((item, index) => ({ ...item, order: index }));
+  const chapterIds = new Set(config.chapters.map((item) => item.id));
+  const workspace = await creativeWorkspace.loadWorkspace(projectPath);
+  const orphanChapterIds = new Set([
+    ...workspace.scenes,
+    ...workspace.arcs,
+    ...workspace.annotations,
+    ...workspace.revisions,
+    ...workspace.agentRuns,
+  ].map((item) => item.chapterId).filter((id) => id && !chapterIds.has(id)));
+  for (const chapterId of orphanChapterIds) await creativeWorkspace.removeChapterReferences(projectPath, chapterId);
+  await projectMigrations.migrateProject(projectPath, { createSnapshot: (payload) => projectSnapshots.createSnapshot(projectPath, payload) });
+  await calculateTotalWords(projectPath, config);
+  await saveConfig(projectPath, config);
+  return { health: await inspectProjectHealth(projectPath), state: await buildAppState(projectPath) };
+}
+
 function defaultConfig(title = DEFAULT_PROJECT_NAME) {
   const firstChapterId = makeId("chapter");
   return {
     version: 1,
+    projectSchemaVersion: projectMigrations.CURRENT_PROJECT_SCHEMA,
     title,
     author: "",
     createdAt: nowIso(),
@@ -845,6 +1512,14 @@ function defaultConfig(title = DEFAULT_PROJECT_NAME) {
       lineHeight: 1.85,
       autosaveMs: 1800,
       backupOnSave: false,
+      recoveryEnabled: true,
+    },
+    agent: {
+      autoLocalAnalysis: true,
+      autoDeepAnalysis: false,
+      evidenceRequired: true,
+      snapshotBeforeBulkChanges: true,
+      permissionLevel: "只读分析",
     },
     stats: {
       todayDate: todayKey(),
@@ -877,6 +1552,10 @@ async function ensureProjectStructure(projectPath, title) {
   await ensureDir(path.join(projectPath, "backups"));
   await ensureDir(getAnalysisDir(projectPath));
   await ensureDir(getMaterialsDir(projectPath));
+  await storyState.ensureStoryState(projectPath);
+  await projectSnapshots.ensureSnapshotStore(projectPath);
+  await creativeWorkspace.ensureWorkspace(projectPath);
+  await operationJournal.ensureJournal(projectPath);
 
   const configPath = getConfigPath(projectPath);
   if (!existsSync(configPath)) {
@@ -885,7 +1564,11 @@ async function ensureProjectStructure(projectPath, title) {
     const chapterFile = path.join(projectPath, "chapters", config.chapters[0].fileName);
     await fs.writeFile(chapterFile, "# 第一章 开篇\n\n从这里开始写下你的故事。\n", "utf8");
     await writeJson(getVectorsPath(projectPath), { version: 1, updatedAt: nowIso(), vectors: [] });
+    await writeJson(getKnowledgeSummariesPath(projectPath), { version: 2, updatedAt: "", sources: [], volumes: [], book: null });
   }
+  await projectMigrations.migrateProject(projectPath, {
+    createSnapshot: (payload) => projectSnapshots.createSnapshot(projectPath, payload),
+  });
 }
 
 async function loadConfig(projectPath) {
@@ -893,7 +1576,9 @@ async function loadConfig(projectPath) {
   config.chapters = Array.isArray(config.chapters) ? config.chapters : [];
   config.api = { ...defaultConfig().api, ...(config.api || {}) };
   config.ui = { ...defaultConfig().ui, ...(config.ui || {}) };
+  config.agent = { ...defaultConfig().agent, ...(config.agent || {}) };
   config.stats = { ...defaultConfig().stats, ...(config.stats || {}) };
+  await loadCredentialSecrets(projectPath, config);
   await repairSharedChapterFiles(projectPath, config).catch(() => null);
   return config;
 }
@@ -908,8 +1593,10 @@ function configForRenderer(config) {
     ...config,
     api: {
       ...config.api,
-      apiKey: decodeSecret(config.api.apiKey),
-      embeddingApiKey: decodeSecret(config.api.embeddingApiKey),
+      apiKey: runtimeSecret(config.api, "chat"),
+      embeddingApiKey: runtimeSecret(config.api, "embedding"),
+      credentialStorage: process.platform === "win32" && process.env.NOVEL_PLATFORM_TEST !== "1" ? "windows" : config.api.apiKey ? "legacy" : "none",
+      credentialError: String(config.api.__credentialError || ""),
     },
   };
 }
@@ -917,6 +1604,7 @@ function configForRenderer(config) {
 function configFromRenderer(existingConfig, patch) {
   const api = patch.api || {};
   const ui = patch.ui || {};
+  const agent = patch.agent || {};
   const nextTemperature = clampNumber(api.temperature ?? existingConfig.api.temperature, 0, 2, 0.7);
   const nextMaxTokens = Math.floor(clampNumber(api.maxTokens ?? existingConfig.api.maxTokens, 1, MAX_CHAT_TOKENS, 8000));
   const nextTopK = Math.floor(clampNumber(api.topK ?? existingConfig.api.topK, 1, MAX_RETRIEVAL_TOP_K, 120));
@@ -932,17 +1620,23 @@ function configFromRenderer(existingConfig, patch) {
       maxTokens: nextMaxTokens,
       topK: nextTopK,
       scanK: nextScanK,
-      apiKey: encodeSecret(api.apiKey ?? decodeSecret(existingConfig.api.apiKey)),
-      embeddingApiKey: encodeSecret(api.embeddingApiKey ?? decodeSecret(existingConfig.api.embeddingApiKey)),
+      apiKey: existingConfig.api.apiKey,
+      embeddingApiKey: existingConfig.api.embeddingApiKey,
     },
     ui: {
       ...existingConfig.ui,
       ...ui,
     },
+    agent: {
+      ...existingConfig.agent,
+      ...agent,
+      permissionLevel: novelAgent.normalizePermission(agent.permissionLevel ?? existingConfig.agent.permissionLevel),
+    },
   };
 }
 
 async function getDefaultProjectPath() {
+  if (process.env.NOVEL_TEST_PROJECT_PATH) return path.resolve(process.env.NOVEL_TEST_PROJECT_PATH);
   const docs = app.getPath("documents");
   return path.join(docs, "AI小说创作平台", DEFAULT_PROJECT_NAME);
 }
@@ -982,17 +1676,20 @@ async function loadWorldDocs(projectPath) {
 async function loadChapterContent(projectPath, chapterId) {
   const config = await loadConfig(projectPath);
   const chapter = config.chapters.find((item) => item.id === chapterId) || config.chapters[0];
-  if (!chapter) return { chapter: null, content: "" };
+  if (!chapter) return { chapter: null, content: "", revision: contentRevision("") };
   const filePath = getChapterPath(projectPath, chapter);
   let content = "";
+  let revision = contentRevision("");
   try {
     content = await fs.readFile(filePath, "utf8");
+    revision = contentRevision(content);
     if (isHtmlContent(content)) content = promoteMarkdownHeadingsInHtml(content);
   } catch {
     content = `# ${chapter.title}\n\n`;
     await fs.writeFile(filePath, content, "utf8");
+    revision = contentRevision(content);
   }
-  return { chapter, content };
+  return { chapter, content, revision };
 }
 
 function extractOutline(content) {
@@ -1053,7 +1750,8 @@ async function convertDocumentToRichContent(projectPath, filePath, importId) {
         }),
       },
     );
-    const body = promoteMarkdownHeadingsInHtml((result.value || "").trim());
+    const fidelity = docxFidelity.readDocxFidelity(filePath);
+    const body = promoteMarkdownHeadingsInHtml(docxFidelity.applyLayoutMetadata((result.value || "").trim(), fidelity));
     const startsWithHeading = /^<h[1-6]\b/i.test(body);
     return {
       title: fallbackTitle,
@@ -1061,6 +1759,8 @@ async function convertDocumentToRichContent(projectPath, filePath, importId) {
       contentFormat: "html",
       imageCount: imageIndex,
       originalDocxFile: path.relative(projectPath, originalDocxPath),
+      comments: fidelity.comments,
+      revisions: fidelity.revisions,
       warnings: (result.messages || []).map((item) => item.message || String(item)),
     };
   }
@@ -1072,6 +1772,8 @@ async function convertDocumentToRichContent(projectPath, filePath, importId) {
       contentFormat: "markdown",
       imageCount: 0,
       originalDocxFile: "",
+      comments: [],
+      revisions: [],
       warnings: [],
     };
   }
@@ -1083,6 +1785,8 @@ async function convertDocumentToRichContent(projectPath, filePath, importId) {
       contentFormat: "markdown",
       imageCount: 0,
       originalDocxFile: "",
+      comments: [],
+      revisions: [],
       warnings: [],
     };
   }
@@ -1116,12 +1820,44 @@ async function importDocumentIntoProject(projectPath, filePath, options = {}) {
   };
   await fs.writeFile(getChapterPath(projectPath, chapter), converted.content, "utf8");
   config.chapters.push(chapter);
+  for (const [index, comment] of (converted.comments || []).entries()) {
+    await creativeWorkspace.upsertItem(projectPath, "annotations", {
+      id: `docx_comment_${chapter.id}_${comment.id || index}`,
+      chapterId: chapter.id,
+      chapterTitle: chapter.title,
+      quote: comment.quote || chapter.title,
+      comment: `${comment.author || "Word 批注"}${comment.date ? `（${comment.date}）` : ""}：${comment.comment}`,
+      type: "作者批注",
+      status: "待处理",
+      sourceRevision: contentRevision(converted.content),
+      origin: "manual",
+    });
+  }
+  for (const [index, revision] of (converted.revisions || []).entries()) {
+    const currentViewContainsReplacement = Boolean(revision.replacement && contentToPlainText(converted.content).includes(revision.replacement));
+    await creativeWorkspace.upsertItem(projectPath, "revisions", {
+      id: `docx_revision_${chapter.id}_${revision.id || index}`,
+      chapterId: chapter.id,
+      chapterTitle: chapter.title,
+      action: "Word 修订",
+      instruction: `${revision.author || "Word"}${revision.date ? `（${revision.date}）` : ""}导入的修订记录`,
+      original: revision.original || "",
+      replacement: revision.replacement || "",
+      sourceRevision: contentRevision(converted.content),
+      status: currentViewContainsReplacement ? "已采纳" : "待确认",
+      error: "",
+      appliedAt: currentViewContainsReplacement ? nowIso() : "",
+      acceptedParts: currentViewContainsReplacement ? [{ original: revision.original || "", replacement: revision.replacement || "", appliedAt: nowIso() }] : [],
+    });
+  }
 
   const imported = {
     chapter,
     content: converted.content,
     imageCount: converted.imageCount,
     warnings: converted.warnings,
+    commentCount: converted.comments?.length || 0,
+    revisionCount: converted.revisions?.length || 0,
     source: {
       id: chapter.id,
       type: "chapter",
@@ -1200,6 +1936,9 @@ async function refreshChapterFromOriginalDocument(projectPath, chapterId) {
     knowledgeRole: getKnowledgeRole(chapter),
     content: converted.content,
   });
+  if (config.agent?.autoLocalAnalysis !== false) {
+    await refreshLocalStoryState(projectPath, chapter.id, converted.content).catch(() => null);
+  }
 
   return {
     state: await buildAppState(projectPath, chapter.id),
@@ -1234,22 +1973,27 @@ async function buildAppState(projectPath, preferredChapterId = "") {
   const config = await loadConfig(projectPath);
   await calculateTotalWords(projectPath, config);
   await saveConfig(projectPath, config);
-  const selectedChapterId = preferredChapterId || config.chapters[0]?.id || "";
+  const savedWindowState = preferredChapterId ? null : await operationJournal.loadWindowState(projectPath).catch(() => null);
+  const recoveredChapterId = savedWindowState?.selectedChapterId && config.chapters.some((item) => item.id === savedWindowState.selectedChapterId)
+    ? savedWindowState.selectedChapterId
+    : "";
+  const selectedChapterId = preferredChapterId || recoveredChapterId || config.chapters[0]?.id || "";
   const chapterPayload = await loadChapterContent(projectPath, selectedChapterId);
   const characters = await loadCharacters(projectPath);
   const worldDocs = await loadWorldDocs(projectPath);
-  const vectorStore = await readJson(getVectorsPath(projectPath), { version: 1, vectors: [] });
+  const vectorStats = await vectorShards.stats(projectPath);
   return {
     projectPath,
     config: configForRenderer(config),
     chapters: config.chapters,
     selectedChapter: chapterPayload.chapter,
     chapterContent: chapterPayload.content,
+    chapterRevision: chapterPayload.revision,
     characters,
     worldDocs,
     vectorStats: {
-      chunks: vectorStore.vectors?.length || 0,
-      updatedAt: vectorStore.updatedAt || "",
+      chunks: vectorStats.chunks,
+      updatedAt: vectorStats.updatedAt,
     },
   };
 }
@@ -1299,9 +2043,9 @@ function localEmbedding(text) {
   return vector.map((item) => item / length);
 }
 
-async function remoteEmbedding(text, apiConfig) {
-  const embeddingKey = decodeSecret(apiConfig.embeddingApiKey);
-  const chatKey = decodeSecret(apiConfig.apiKey);
+async function remoteEmbedding(text, apiConfig, options = {}) {
+  const embeddingKey = runtimeSecret(apiConfig, "embedding");
+  const chatKey = runtimeSecret(apiConfig, "chat");
   const baseUrl = (apiConfig.embeddingBaseUrl || apiConfig.baseUrl || "").replace(/\/$/, "");
   const chatBaseUrl = (apiConfig.baseUrl || "").replace(/\/$/, "");
   const model = apiConfig.embeddingModel || "text-embedding-3-small";
@@ -1314,7 +2058,7 @@ async function remoteEmbedding(text, apiConfig) {
 
   const headers = { "Content-Type": "application/json" };
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
-  const { response, bodyBytes } = await fetchJsonWithDiagnostics(`${baseUrl}/embeddings`, { model, input: text }, headers, "向量 API ");
+  const { response, bodyBytes } = await fetchJsonWithDiagnostics(`${baseUrl}/embeddings`, { model, input: text }, headers, "向量 API ", { signal: options.signal });
   if (!response.ok) {
     const detail = await response.text();
     throw new Error(`Embedding API 请求失败：${response.status} ${detail.slice(0, 300)}\n请求地址：${safeEndpointLabel(`${baseUrl}/embeddings`)}\n请求体大小：${formatBytes(bodyBytes)}`);
@@ -1325,11 +2069,12 @@ async function remoteEmbedding(text, apiConfig) {
   return embedding;
 }
 
-async function getEmbedding(text, apiConfig) {
+async function getEmbedding(text, apiConfig, options = {}) {
   try {
-    const remote = await remoteEmbedding(text, apiConfig);
+    const remote = await remoteEmbedding(text, apiConfig, options);
     if (remote) return { vector: remote, source: "api", warning: "" };
   } catch (error) {
+    if (options.signal?.aborted || error?.name === "AbortError") throw Object.assign(new Error("任务已停止"), { name: "AbortError" });
     return { vector: localEmbedding(text), source: "local", warning: error.message };
   }
   return { vector: localEmbedding(text), source: "local", warning: "" };
@@ -1407,25 +2152,113 @@ function lexicalRelevanceScore(item, question) {
 }
 
 async function loadVectorStore(projectPath) {
-  const fallback = { version: 1, updatedAt: nowIso(), vectors: [] };
-  const store = await readJson(getVectorsPath(projectPath), fallback);
-  store.vectors = Array.isArray(store.vectors) ? store.vectors : [];
-  return store;
+  return vectorShards.loadStore(projectPath);
 }
 
 async function saveVectorStore(projectPath, store) {
-  store.updatedAt = nowIso();
-  await writeJson(getVectorsPath(projectPath), store);
+  await vectorShards.saveAll(projectPath, store);
+}
+
+async function loadKnowledgeSummaries(projectPath) {
+  const fallback = { version: 2, updatedAt: "", sources: [], volumes: [], book: null };
+  const data = await readJson(getKnowledgeSummariesPath(projectPath), fallback);
+  return {
+    version: 2,
+    updatedAt: String(data?.updatedAt || ""),
+    sources: Array.isArray(data?.sources) ? data.sources : [],
+    volumes: Array.isArray(data?.volumes) ? data.volumes : [],
+    book: data?.book && typeof data.book === "object" ? data.book : null,
+  };
+}
+
+function summarizeSourceText(source) {
+  const plain = contentToPlainText(source.content || "").replace(/\s+/g, " ").trim();
+  const outline = extractOutline(source.content || "")
+    .slice(0, 24)
+    .map((item) => item.title)
+    .filter(Boolean);
+  const paragraphs = contentToPlainText(source.content || "")
+    .split(/\n+/)
+    .map((item) => item.trim())
+    .filter((item) => item.length >= 12);
+  const selected = [...paragraphs.slice(0, 4), ...paragraphs.slice(-2)];
+  const body = selected.join(" ").slice(0, 1600) || plain.slice(0, 1600);
+  return [outline.length ? `小标题：${outline.join("；")}` : "", body].filter(Boolean).join("\n").slice(0, 2000);
+}
+
+function rebuildSummaryHierarchy(sources, projectTitle = "") {
+  const grouped = new Map();
+  for (const item of sources) {
+    const group = item.volume || item.category || (item.sourceType === "character" ? "角色卡" : item.sourceType === "world" ? "世界观" : "未分卷");
+    if (!grouped.has(group)) grouped.set(group, []);
+    grouped.get(group).push(item);
+  }
+  const volumes = [...grouped.entries()].map(([title, items]) => ({
+    id: `volume_${stableHash(title)}`,
+    title,
+    sourceIds: items.map((item) => item.sourceId),
+    documentCount: items.length,
+    summary: items.map((item) => `${item.title}：${item.summary}`).join("\n").slice(0, 8000),
+    updatedAt: nowIso(),
+  }));
+  const book = {
+    id: "book_summary",
+    title: projectTitle || "全书",
+    documentCount: sources.length,
+    volumeCount: volumes.length,
+    summary: volumes.map((item) => `【${item.title}】${item.summary}`).join("\n").slice(0, 16000),
+    updatedAt: nowIso(),
+  };
+  return { volumes, book };
+}
+
+async function updateKnowledgeSummaries(projectPath, sources, options = {}) {
+  const config = await loadConfig(projectPath);
+  const previous = options.replaceAll ? { sources: [] } : await loadKnowledgeSummaries(projectPath);
+  const sourceMap = new Map((previous.sources || []).map((item) => [item.sourceId, item]));
+  for (const source of Array.isArray(sources) ? sources : []) {
+    const plain = contentToPlainText(source.content || "");
+    sourceMap.set(source.id, {
+      sourceId: source.id,
+      sourceType: source.type,
+      title: source.title,
+      volume: source.volume || "",
+      category: source.category || "",
+      knowledgeRole: source.type === "chapter" ? normalizeKnowledgeRole(source.knowledgeRole || "正文") : "",
+      contentHash: contentRevision(plain),
+      wordCount: countWords(plain),
+      summary: summarizeSourceText(source),
+      updatedAt: nowIso(),
+    });
+  }
+  const sourceSummaries = [...sourceMap.values()].sort((a, b) => String(a.title || "").localeCompare(String(b.title || ""), "zh-CN"));
+  const hierarchy = rebuildSummaryHierarchy(sourceSummaries, config.title);
+  const next = { version: 2, updatedAt: nowIso(), sources: sourceSummaries, ...hierarchy };
+  await writeJson(getKnowledgeSummariesPath(projectPath), next);
+  return next;
+}
+
+async function removeSourceFromKnowledgeSummaries(projectPath, sourceId) {
+  const config = await loadConfig(projectPath);
+  const previous = await loadKnowledgeSummaries(projectPath);
+  const sources = previous.sources.filter((item) => item.sourceId !== sourceId);
+  const hierarchy = rebuildSummaryHierarchy(sources, config.title);
+  await writeJson(getKnowledgeSummariesPath(projectPath), { version: 2, updatedAt: nowIso(), sources, ...hierarchy });
 }
 
 async function indexSource(projectPath, source) {
   return indexSources(projectPath, [source]);
 }
 
-async function buildIndexEntries(source, config, characterNames) {
+async function buildIndexEntries(source, config, characterNames, options = {}) {
   const indexContent = contentToPlainText(source.content);
+  const sourceHash = contentRevision(indexContent);
   const chunks = chunkText(indexContent);
-  const embeddings = await mapWithConcurrency(chunks, EMBEDDING_INDEX_CONCURRENCY, (chunk) => getEmbedding(chunk.text, config.api));
+  const embeddings = await mapWithConcurrency(chunks, EMBEDDING_INDEX_CONCURRENCY, async (chunk, index) => {
+    if (options.signal?.aborted) throw Object.assign(new Error("任务已停止"), { name: "AbortError" });
+    if (index % 12 === 0) await new Promise((resolve) => setImmediate(resolve));
+    return getEmbedding(chunk.text, config.api, { signal: options.signal });
+  });
   return chunks.map((chunk, index) => {
     const embedding = embeddings[index];
     return {
@@ -1443,39 +2276,44 @@ async function buildIndexEntries(source, config, characterNames) {
       embeddingSource: embedding.source,
       embeddingWarning: embedding.warning,
       metadata: extractMetadata(chunk.text, characterNames),
+      sourceHash,
       updatedAt: nowIso(),
     };
   });
 }
 
-async function indexSources(projectPath, sources) {
+async function indexSources(projectPath, sources, options = {}) {
   const safeSources = Array.isArray(sources) ? sources.filter(Boolean) : [];
   if (!safeSources.length) {
-    const store = await loadVectorStore(projectPath);
-    return { chunks: 0, totalChunks: store.vectors.length };
+    const stats = await vectorShards.stats(projectPath);
+    return { chunks: 0, totalChunks: stats.chunks };
   }
   const config = await loadConfig(projectPath);
   const characters = await loadCharacters(projectPath);
   const characterNames = characters.map((item) => item.name).filter(Boolean);
-  const store = await loadVectorStore(projectPath);
-  const sourceIds = new Set(safeSources.map((source) => source.id));
-  store.vectors = store.vectors.filter((item) => !sourceIds.has(item.sourceId));
-
   let indexedChunks = 0;
-  for (const source of safeSources) {
-    const entries = await buildIndexEntries(source, config, characterNames);
+  const entriesBySource = new Map();
+  for (let sourceIndex = 0; sourceIndex < safeSources.length; sourceIndex += 1) {
+    if (options.signal?.aborted) throw Object.assign(new Error("任务已停止"), { name: "AbortError" });
+    const source = safeSources[sourceIndex];
+    if (typeof options.onProgress === "function") await options.onProgress({ current: sourceIndex, total: safeSources.length, detail: source.title || source.id });
+    const entries = await buildIndexEntries(source, config, characterNames, options);
     indexedChunks += entries.length;
-    store.vectors.push(...entries);
+    entriesBySource.set(source.id, entries);
+    if (typeof options.onProgress === "function") await options.onProgress({ current: sourceIndex + 1, total: safeSources.length, detail: source.title || source.id });
   }
 
-  await saveVectorStore(projectPath, store);
-  return { chunks: indexedChunks, totalChunks: store.vectors.length };
+  if (options.signal?.aborted) throw Object.assign(new Error("任务已停止"), { name: "AbortError" });
+  const manifest = options.replaceAllIndex
+    ? await vectorShards.replaceSources(projectPath, entriesBySource)
+    : await vectorShards.upsertSources(projectPath, entriesBySource);
+  await updateKnowledgeSummaries(projectPath, safeSources, { replaceAll: Boolean(options.replaceSummaries) });
+  return { chunks: indexedChunks, totalChunks: manifest.totalChunks };
 }
 
 async function removeSourceFromIndex(projectPath, sourceId) {
-  const store = await loadVectorStore(projectPath);
-  store.vectors = store.vectors.filter((item) => item.sourceId !== sourceId);
-  await saveVectorStore(projectPath, store);
+  await vectorShards.removeSource(projectPath, sourceId);
+  await removeSourceFromKnowledgeSummaries(projectPath, sourceId);
 }
 
 function selectUsefulChunks(chunks, options = {}) {
@@ -1506,12 +2344,13 @@ function selectUsefulChunks(chunks, options = {}) {
   return selected;
 }
 
-async function rebuildIndex(projectPath) {
+async function rebuildIndex(projectPath, options = {}) {
   const config = await loadConfig(projectPath);
   const sources = [];
   sendRendererEvent("index:progress", { active: true, phase: "整理章节", current: 0, total: config.chapters.length, detail: "" });
 
   for (let index = 0; index < config.chapters.length; index += 1) {
+    if (options.signal?.aborted) throw Object.assign(new Error("任务已停止"), { name: "AbortError" });
     const chapter = config.chapters[index];
     sendRendererEvent("index:progress", { active: true, phase: "整理章节", current: index + 1, total: config.chapters.length, detail: chapter.title });
     const content = await fs.readFile(getChapterPath(projectPath, chapter), "utf8").catch(() => "");
@@ -1547,37 +2386,96 @@ async function rebuildIndex(projectPath) {
     });
   }
 
-  await saveVectorStore(projectPath, { version: 1, updatedAt: nowIso(), vectors: [] });
   const estimatedChunks = sources.reduce((sum, source) => sum + chunkText(contentToPlainText(source.content || "")).length, 0);
   sendRendererEvent("index:progress", { active: true, phase: "建立知识库", current: 0, total: estimatedChunks, detail: `预计 ${estimatedChunks} 个片段，${sources.length} 个来源` });
-  const result = await indexSources(projectPath, sources);
+  const result = await indexSources(projectPath, sources, {
+    replaceSummaries: true,
+    replaceAllIndex: true,
+    signal: options.signal,
+    onProgress: options.onProgress,
+  });
   sendRendererEvent("index:progress", { active: false, phase: "完成", current: result.totalChunks, total: result.totalChunks, detail: `${result.totalChunks} 个片段` });
   return { chunks: result.totalChunks };
 }
 
 async function searchRelevantChunks(projectPath, question, topK, options = {}) {
   const config = await loadConfig(projectPath);
-  const store = await loadVectorStore(projectPath);
-  const embedding = await getEmbedding(question, config.api);
   const safeTopK = Math.floor(clampNumber(topK, 1, MAX_RETRIEVAL_TOP_K, 5));
   const safeScanLimit = Math.floor(clampNumber(options.scanLimit || config.api.scanK || Math.max(safeTopK * 4, DEFAULT_RETRIEVAL_SCAN_K), safeTopK, MAX_RETRIEVAL_SCAN_K, DEFAULT_RETRIEVAL_SCAN_K));
   const sourceIds = new Set((Array.isArray(options.sourceIds) ? options.sourceIds : []).map((id) => String(id || "")).filter(Boolean));
+  const candidateSourceIds = new Set((Array.isArray(options.candidateSourceIds) ? options.candidateSourceIds : []).map((id) => String(id || "")).filter(Boolean));
+  const excludedSourceIds = new Set((Array.isArray(options.excludeSourceIds) ? options.excludeSourceIds : []).map((id) => String(id || "")).filter(Boolean));
+  const freshness = options.freshness || (options.skipFreshnessCheck ? null : await ensureKnowledgeFreshnessForRetrieval(projectPath, {
+    config,
+    question,
+    mode: options.mode || "normal",
+    sourceIds: [...sourceIds],
+    candidateSourceIds: [...candidateSourceIds],
+    boostSourceIds: options.boostSourceIds || [],
+    requiredSourceIds: options.retrievalContext?.requiredSourceIds || [],
+    signal: options.signal,
+  }));
+  const loadSourceIds = [...new Set([...sourceIds, ...candidateSourceIds, ...(Array.isArray(options.additionalLoadSourceIds) ? options.additionalLoadSourceIds : [])].map(String).filter(Boolean))];
+  const store = await vectorShards.loadStore(projectPath, loadSourceIds.length ? { sourceIds: loadSourceIds } : {});
+  const embedding = await getEmbedding(question, config.api);
+  const boostSourceIds = new Set((Array.isArray(options.boostSourceIds) ? options.boostSourceIds : []).map((id) => String(id || "")).filter(Boolean));
   const candidates = store.vectors
     .map((item) => {
       const vectorScore = cosineSimilarity(embedding.vector, item.embedding || []);
       const keywordScore = lexicalRelevanceScore(item, question);
-      return { ...item, score: vectorScore + keywordScore, vectorScore, keywordScore };
+      const hierarchyBoost = boostSourceIds.has(item.sourceId) ? 0.2 : 0;
+      const hybrid = retrievalPlanner.scoreCandidate(item, {
+        signals: options.retrievalContext?.signals,
+        adjacencyScores: options.retrievalContext?.adjacencyScores,
+        storyScores: options.retrievalContext?.storyScores,
+        subQueries: options.retrievalContext?.subQueries,
+        lexicalScore: lexicalRelevanceScore,
+      });
+      return {
+        ...item,
+        score: vectorScore + keywordScore + hierarchyBoost + hybrid.entityScore + hybrid.adjacencyScore + hybrid.storyScore + hybrid.subQueryScore,
+        vectorScore,
+        keywordScore,
+        hierarchyBoost,
+        ...hybrid,
+      };
     })
-    .filter((item) => !sourceIds.size || sourceIds.has(item.sourceId))
+    .filter((item) => !excludedSourceIds.has(String(item.sourceId)) && (!sourceIds.size || sourceIds.has(item.sourceId)))
     .sort((a, b) => b.score - a.score)
     .slice(0, safeScanLimit);
-  const chunks = selectUsefulChunks(candidates, {
-    maxChunks: safeTopK,
+  const evidenceTargets = retrievalPlanner.buildEvidenceTargets({
+    subQueries: options.retrievalContext?.subQueries || [],
+    signals: options.retrievalContext?.signals || {},
+    routedVolumes: options.retrievalContext?.routedVolumes || [],
+    requiredSourceIds: options.retrievalContext?.requiredSourceIds || [],
+    mode: options.mode || "normal",
+  });
+  const reserveForCoverage = Math.min(Math.max(0, safeTopK - Math.max(1, Number(options.minKeep || 3))), Math.min(24, Math.ceil(evidenceTargets.length * 1.5), Math.ceil(safeTopK * 0.2)));
+  const firstPass = selectUsefulChunks(candidates, {
+    maxChunks: Math.max(1, safeTopK - reserveForCoverage),
     minKeep: options.minKeep,
     minScore: options.minScore,
     maxChars: options.maxChars,
   });
-  return { chunks, candidateCount: candidates.length, scannedCount: store.vectors.length, embeddingSource: embedding.source, embeddingWarning: embedding.warning };
+  const secondPass = retrievalPlanner.addCoverageSecondPass({
+    firstPass,
+    candidates,
+    targets: evidenceTargets,
+    maxChunks: safeTopK,
+    maxChars: options.maxChars || CHAT_CONTEXT_CHAR_BUDGET,
+    lexicalScore: lexicalRelevanceScore,
+  });
+  return {
+    chunks: secondPass.chunks,
+    candidateCount: candidates.length,
+    scannedCount: store.vectors.length,
+    totalIndexedCount: Number(store.totalChunks || store.vectors.length),
+    embeddingSource: embedding.source,
+    embeddingWarning: embedding.warning,
+    coveragePass: secondPass.audit,
+    freshness,
+    _store: store,
+  };
 }
 
 function characterToMarkdown(card) {
@@ -1681,7 +2579,7 @@ function buildProjectMemorySummary(snapshot, extraMemory = "") {
   return [manualMemory ? `【手动项目记忆】\n${manualMemory}` : "", sessionLines ? `【最近会话摘要】\n${sessionLines}` : ""].filter(Boolean).join("\n\n");
 }
 
-function buildSystemPrompt({ retrievedContext, characterCards, worldbuilding, sourceCatalog, projectMemory, userQuestion, selectedText, retrieval, inventorySummary }) {
+function buildSystemPrompt({ retrievedContext, characterCards, worldbuilding, sourceCatalog, hierarchicalContext, projectMemory, userQuestion, selectedText, retrieval, inventorySummary }) {
   const questionPreview = truncateForPrompt(userQuestion, USER_QUESTION_SYSTEM_PREVIEW_CHARS);
   const selected = selectedText
     ? `\n【用户选中的文本】\n"""\n${truncateForPrompt(selectedText, SELECTED_TEXT_PROMPT_MAX_CHARS)}\n"""\n`
@@ -1700,6 +2598,9 @@ ${sourceCatalog || "暂无项目资料目录。"}
 
 【项目资料盘点清单】
 ${inventorySummary || "未生成资料盘点清单。"}
+
+【分层知识库摘要】
+${hierarchicalContext || "暂无分层摘要；请以原始检索片段为准。"}
 
 【检索到的小说内容】
 ${retrievedContext || "没有检索到相关片段。"}
@@ -1801,8 +2702,8 @@ function findMentionedSourceIds(question, characters, worldDocs) {
   return [...new Set(ids)];
 }
 
-function buildInventorySummary(config, characters, worldDocs, store) {
-  const chunkCounts = countBySourceId(store?.vectors || []);
+function buildInventorySummary(config, characters, worldDocs, manifest) {
+  const chunkCounts = new Map((manifest?.sources || []).map((entry) => [entry.sourceId, Number(entry.chunkCount || 0)]));
   const chapters = (config.chapters || []).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   const chapterLines = (role) =>
     chapters
@@ -1812,7 +2713,7 @@ function buildInventorySummary(config, characters, worldDocs, store) {
   const characterLines = (characters || []).map((card) => `- ${card.name}｜${normalizeCategory(card.category)}｜${chunkCounts.get(card.id) || 0} 片段`).join("\n") || "- 无";
   const worldLines = (worldDocs || []).map((doc) => `- ${doc.title}｜${normalizeCategory(doc.category)}｜${chunkCounts.get(doc.id) || 0} 片段`).join("\n") || "- 无";
   return [
-    `知识库总片段：${(store?.vectors || []).length}`,
+    `知识库总片段：${Number(manifest?.totalChunks || 0)}`,
     "【正文章节】",
     chapterLines("正文"),
     "【大纲】",
@@ -1832,15 +2733,18 @@ function countBySourceId(vectors) {
   return counts;
 }
 
-function appendCoverageChunks(chunks, store, sourceIds, maxChunks) {
+function appendCoverageChunks(chunks, store, sourceIds, maxChunks, maxChars = Number.POSITIVE_INFINITY) {
   const selected = Array.isArray(chunks) ? chunks.slice() : [];
   const existingChunkIds = new Set(selected.map((item) => item.id));
   const existingSourceIds = new Set(selected.map((item) => item.sourceId));
+  let totalChars = selected.reduce((sum, item) => sum + String(item.text || "").length, 0);
   for (const sourceId of sourceIds) {
     if (selected.length >= maxChunks) break;
     if (existingSourceIds.has(sourceId)) continue;
     const entry = (store.vectors || []).find((item) => item.sourceId === sourceId && !existingChunkIds.has(item.id));
     if (!entry) continue;
+    const entryChars = String(entry.text || "").length;
+    if (totalChars + entryChars > maxChars) continue;
     selected.push({
       ...entry,
       score: Number(entry.score || 0.001),
@@ -1849,8 +2753,23 @@ function appendCoverageChunks(chunks, store, sourceIds, maxChunks) {
     });
     existingChunkIds.add(entry.id);
     existingSourceIds.add(sourceId);
+    totalChars += entryChars;
   }
   return selected;
+}
+
+function forceIncludeSourceChunks(chunks, store, sourceIds, maxChunks) {
+  const selected = Array.isArray(chunks) ? chunks.slice(0, maxChunks) : [];
+  const included = new Set(selected.map((item) => item.sourceId));
+  for (const sourceId of sourceIds) {
+    if (included.has(sourceId)) continue;
+    const entry = (store.vectors || []).find((item) => item.sourceId === sourceId);
+    if (!entry) continue;
+    if (selected.length >= maxChunks) selected.pop();
+    selected.push({ ...entry, score: Math.max(Number(entry.score || 0), 2), vectorScore: Number(entry.vectorScore || 0), keywordScore: Number(entry.keywordScore || 0) });
+    included.add(sourceId);
+  }
+  return selected.sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
 }
 
 function summarizeRetrieval(chunks, config, characters, worldDocs, mode, requestedMode, search, options = {}) {
@@ -1873,6 +2792,9 @@ function summarizeRetrieval(chunks, config, characters, worldDocs, mode, request
   const allChapterTitles = (config.chapters || []).map((chapter) => chapter.title);
   const includedChapterTitles = new Set((chunks || []).filter((chunk) => chaptersById.has(chunk.sourceId)).map((chunk) => chunk.title));
   const existingButNotRead = allChapterTitles.filter((title) => !includedChapterTitles.has(title));
+  const existingButNotReadSources = (config.chapters || [])
+    .filter((chapter) => !includedChapterTitles.has(chapter.title))
+    .map((chapter) => ({ sourceId: chapter.id, title: chapter.title, group: chapter.volume || "未分卷" }));
   return {
     requestedMode,
     mode,
@@ -1887,8 +2809,27 @@ function summarizeRetrieval(chunks, config, characters, worldDocs, mode, request
     documentCount: includedTitles.length,
     includedTitles: includedTitles.slice(0, 80),
     existingButNotRead: existingButNotRead.slice(0, 120),
+    existingButNotReadSources: existingButNotReadSources.slice(0, 500),
     categoryCounts,
     notes: options.notes || [],
+    plannedTitles: options.plannedTitles || [],
+    layersUsed: options.layersUsed || [],
+    additionalSourceIds: options.additionalSourceIds || [],
+    subQueries: options.subQueries || [],
+    routedVolumes: options.routedVolumes || [],
+    coverageByVolume: options.coverageByVolume || [],
+    rawChapterCoverage: options.rawChapterCoverage || { selected: 0, total: 0 },
+    coverageWarnings: options.coverageWarnings || [],
+    selectedSourceReasons: options.selectedSourceReasons || [],
+    skippedSourceReasons: options.skippedSourceReasons || [],
+    firstPassCount: Number(search?.coveragePass?.firstPassCount || chunks?.length || 0),
+    secondPassCount: Number(search?.coveragePass?.secondPassCount || 0),
+    evidenceTargets: search?.coveragePass?.targets || [],
+    uncoveredTargets: search?.coveragePass?.uncoveredTargets || [],
+    addedSources: search?.coveragePass?.addedSources || [],
+    evidenceConfidence: search?.coveragePass?.evidenceConfidence || (chunks?.length ? "中" : "低"),
+    evidenceCoverageRatio: Number(search?.coveragePass?.coverageRatio || 0),
+    freshness: search?.freshness || null,
   };
 }
 
@@ -1900,6 +2841,11 @@ function contextFromChunks(chunks) {
     score: item.score,
     vectorScore: item.vectorScore,
     keywordScore: item.keywordScore,
+    entityScore: item.entityScore,
+    adjacencyScore: item.adjacencyScore,
+    storyScore: item.storyScore,
+    subQueryScore: item.subQueryScore,
+    matchedSubQuery: item.matchedSubQuery,
     knowledgeRole: item.knowledgeRole,
     volume: item.volume,
     category: item.category,
@@ -1908,24 +2854,75 @@ function contextFromChunks(chunks) {
   }));
 }
 
+function planHierarchicalRetrieval(question, summaries, mode) {
+  const rankedSources = (summaries.sources || [])
+    .map((item) => ({
+      ...item,
+      score: lexicalRelevanceScore(
+        { title: item.title, volume: item.volume, category: item.category, knowledgeRole: item.knowledgeRole, text: item.summary },
+        question,
+      ),
+    }))
+    .sort((a, b) => b.score - a.score);
+  const sourceLimit = mode === "book" ? 240 : mode === "inventory" ? 120 : 80;
+  const routedSources = rankedSources.filter((item) => item.score > 0).slice(0, sourceLimit);
+  const fallbackSources = routedSources.length ? routedSources : rankedSources.slice(0, Math.min(24, sourceLimit));
+  const relevantGroups = new Set(fallbackSources.map((item) => item.volume || item.category).filter(Boolean));
+  const volumes = (summaries.volumes || []).filter((item) => mode === "book" || relevantGroups.has(item.title)).slice(0, mode === "book" ? 80 : 12);
+  const hierarchyContext = [
+    summaries.book?.summary ? `【全书结构摘要｜${summaries.book.documentCount || 0} 份资料】\n${truncateForPrompt(summaries.book.summary, mode === "book" ? 8000 : 3000)}` : "",
+    volumes.length
+      ? `【分卷/分类摘要】\n${volumes.map((item) => `【${item.title}｜${item.documentCount} 份】${truncateForPrompt(item.summary, 1600)}`).join("\n")}`
+      : "",
+    fallbackSources.length
+      ? `【候选文档摘要】\n${fallbackSources.slice(0, mode === "book" ? 60 : 24).map((item) => `- ${item.title}：${truncateForPrompt(item.summary, 420)}`).join("\n")}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n")
+    .slice(0, mode === "book" ? 30000 : 14000);
+  return {
+    sourceIds: fallbackSources.map((item) => item.sourceId),
+    plannedTitles: fallbackSources.map((item) => item.title).slice(0, 80),
+    hierarchyContext,
+    layersUsed: [summaries.book?.summary ? "全书" : "", volumes.length ? "分卷" : "", fallbackSources.length ? "文档" : "", "原始片段"].filter(Boolean),
+  };
+}
+
 async function buildChatRetrievalPackage(projectPath, config, payload, question) {
   const requestedMode = normalizeRetrievalMode(payload?.retrievalMode || "auto");
   const selectedChapterId = String(payload?.selectedChapterId || "");
   const characters = await loadCharacters(projectPath);
   const worldDocs = await loadWorldDocs(projectPath);
-  const store = await loadVectorStore(projectPath);
   let mode = classifyRetrievalMode(question, requestedMode, config, selectedChapterId);
   const mentionedEntityIds = findMentionedSourceIds(question, characters, worldDocs);
   if (mode === "normal" && requestedMode === "auto" && mentionedEntityIds.length) mode = "entity";
+  const preliminaryChapters = findMentionedChapters(config, question, selectedChapterId, mode === "current" ? "current" : "chapter");
+  const freshness = await ensureKnowledgeFreshnessForRetrieval(projectPath, {
+    config,
+    characters,
+    worldDocs,
+    question,
+    mode,
+    sourceIds: [...preliminaryChapters.map((item) => item.id), ...mentionedEntityIds],
+    repairAll: mode === "book" || mode === "inventory",
+  });
+  const manifest = await vectorShards.migrateLegacyIfNeeded(projectPath);
+  const summaries = await loadKnowledgeSummaries(projectPath);
   const sendLimit = Math.floor(clampNumber(config.api.topK || 120, 1, MAX_RETRIEVAL_TOP_K, 120));
   const scanLimit = Math.floor(clampNumber(config.api.scanK || DEFAULT_RETRIEVAL_SCAN_K, sendLimit, MAX_RETRIEVAL_SCAN_K, DEFAULT_RETRIEVAL_SCAN_K));
   const notes = [];
+  if (freshness.repairedSourceCount) notes.push(`检索前自动更新了 ${freshness.repairedSourceCount} 份过期资料。`);
+  if (freshness.deferredSourceCount) notes.push(`另有 ${freshness.deferredSourceCount} 份过期资料与本次问题无直接关联，未作为“不存在”处理。`);
   let sourceIds = [];
   let searchQuestion = question;
   let minKeep = Math.min(CHAT_CONTEXT_MIN_CHUNKS, sendLimit);
   let maxChars = CHAT_CONTEXT_CHAR_BUDGET;
   let catalogUsed = true;
   let inventoryUsed = false;
+  const additionalSourceIds = [...new Set((Array.isArray(payload?.additionalSourceIds) ? payload.additionalSourceIds : []).map((item) => String(item || "")).filter(Boolean))];
+  const subQueries = retrievalPlanner.decomposeQuery(question, mode);
+  const querySignals = retrievalPlanner.extractQuerySignals(question, characters, worldDocs);
 
   if (mode === "inventory") {
     inventoryUsed = true;
@@ -1962,35 +2959,82 @@ async function buildChatRetrievalPackage(projectPath, config, payload, question)
     notes.push("全书分析模式：扩大候选扫描，并尽量补足正文章节覆盖。");
   }
 
-  const search = await searchRelevantChunks(projectPath, searchQuestion, sendLimit, {
+  const mentionedChapters = findMentionedChapters(config, question, selectedChapterId, mode === "current" ? "current" : "chapter");
+  const anchorChapterIds = [...new Set([selectedChapterId, ...mentionedChapters.map((item) => item.id)].filter(Boolean))];
+  const adjacencyScores = retrievalPlanner.buildChapterAdjacency(config.chapters || [], anchorChapterIds);
+  const workspaceState = await creativeWorkspace.loadWorkspace(projectPath).catch(() => ({}));
+  const storyContext = anchorChapterIds[0]
+    ? await storyState.getAgentContext(projectPath, anchorChapterIds[0], querySignals.characters, []).catch(() => ({}))
+    : {};
+  const storyScores = retrievalPlanner.buildStoryBoosts(workspaceState, storyContext, subQueries);
+  const volumeCache = await retrievalPlanner.ensureVolumeCache(projectPath, { manifest, summaries, config });
+  const routedVolumes = retrievalPlanner.rankVolumeCache(volumeCache, subQueries, mode, lexicalRelevanceScore);
+  if (volumeCache.reused) notes.push("已复用分卷检索缓存。");
+  if (subQueries.length > 1) notes.push(`已拆分为 ${subQueries.length} 个检索子问题。`);
+
+  const hierarchyPlan = planHierarchicalRetrieval(searchQuestion, summaries, mode);
+  const bodyIds = (config.chapters || []).filter((chapter) => getKnowledgeRole(chapter) === "正文").map((chapter) => chapter.id);
+  const candidateSourceIds = mode === "book"
+    ? [...(config.chapters || []).map((chapter) => chapter.id), ...characters.map((item) => item.id), ...worldDocs.map((item) => item.id)]
+    : [...sourceIds, ...hierarchyPlan.sourceIds, ...routedVolumes.flatMap((item) => item.sourceIds || []), ...additionalSourceIds];
+  const searchResult = await searchRelevantChunks(projectPath, searchQuestion, sendLimit, {
     sourceIds,
+    candidateSourceIds,
+    boostSourceIds: [...hierarchyPlan.sourceIds, ...routedVolumes.flatMap((item) => item.sourceIds || []), ...additionalSourceIds],
     scanLimit,
     minKeep,
     maxChars,
+    retrievalContext: {
+      subQueries,
+      signals: querySignals,
+      adjacencyScores,
+      storyScores,
+      routedVolumes: routedVolumes.map((item) => item.title),
+      requiredSourceIds: [...sourceIds, ...additionalSourceIds],
+    },
+    mode,
+    freshness,
+    skipFreshnessCheck: true,
   });
+  const { _store: store, ...search } = searchResult;
   let chunks = search.chunks;
   if (mode === "book") {
-    const bodyIds = (config.chapters || []).filter((chapter) => getKnowledgeRole(chapter) === "正文").map((chapter) => chapter.id);
-    chunks = appendCoverageChunks(chunks, store, bodyIds, sendLimit);
+    chunks = appendCoverageChunks(chunks, store, bodyIds, sendLimit, maxChars);
   }
   if (mode === "chapter" || mode === "current") {
-    chunks = appendCoverageChunks(chunks, store, sourceIds, sendLimit);
+    chunks = appendCoverageChunks(chunks, store, sourceIds, sendLimit, maxChars);
   }
-  const materials = await collectPromptMaterials(projectPath, chunks, question);
-  const inventorySummary = buildInventorySummary(config, characters, worldDocs, store);
+  if (additionalSourceIds.length) {
+    chunks = forceIncludeSourceChunks(chunks, store, additionalSourceIds, sendLimit);
+    notes.push(`用户补选了 ${additionalSourceIds.length} 份资料。`);
+  }
+  const materials = { ...(await collectPromptMaterials(projectPath, chunks, question)), hierarchicalContext: hierarchyPlan.hierarchyContext };
+  const inventorySummary = buildInventorySummary(config, characters, worldDocs, manifest);
+  const coverage = retrievalPlanner.buildCoverageAudit(chunks, config, summaries, manifest);
+  const sourceReasons = retrievalPlanner.buildSourceReasons(chunks, manifest, config);
+  if (mode === "book" && coverage.rawChapterCoverage.selected < coverage.rawChapterCoverage.total) {
+    notes.push(`正文原始证据覆盖 ${coverage.rawChapterCoverage.selected}/${coverage.rawChapterCoverage.total} 章，其余章节通过分卷与文档摘要参与结构判断。`);
+  }
   const retrieval = summarizeRetrieval(chunks, config, characters, worldDocs, mode, requestedMode, search, {
     scanLimit,
     sendLimit,
     catalogUsed,
     inventoryUsed,
     notes,
+    plannedTitles: hierarchyPlan.plannedTitles,
+    layersUsed: hierarchyPlan.layersUsed,
+    additionalSourceIds,
+    subQueries: subQueries.map((item) => ({ id: item.id, label: item.label, query: item.query, kind: item.kind })),
+    routedVolumes: routedVolumes.map((item) => item.title),
+    ...coverage,
+    ...sourceReasons,
   });
   return { search: { ...search, chunks }, materials, retrieval, inventorySummary };
 }
 
-async function callChatApi(config, systemPrompt, question, history = []) {
+async function callChatApi(config, systemPrompt, question, history = [], options = {}) {
   const api = config.api || {};
-  const apiKey = decodeSecret(api.apiKey);
+  const apiKey = runtimeSecret(api, "chat");
   const provider = api.provider || "custom";
   const baseUrl = (api.baseUrl || DEFAULT_CHAT_BASE_URL).replace(/\/$/, "");
   const model = api.chatModel || "deepseek-chat";
@@ -2018,6 +3062,7 @@ async function callChatApi(config, systemPrompt, question, history = []) {
         "anthropic-version": "2023-06-01",
       },
       "Claude API ",
+      { signal: options.signal },
     );
     if (!response.ok) {
       const detail = await response.text();
@@ -2038,7 +3083,10 @@ async function callChatApi(config, systemPrompt, question, history = []) {
     max_tokens: maxTokens,
     messages: [{ role: "system", content: systemPrompt }, ...safeHistory, { role: "user", content: question }],
   };
-  const { response, bodyBytes } = await fetchJsonWithDiagnostics(`${baseUrl}/chat/completions`, payload, headers, "聊天 API ");
+  if (options.stream && provider !== "claude") {
+    return fetchOpenAiCompatibleStream(`${baseUrl}/chat/completions`, payload, headers, "聊天 API ", options.onToken, { signal: options.signal });
+  }
+  const { response, bodyBytes } = await fetchJsonWithDiagnostics(`${baseUrl}/chat/completions`, payload, headers, "聊天 API ", { signal: options.signal });
   if (!response.ok) {
     const detail = await response.text();
     throw new Error(`聊天 API 请求失败：${response.status} ${detail.slice(0, 400)}\n请求地址：${safeEndpointLabel(`${baseUrl}/chat/completions`)}\n请求体大小：${formatBytes(bodyBytes)}`);
@@ -2046,6 +3094,38 @@ async function callChatApi(config, systemPrompt, question, history = []) {
   const data = await response.json();
   const answer = data?.choices?.[0]?.message?.content || data?.message?.content || "";
   return answer.trim() || "模型返回了空内容。";
+}
+
+function estimateTokenCount(value) {
+  const text = String(value || "");
+  const asciiLength = (text.match(/[\x00-\x7f]/g) || []).length;
+  return Math.max(1, Math.ceil((text.length - asciiLength) / 1.6 + asciiLength / 4));
+}
+
+async function callStructuredChatWithProgress(config, systemPrompt, question, control = {}, phase = "AI 正在整理") {
+  if (typeof control.update !== "function" && !control.signal) return callChatApi(config, systemPrompt, question, []);
+  let partialOutput = "";
+  let lastCheckpointAt = 0;
+  const promptTokens = estimateTokenCount(`${systemPrompt}\n${question}`);
+  await control.update?.({ phase, usage: { promptTokens, completionTokens: 0, totalTokens: promptTokens } });
+  const answer = await callChatApi(config, systemPrompt, question, [], {
+    stream: true,
+    signal: control.signal,
+    onToken: (token) => {
+      partialOutput += token;
+      if (Date.now() - lastCheckpointAt < 900) return;
+      lastCheckpointAt = Date.now();
+      const completionTokens = estimateTokenCount(partialOutput);
+      void control.update?.({
+        phase,
+        partialOutput,
+        usage: { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens },
+      });
+    },
+  });
+  const completionTokens = estimateTokenCount(answer);
+  await control.update?.({ partialOutput: answer, usage: { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens } });
+  return answer;
 }
 
 function extractJsonFromModelText(text) {
@@ -2429,7 +3509,7 @@ function normalizeTimelinePayload(payload, chapters, characterNames) {
     .map((item, index) => ({ ...item, order: index }));
 }
 
-async function buildAiTimelineEvents(projectPath, options = {}) {
+async function buildAiTimelineEvents(projectPath, options = {}, control = {}) {
   const materials = await buildStructuringMaterials(projectPath, "时间线 事件 起因 结果 转折 冲突 章节顺序", options);
   const { chapters, characters } = await loadProjectSources(projectPath);
   const characterNames = characters.map((item) => item.name).filter(Boolean);
@@ -2449,7 +3529,7 @@ ${materials.retrieved || "无"}
 
 【大纲与正文】
 ${materials.corpus}`;
-  const answer = await callChatApi(materials.config, systemPrompt, question, []);
+  const answer = await callStructuredChatWithProgress(materials.config, systemPrompt, question, control, "AI 正在识别剧情事件");
   const events = normalizeTimelinePayload(extractJsonFromModelText(answer), chapters, characterNames);
   if (!events.length) throw new Error("AI 没有返回可识别的剧情事件。");
   return { events, contextCount: materials.search.chunks.length, apiError: "", options: { mode: "ai", chapterIds: Array.isArray(options.chapterIds) ? options.chapterIds : [], knowledgeSourceIds: Array.isArray(options.knowledgeSourceIds) ? options.knowledgeSourceIds : [] } };
@@ -2628,7 +3708,7 @@ async function buildLocalConsistencyIssues(projectPath, options = {}) {
   return issues.slice(0, 40);
 }
 
-async function analyzeConsistency(projectPath, options = {}) {
+async function analyzeConsistency(projectPath, options = {}, control = {}) {
   const localIssues = await buildLocalConsistencyIssues(projectPath, options);
   const statuses = await loadIssueStatuses(projectPath);
   const materials = await buildStructuringMaterials(projectPath, "设定矛盾 时间线 冲突 角色 动机 世界规则 前后不一致", options);
@@ -2649,7 +3729,7 @@ ${materials.retrieved || "无"}
 ${materials.corpus}`;
 
   try {
-    const answer = await callChatApi(materials.config, systemPrompt, question, []);
+    const answer = await callStructuredChatWithProgress(materials.config, systemPrompt, question, control, "AI 正在核对一致性问题");
     const aiIssues = normalizeConsistencyIssues(extractJsonFromModelText(answer));
     const seen = new Set();
     const issues = [...aiIssues, ...localIssues].filter((item) => {
@@ -2802,6 +3882,77 @@ async function saveWorldCardCandidates(projectPath, candidates) {
   };
 }
 
+async function refreshLocalStoryState(projectPath, chapterId, contentOverride = null, context = {}) {
+  const config = context.config || await loadConfig(projectPath);
+  const chapter = config.chapters.find((item) => item.id === chapterId);
+  if (!chapter) throw new Error("章节不存在，无法更新创作状态。");
+  const content = contentOverride === null ? await fs.readFile(getChapterPath(projectPath, chapter), "utf8").catch(() => "") : String(contentOverride || "");
+  const characters = context.characters || await loadCharacters(projectPath);
+  const ledger = storyState.analyzeChapterLocally({ chapter, content, characters });
+  return storyState.saveChapterLedger(projectPath, ledger);
+}
+
+async function getStoryOverviewForProject(projectPath, options = {}) {
+  const config = await loadConfig(projectPath);
+  const projectChapters = await mapWithConcurrency(config.chapters, 8, async (chapter) => {
+    return { id: chapter.id, title: chapter.title, volume: chapter.volume || "未分卷", revision: await cachedChapterRevision(projectPath, chapter) };
+  });
+  return storyState.getStoryOverview(projectPath, { chapterLimit: 500, ...options, projectChapters });
+}
+
+function storyAnalysisSystemPrompt() {
+  return `你是小说项目的剧情事实整理工具。只记录输入正文中可以直接找到证据的事实，不要补写、推测或完善设定。
+输出 JSON，不要 Markdown，不要解释。格式：
+{"facts":[{"type":"剧情事件","subject":"","predicate":"","object":"","confidence":0.8,"evidence":[{"quote":"原文短句"}]}],"characterStates":[{"characterName":"","location":"","route":["行动路线"],"physical":["身体状态"],"mental":["精神状态"],"abilities":["能力变化"],"goals":["当前目标"],"obstacles":["当前阻碍"],"knowledge":["已知信息"],"knowledgeSources":["信息来源"],"possessions":["携带物品"],"relationships":["当前关系"],"relationshipChanges":["关系变化"],"lastAppearance":"最近一次出场原句","confidence":0.8,"evidence":[{"quote":"原文短句"}]}],"foreshadows":[{"title":"","description":"","stage":"埋设|强化|回收","plannedPayoff":"","relatedCharacters":[""],"confidence":0.7,"evidence":[{"quote":"原文短句"}]}]}
+事实类型优先使用：剧情事件、地点变化、物品变化、知情变化、关系变化、状态变化。
+每一条都必须带正文中的原句证据；没有证据就不要输出。角色“知道什么”必须严格区分叙述者信息与角色知情范围，并在 knowledgeSources 中写清得知渠道。伏笔如果是既有线索的强化或回收，沿用同一简洁标题并准确填写 stage。`;
+}
+
+async function analyzeStoryStateWithAI(projectPath, chapterId, control = {}) {
+  const config = await loadConfig(projectPath);
+  const chapter = config.chapters.find((item) => item.id === chapterId);
+  if (!chapter) throw new Error("章节不存在，无法执行 AI 剧情分析。");
+  const content = await fs.readFile(getChapterPath(projectPath, chapter), "utf8").catch(() => "");
+  const characters = await loadCharacters(projectPath);
+  const localLedger = storyState.analyzeChapterLocally({ chapter, content, characters });
+  if (!runtimeSecret(config.api, "chat")) {
+    const saved = await storyState.saveChapterLedger(projectPath, localLedger);
+    return { ledger: saved, apiError: "未配置聊天 API，已完成本地基础分析。" };
+  }
+  const characterCatalog = characters.slice(0, 120).map((item) => `${item.name}${item.category ? `（${item.category}）` : ""}`).join("、");
+  const question = `【章节】${chapter.volume || "未分卷"} / ${chapter.title}
+【已有角色卡】${characterCatalog || "无"}
+【正文】
+${truncateForPrompt(contentToPlainText(content), 70000)}`;
+  let partialOutput = "";
+  let lastCheckpointAt = 0;
+  const promptTokens = estimateTokenCount(`${storyAnalysisSystemPrompt()}\n${question}`);
+  await control.update?.({ usage: { promptTokens, completionTokens: 0, totalTokens: promptTokens } });
+  const answer = await callChatApi(config, storyAnalysisSystemPrompt(), question, [], {
+    stream: true,
+    signal: control.signal,
+    onToken: (token) => {
+      partialOutput += token;
+      if (Date.now() - lastCheckpointAt < 900) return;
+      lastCheckpointAt = Date.now();
+      if (typeof control.update === "function") {
+        const completionTokens = estimateTokenCount(partialOutput);
+        void control.update({
+          phase: `正在分析《${chapter.title}》`,
+          partialOutput,
+          usage: { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens },
+        });
+      }
+    },
+  });
+  const completionTokens = estimateTokenCount(answer);
+  await control.update?.({ partialOutput: answer, usage: { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens } });
+  const normalized = storyState.normalizeAiChapterAnalysis(extractJsonFromModelText(answer), chapter, localLedger.sourceRevision, characters);
+  const usefulLedger = normalized.facts.length || normalized.characterStates.length || normalized.foreshadows.length ? normalized : localLedger;
+  const saved = await storyState.saveChapterLedger(projectPath, usefulLedger);
+  return { ledger: saved, partialOutput: answer, apiError: usefulLedger === localLedger ? "AI 返回结构无法识别，已保留本地分析结果。" : "" };
+}
+
 function normalizeCreativeAdviceMode(value) {
   return ["next", "plot", "foreshadow"].includes(String(value || "")) ? String(value) : "next";
 }
@@ -2899,14 +4050,97 @@ function buildLocalCreativeAdvice(mode, chapter, nextChapter, focus = "") {
   ];
 }
 
-async function buildCreativeAdvice(projectPath, options = {}) {
+async function collectCreativeAgentToolReport(projectPath, ordered, selectedIndex, currentText, contextIds = []) {
+  const characters = await loadCharacters(projectPath);
+  const worldDocs = await loadWorldDocs(projectPath);
+  const matchedCharacters = characters.filter((card) => card.name && currentText.includes(card.name)).slice(0, 20);
+  const matchedWorld = worldDocs.filter((doc) => doc.title && currentText.includes(doc.title)).slice(0, 20);
+  const earlierChapters = ordered.slice(0, selectedIndex + 1);
+  const earlierTexts = await mapWithConcurrency(earlierChapters, 6, async (chapter) => ({
+    chapter,
+    text: contentToPlainText(await fs.readFile(getChapterPath(projectPath, chapter), "utf8").catch(() => "")),
+  }));
+  const lastAppearances = [];
+  for (const card of matchedCharacters) {
+    for (let index = earlierTexts.length - 1; index >= 0; index -= 1) {
+      if (!earlierTexts[index].text.includes(card.name)) continue;
+      lastAppearances.push(`${card.name}：${earlierTexts[index].chapter.title}`);
+      break;
+    }
+  }
+  const analysis = await loadAnalysisState(projectPath);
+  const unresolvedIssues = (analysis.consistency?.issues || []).filter((item) => !["已修复", "忽略"].includes(item.status)).slice(0, 12);
+  const timelineCount = Array.isArray(analysis.timeline?.events) ? analysis.timeline.events.length : 0;
+  const summaries = await loadKnowledgeSummaries(projectPath);
+  const health = await inspectProjectHealth(projectPath);
+  const storyContext = await storyState.getAgentContext(projectPath, ordered[selectedIndex]?.id || "", matchedCharacters.map((item) => item.name), contextIds);
+  const selectedIds = new Set((contextIds || []).map(String));
+  const contextRefs = selectedIds.size
+    ? [
+        ...storyContext.facts.filter((item) => selectedIds.has(item.id)).flatMap((item) => item.evidence || []),
+        ...storyContext.characterStates.filter((item) => selectedIds.has(item.id) || selectedIds.has(item.characterId)).flatMap((item) => item.evidence || []),
+        ...storyContext.foreshadows.filter((item) => selectedIds.has(item.id)).flatMap((item) => item.plantedAt || []),
+      ].filter((item, index, array) => item?.chapterId && array.findIndex((candidate) => candidate.chapterId === item.chapterId && candidate.quote === item.quote) === index).slice(0, 20)
+    : [];
+  const foreshadowCandidates = [];
+  for (const item of earlierTexts) {
+    if (/(伏笔|线索|预兆|异常|秘密|谜团)/.test(item.text)) foreshadowCandidates.push(item.chapter.title);
+  }
+  const tools = [
+    { name: "当前与相邻章节", detail: `${ordered[Math.max(0, selectedIndex - 1)]?.title || "无"} / ${ordered[selectedIndex]?.title || "无"} / ${ordered[selectedIndex + 1]?.title || "无"}` },
+    { name: "角色最近出场", detail: lastAppearances.join("；") || "当前章节未命中已有角色卡" },
+    { name: "关联世界观", detail: matchedWorld.map((item) => item.title).join("；") || "当前章节未直接命名世界观条目" },
+    { name: "伏笔候选", detail: foreshadowCandidates.slice(-12).join("；") || "暂未发现显式伏笔词" },
+    { name: "时间线与一致性", detail: `时间线 ${timelineCount} 个事件；待处理问题 ${unresolvedIssues.length} 个` },
+    { name: "知识库结构", detail: `文档摘要 ${summaries.sources.length}；分卷摘要 ${summaries.volumes.length}；全书摘要 ${summaries.book?.summary ? "可用" : "待建立"}` },
+    { name: "章节健康", detail: health.healthy ? "未发现高风险结构问题" : `发现 ${health.issues.filter((item) => item.severity === "高").length} 个高风险问题` },
+    { name: "剧情事实账本", detail: `当前章节可用事实 ${storyContext.facts.length} 条；角色状态 ${storyContext.characterStates.length} 条` },
+    { name: "待处理伏笔", detail: storyContext.foreshadows.slice(0, 8).map((item) => `${item.title}（${item.status}）`).join("；") || "暂无已记录的待处理伏笔" },
+  ];
+  const evidencePrompt = [
+    storyContext.facts.length ? `【已发生事实】\n${storyContext.facts.slice(0, 24).map((item) => `- ${item.subject}：${item.object}（${item.chapterTitle}）`).join("\n")}` : "",
+    storyContext.characterStates.length ? `【角色最新状态】\n${storyContext.characterStates.slice(0, 16).map((item) => `- ${item.characterName}：地点 ${item.location || "未记录"}；目标 ${(item.goals || []).join("、") || "未记录"}；知情 ${(item.knowledge || []).join("、") || "未记录"}`).join("\n")}` : "",
+    storyContext.foreshadows.length ? `【未回收伏笔】\n${storyContext.foreshadows.slice(0, 20).map((item) => `- ${item.title}：${item.description}（${item.status}）`).join("\n")}` : "",
+  ].filter(Boolean).join("\n\n");
+  const prompt = `${tools.map((item) => `- ${item.name}：${item.detail}`).join("\n")}${evidencePrompt ? `\n\n${evidencePrompt}` : ""}`;
+  return { tools, prompt, storyContext, contextRefs };
+}
+
+async function buildAgentRetrievalContext(projectPath, config, query, chapterId, contextIds = []) {
+  const [characters, worldDocs, workspace] = await Promise.all([
+    loadCharacters(projectPath),
+    loadWorldDocs(projectPath),
+    creativeWorkspace.loadWorkspace(projectPath),
+  ]);
+  const subQueries = retrievalPlanner.decomposeQuery(query, "normal");
+  const signals = retrievalPlanner.extractQuerySignals(query, characters, worldDocs);
+  const anchorIds = [chapterId].filter(Boolean);
+  const adjacencyScores = retrievalPlanner.buildChapterAdjacency(config.chapters || [], anchorIds);
+  const storyContext = chapterId
+    ? await storyState.getAgentContext(projectPath, chapterId, signals.characters, contextIds).catch(() => ({}))
+    : {};
+  const storyScores = retrievalPlanner.buildStoryBoosts(workspace, storyContext, subQueries);
+  return { subQueries, signals, adjacencyScores, storyScores };
+}
+
+async function buildCreativeAdvice(projectPath, options = {}, control = {}) {
   const mode = normalizeCreativeAdviceMode(options.mode);
   const focus = String(options.focus || "").trim().slice(0, 1200);
+  const contextIds = Array.isArray(options.contextIds) ? options.contextIds.map(String).slice(0, 60) : [];
+  const includeSourceIds = [...new Set((Array.isArray(options.includeSourceIds) ? options.includeSourceIds : []).map(String).filter(Boolean))].slice(0, 500);
+  const excludeSourceIds = [...new Set((Array.isArray(options.excludeSourceIds) ? options.excludeSourceIds : []).map(String).filter(Boolean))].filter((id) => !includeSourceIds.includes(id)).slice(0, 500);
   const config = await loadConfig(projectPath);
   const ordered = config.chapters.slice().sort((a, b) => a.order - b.order);
-  const selectedIndex = Math.max(0, ordered.findIndex((chapter) => chapter.id === options.chapterId));
-  const chapter = ordered[selectedIndex] || ordered[0];
+  const requestedIndex = ordered.findIndex((chapter) => chapter.id === options.chapterId);
+  if (options.chapterId && requestedIndex < 0) throw new Error("创作参谋对应的章节已不存在，请重新选择章节。");
+  const selectedIndex = requestedIndex >= 0 ? requestedIndex : 0;
+  const chapter = ordered[selectedIndex];
   if (!chapter) throw new Error("当前项目还没有可分析的章节。");
+  const resolvedScope = novelAgent.resolveScope(config, chapter, options.scopeType || "chapter", focus, mode);
+  const suppliedScopeIds = Array.isArray(options.scopeIds) ? options.scopeIds.map(String).filter((id) => ordered.some((item) => item.id === id)) : [];
+  const scope = suppliedScopeIds.length
+    ? { ...resolvedScope, ids: suppliedScopeIds, label: String(options.scopeLabel || resolvedScope.label) }
+    : resolvedScope;
   const previousChapter = ordered[selectedIndex - 1] || null;
   const nextChapter = ordered[selectedIndex + 1] || null;
   const readPlain = async (item, maxChars) => {
@@ -2917,6 +4151,20 @@ async function buildCreativeAdvice(projectPath, options = {}) {
   const currentText = await readPlain(chapter, 12000);
   const previousText = await readPlain(previousChapter, 5000);
   const nextText = await readPlain(nextChapter, 5000);
+  const toolReport = await collectCreativeAgentToolReport(projectPath, ordered, selectedIndex, currentText, contextIds);
+  toolReport.tools.unshift({ name: "分析范围", detail: scope.label });
+  toolReport.prompt = `- 分析范围：${scope.label}\n${toolReport.prompt}`;
+  const workflowToolReports = Array.isArray(options.workflowToolReports) ? options.workflowToolReports.slice(0, 20) : [];
+  if (workflowToolReports.length) {
+    toolReport.tools.push(...workflowToolReports.map((item) => ({ name: item.name || item.label || "Agent 工具", detail: item.detail || "已完成检查" })));
+    toolReport.prompt += `\n\n【本次工作流工具结果】\n${workflowToolReports.map((item) => `- ${item.name || item.label}：${item.detail || "已完成检查"}`).join("\n")}`;
+  }
+  const workspaceState = await creativeWorkspace.loadWorkspace(projectPath);
+  const memories = creativeWorkspace.relevantMemories(workspaceState, chapter);
+  if (memories.length) {
+    toolReport.tools.push({ name: "分层项目记忆", detail: memories.slice(0, 12).map((item) => `${item.scope}：${item.title}`).join("；") });
+    toolReport.prompt += `\n\n【作者确认的分层记忆】\n${memories.slice(0, 30).map((item) => `- [${item.scope}] ${item.title}：${item.content}`).join("\n")}`;
+  }
   const outlineTitles = ordered
     .filter((item) => getKnowledgeRole(item) === "大纲")
     .slice(0, 8)
@@ -2928,12 +4176,21 @@ async function buildCreativeAdvice(projectPath, options = {}) {
       : mode === "foreshadow"
         ? "伏笔 埋设 回收 线索 异常 预兆 悬念"
         : "下一章 建议 节奏 人物 事件 主线 转场";
-  const query = [modeQuestion, chapter.title, nextChapter?.title || "", focus].filter(Boolean).join(" ");
+  const query = [modeQuestion, scope.label, chapter.title, nextChapter?.title || "", focus].filter(Boolean).join(" ");
   const topK = Math.floor(clampNumber(config.api.topK || 40, 1, MAX_RETRIEVAL_TOP_K, 40));
+  const retrievalContext = await buildAgentRetrievalContext(projectPath, config, query, chapter.id, contextIds);
+  retrievalContext.routedVolumes = [...new Set(ordered.filter((item) => scope.ids.includes(item.id)).map((item) => item.volume || "未分卷"))];
+  retrievalContext.requiredSourceIds = [...(scope.ids.length <= 60 ? scope.ids.filter((id) => !excludeSourceIds.includes(id)) : []), ...includeSourceIds];
   const search = await searchRelevantChunks(projectPath, query, topK, {
     minKeep: Math.min(24, topK),
     maxChars: STRUCTURING_CONTEXT_CHAR_BUDGET,
+    retrievalContext,
+    mode: scope.type === "book" ? "book" : "normal",
+    additionalLoadSourceIds: includeSourceIds,
+    boostSourceIds: includeSourceIds,
+    excludeSourceIds,
   });
+  if (includeSourceIds.length) search.chunks = forceIncludeSourceChunks(search.chunks, search._store, includeSourceIds, topK);
   const retrieved = search.chunks
     .map((item, index) => {
       const role = item.sourceType === "chapter" ? knowledgeRoleLabel(item.knowledgeRole) : item.sourceType === "character" ? "角色卡" : "世界观";
@@ -2941,6 +4198,29 @@ async function buildCreativeAdvice(projectPath, options = {}) {
       return `【检索片段${index + 1}｜${role}${group ? `｜${group}` : ""}｜${item.title}】\n${item.text}`;
     })
     .join("\n\n");
+  const retrievalAudit = {
+    query,
+    requestedTopK: topK,
+    selectedChunks: search.chunks.length,
+    selectedSources: [...new Set(search.chunks.map((item) => item.title))],
+    knowledgeRoles: search.chunks.reduce((counts, item) => {
+      const role = item.sourceType === "chapter" ? knowledgeRoleLabel(item.knowledgeRole) : item.sourceType === "character" ? "角色卡" : "世界观";
+      counts[role] = (counts[role] || 0) + 1;
+      return counts;
+    }, {}),
+    memoryCount: memories.length,
+    estimatedPromptTokens: 0,
+    warnings: [
+      ...(search.chunks.length < Math.min(12, topK) ? ["命中的原始片段较少，请确认知识库已同步。"] : []),
+      ...(search.coveragePass?.uncoveredTargets?.length ? [`${search.coveragePass.uncoveredTargets.length} 个证据目标尚未覆盖。`] : []),
+      ...(includeSourceIds.length ? [`作者强制纳入 ${includeSourceIds.length} 份资料。`] : []),
+      ...(excludeSourceIds.length ? [`作者排除 ${excludeSourceIds.length} 份资料。`] : []),
+    ],
+    firstPassCount: search.coveragePass?.firstPassCount || search.chunks.length,
+    secondPassCount: search.coveragePass?.secondPassCount || 0,
+    evidenceConfidence: search.coveragePass?.evidenceConfidence || "低",
+    uncoveredTargets: search.coveragePass?.uncoveredTargets || [],
+  };
   const systemPrompt = `你是一个“小说创作参谋 Agent”，不是代写机器。你的任务是辅助作者判断下一步怎么写，而不是替作者完成正文。
 必须只基于提供的大纲、正文、角色卡、世界观和检索片段提出建议；不确定就写风险，不要硬编事实。
 请输出 JSON，不要 Markdown，不要解释。JSON 格式必须是：
@@ -2965,6 +4245,9 @@ async function buildCreativeAdvice(projectPath, options = {}) {
 【当前关注点】
 ${focus || "无"}
 
+【本次分析范围】
+${scope.label}
+
 【当前章节】
 ${chapter.volume || "未分卷"} / ${chapter.title}
 ${currentText || "暂无正文"}
@@ -2978,11 +4261,16 @@ ${nextChapter ? `${nextChapter.volume || "未分卷"} / ${nextChapter.title}\n${
 【项目大纲文档】
 ${outlineTitles || "未显式标记大纲文档"}
 
+【Agent 工具检查结果】
+${toolReport.prompt}
+
 【检索片段】
 ${retrieved || "无"}`;
+  retrievalAudit.estimatedPromptTokens = estimateTokenCount(`${systemPrompt}\n${question}`);
   try {
-    const answer = await callChatApi(config, systemPrompt, question, []);
-    const items = normalizeCreativeAdvicePayload(extractJsonFromModelText(answer), mode, chapter);
+    const answer = await callStructuredChatWithProgress(config, systemPrompt, question, control, "创作参谋正在整理建议");
+    const items = normalizeCreativeAdvicePayload(extractJsonFromModelText(answer), mode, chapter)
+      .map((item) => ({ ...item, sourceRefs: toolReport.contextRefs }));
     if (!items.length) throw new Error("AI 没有返回可识别的建议卡片。");
     return {
       mode,
@@ -2991,6 +4279,8 @@ ${retrieved || "无"}`;
       generatedAt: nowIso(),
       contextCount: search.chunks.length,
       apiError: "",
+      toolReport: toolReport.tools,
+      retrievalAudit,
       items,
     };
   } catch (error) {
@@ -3001,9 +4291,878 @@ ${retrieved || "无"}`;
       generatedAt: nowIso(),
       contextCount: search.chunks.length,
       apiError: error.message || String(error),
-      items: buildLocalCreativeAdvice(mode, chapter, nextChapter, focus),
+      toolReport: toolReport.tools,
+      retrievalAudit,
+      items: buildLocalCreativeAdvice(mode, chapter, nextChapter, focus).map((item) => ({ ...item, sourceRefs: toolReport.contextRefs })),
     };
   }
+}
+
+async function getCreativeWorkspaceView(projectPath) {
+  const state = await creativeWorkspace.loadWorkspace(projectPath);
+  const config = await loadConfig(projectPath);
+  const revisionsByChapter = new Map();
+  for (const chapter of config.chapters) revisionsByChapter.set(chapter.id, await cachedChapterRevision(projectPath, chapter));
+  return {
+    ...state,
+    annotations: state.annotations.map((item) => ({
+      ...item,
+      stale: Boolean(item.sourceRevision && revisionsByChapter.get(item.chapterId) && item.sourceRevision !== revisionsByChapter.get(item.chapterId)),
+    })),
+    revisions: state.revisions.map((item) => ({
+      ...item,
+      stale: item.status === "待确认" && Boolean(item.sourceRevision && revisionsByChapter.get(item.chapterId) && item.sourceRevision !== revisionsByChapter.get(item.chapterId)),
+    })),
+  };
+}
+
+async function prepareCreativeAgentRun(projectPath, options = {}) {
+  const config = await loadConfig(projectPath);
+  const chapter = config.chapters.find((item) => item.id === options.chapterId) || config.chapters[0];
+  if (!chapter) throw new Error("当前项目没有可供参谋分析的文档。");
+  const mode = normalizeCreativeAdviceMode(options.mode);
+  const focus = String(options.focus || "").trim().slice(0, 1200);
+  const selectedText = String(options.selectedText || "").trim().slice(0, 20000);
+  const includeSourceIds = [...new Set((Array.isArray(options.includeSourceIds) ? options.includeSourceIds : []).map(String).filter(Boolean))].slice(0, 500);
+  const excludeSourceIds = [...new Set((Array.isArray(options.excludeSourceIds) ? options.excludeSourceIds : []).map(String).filter(Boolean))].filter((id) => !includeSourceIds.includes(id)).slice(0, 500);
+  const permissionLevel = novelAgent.normalizePermission(options.permissionLevel || config.agent.permissionLevel);
+  const requestedScope = String(options.scopeType || "auto");
+  const scope = novelAgent.resolveScope(config, chapter, requestedScope, focus, mode);
+  const workspaceState = await creativeWorkspace.loadWorkspace(projectPath);
+  const memories = creativeWorkspace.relevantMemories(workspaceState, chapter);
+  const query = [scope.label, chapter.title, focus, mode === "plot" ? "剧情推进 因果 动机" : mode === "foreshadow" ? "伏笔 埋设 回收" : "下一章 节奏 人物"].filter(Boolean).join(" ");
+  const topK = Math.floor(clampNumber(config.api.topK || 120, 1, MAX_RETRIEVAL_TOP_K, 120));
+  const retrievalContext = await buildAgentRetrievalContext(projectPath, config, query, chapter.id, options.contextIds || []);
+  retrievalContext.routedVolumes = [...new Set(config.chapters.filter((item) => scope.ids.includes(item.id)).map((item) => item.volume || "未分卷"))];
+  retrievalContext.requiredSourceIds = [...(scope.ids.length <= 60 ? scope.ids.filter((id) => !excludeSourceIds.includes(id)) : []), ...includeSourceIds];
+  const search = await searchRelevantChunks(projectPath, query, topK, {
+    minKeep: Math.min(24, topK),
+    maxChars: STRUCTURING_CONTEXT_CHAR_BUDGET,
+    retrievalContext,
+    mode: scope.type === "book" ? "book" : "normal",
+    additionalLoadSourceIds: includeSourceIds,
+    boostSourceIds: includeSourceIds,
+    excludeSourceIds,
+  });
+  if (includeSourceIds.length) search.chunks = forceIncludeSourceChunks(search.chunks, search._store, includeSourceIds, topK);
+  const sourceTitles = [...new Set(search.chunks.map((item) => item.title))];
+  const warnings = [];
+  if (!search.chunks.length) warnings.push("知识库没有命中原文，请先检查同步状态。");
+  if (!config.chapters.some((item) => getKnowledgeRole(item) === "大纲")) warnings.push("项目中没有标记为“大纲”的文档，建议可能缺少长期方向依据。");
+  if (search.chunks.length >= topK) warnings.push("本次命中达到发送上限，执行后请查看检索审计中的未读资料。");
+  if (search.freshness?.repairedSourceCount) warnings.push(`执行前已自动更新 ${search.freshness.repairedSourceCount} 份过期资料。`);
+  if (search.coveragePass?.uncoveredTargets?.length) warnings.push(`仍有 ${search.coveragePass.uncoveredTargets.length} 个证据目标未覆盖，执行结果会明确标出证据不足。`);
+  if (includeSourceIds.length) warnings.push(`已强制纳入 ${includeSourceIds.length} 份作者指定资料。`);
+  if (excludeSourceIds.length) warnings.push(`已排除 ${excludeSourceIds.length} 份作者指定资料。`);
+  const plannedTools = novelAgent.selectTools(focus || query, mode, permissionLevel, selectedText);
+  const steps = [
+    { tool: "scope_checkpoint", label: `分析范围：${scope.label}`, reason: scope.recommended ? "Agent 根据目标自动推荐，可在执行前改为章节、分卷或全书" : "使用作者手动指定的分析范围" },
+    ...plannedTools.map((item) => ({ tool: item.tool, label: item.allowed ? item.label : `${item.label}（跳过）`, reason: item.allowed ? item.reason : item.skipReason })),
+    { tool: "knowledge_retrieval", label: `长篇检索与证据汇总（最多 ${topK} 个片段）`, reason: "综合分层摘要、角色地点、相邻章节、剧情事实和伏笔证据" },
+    { tool: "creative_advisor", label: "汇总为可选择的创作建议", reason: "保存工具阶段结果，不直接覆盖正文" },
+  ];
+  const retrievalAudit = {
+    query,
+    requestedTopK: topK,
+    selectedChunks: search.chunks.length,
+    selectedSources: sourceTitles,
+    memoryCount: memories.length,
+    estimatedPromptTokens: estimateTokenCount(search.chunks.map((item) => item.text).join("\n")) + 5000,
+    warnings,
+    firstPassCount: search.coveragePass?.firstPassCount || search.chunks.length,
+    secondPassCount: search.coveragePass?.secondPassCount || 0,
+    evidenceConfidence: search.coveragePass?.evidenceConfidence || "低",
+    uncoveredTargets: search.coveragePass?.uncoveredTargets || [],
+  };
+  const run = await creativeWorkspace.upsertItem(projectPath, "agentRuns", {
+    mode,
+    chapterId: chapter.id,
+    chapterTitle: chapter.title,
+    scopeType: scope.type,
+    scopeIds: scope.ids,
+    scopeLabel: scope.label,
+    scopeRecommended: scope.recommended,
+    objective: focus || "根据当前正文和项目资料提供下一步创作建议",
+    status: "待确认",
+    permissionLevel,
+    selectedText,
+    selectedTextRevision: String(options.selectedTextRevision || ""),
+    contextIds: Array.isArray(options.contextIds) ? options.contextIds : [],
+    includeSourceIds,
+    excludeSourceIds,
+    memoryIds: memories.map((item) => item.id),
+    steps,
+    toolStates: novelAgent.initialToolStates(plannedTools),
+    stageCheckpoints: [
+      ...novelAgent.initialToolStates(plannedTools).map((item) => ({ id: item.tool, label: item.label, status: item.status, detail: item.detail, startedAt: "", completedAt: item.status === "已跳过" ? nowIso() : "", error: "" })),
+      { id: "creative_advisor", label: "汇总创作建议", status: "等待中", detail: "等待各项检查完成", startedAt: "", completedAt: "", error: "" },
+    ],
+    stageSummary: { completed: [], failed: [], skipped: plannedTools.filter((item) => !item.allowed).map((item) => item.tool) },
+    taskId: "",
+    partialOutput: "",
+    retrievalAudit,
+  });
+  return run;
+}
+
+async function buildCreativeAgentExecutionContext(projectPath, run) {
+  const config = await loadConfig(projectPath);
+  const ordered = config.chapters.slice().sort((a, b) => a.order - b.order);
+  const index = ordered.findIndex((item) => item.id === run.chapterId);
+  const chapter = ordered[index];
+  if (!chapter) throw new Error("Agent 计划对应的章节已不存在，请重新准备计划。");
+  const raw = await fs.readFile(getChapterPath(projectPath, chapter), "utf8").catch(() => "");
+  const currentText = contentToPlainText(raw);
+  const scopedIds = new Set((run.scopeIds?.length ? run.scopeIds : [chapter.id]).map(String));
+  const includeIds = new Set((run.includeSourceIds || []).map(String));
+  const excludeIds = new Set((run.excludeSourceIds || []).map(String).filter((id) => !includeIds.has(id)));
+  const scopeChapters = ordered.filter((item) => (scopedIds.has(String(item.id)) || includeIds.has(String(item.id))) && !excludeIds.has(String(item.id)));
+  const scopeTexts = await mapWithConcurrency(scopeChapters, 8, async (item) => ({
+    chapter: item,
+    text: contentToPlainText(await fs.readFile(getChapterPath(projectPath, item), "utf8").catch(() => "")),
+  }));
+  const [characters, worldDocs, workspace, analysis, storyContext, board, summaries] = await Promise.all([
+    loadCharacters(projectPath),
+    loadWorldDocs(projectPath),
+    creativeWorkspace.loadWorkspace(projectPath),
+    loadAnalysisState(projectPath),
+    storyState.getAgentContext(projectPath, chapter.id, [], run.contextIds || []).catch(() => ({})),
+    storyState.getBoard(projectPath, chapter.id).catch(() => null),
+    loadKnowledgeSummaries(projectPath),
+  ]);
+  return { config, ordered, index, chapter, previous: ordered[index - 1] || null, next: ordered[index + 1] || null, currentText, scopeChapters, scopeTexts, characters, worldDocs, workspace, analysis, storyContext, board, summaries };
+}
+
+function pacingReport(text) {
+  const body = String(text || "");
+  const paragraphs = body.split(/\n+/).map((item) => item.trim()).filter(Boolean);
+  const sentences = body.split(/[。！？!?]/).map((item) => item.trim()).filter(Boolean);
+  const dialogueChars = [...body.matchAll(/“([^”]*)”/g)].reduce((sum, match) => sum + String(match[1] || "").length, 0);
+  const headingCount = paragraphs.filter((item) => /^第.+章|^[一二三四五六七八九十\d]+[.、]|^场景/.test(item)).length;
+  const dialogueRatio = body.length ? Math.round((dialogueChars / body.length) * 100) : 0;
+  const averageSentence = sentences.length ? Math.round(body.length / sentences.length) : 0;
+  return `正文 ${countWords(body)} 字；${paragraphs.length} 段；平均句长约 ${averageSentence} 字；对话约 ${dialogueRatio}%；显式场景/小标题 ${headingCount} 个`;
+}
+
+async function runCreativeAgentTool(tool, context, run) {
+  const { chapter, previous, next, currentText, scopeChapters, scopeTexts, characters, worldDocs, workspace, analysis, storyContext, board, summaries } = context;
+  const scopedText = (scopeTexts || []).map((item) => item.text).join("\n");
+  if (tool === "read_adjacent_chapters") {
+    const previousText = (scopeTexts || []).find((item) => item.chapter.id === previous?.id)?.text || "";
+    const nextText = (scopeTexts || []).find((item) => item.chapter.id === next?.id)?.text || "";
+    return `前章：${previous?.title || "无"}（末尾：${previousText.slice(-260) || "未纳入本次范围"}）；当前：${chapter.title}；后章：${next?.title || "无"}（开头：${nextText.slice(0, 260) || "未纳入本次范围"}）`;
+  }
+  if (tool === "character_state_lookup") {
+    const states = storyContext.characterStates || [];
+    return states.length ? states.slice(0, 20).map((item) => `${item.characterName}：地点 ${item.location || "未知"}；身心 ${[...(item.physical || []), ...(item.mental || [])].join("、") || "未记录"}；能力 ${item.abilities?.join("、") || "未记录"}；目标 ${item.goals?.join("、") || "未记录"}；阻碍 ${item.obstacles?.join("、") || "未记录"}`).join("\n") : "当前范围没有角色状态快照";
+  }
+  if (tool === "recent_appearance_lookup") {
+    const states = storyContext.characterStates || [];
+    return states.length ? states.slice(0, 30).map((item) => `${item.characterName}：${item.chapterTitle} / ${item.lastAppearance || "未记录原文位置"}`).join("\n") : "当前范围没有角色最近出场记录";
+  }
+  if (tool === "knowledge_scope_lookup") {
+    const states = storyContext.characterStates || [];
+    return states.length ? states.slice(0, 25).map((item) => `${item.characterName}：${item.knowledge?.join("；") || "未记录知情"}${item.knowledgeSources?.length ? `（来源：${item.knowledgeSources.join("；")}）` : "（来源待核对）"}`).join("\n") : "当前范围没有人物知情记录";
+  }
+  if (tool === "world_rule_lookup") {
+    const matched = worldDocs.filter((item) => item.title && (scopedText || currentText).includes(item.title));
+    return `直接命中世界观 ${matched.length} 条：${matched.slice(0, 20).map((item) => `${item.category || "未分类"}/${item.title}`).join("、") || "无直接标题命中"}；项目世界观共 ${worldDocs.length} 条`;
+  }
+  if (tool === "open_foreshadow_lookup") {
+    const open = (storyContext.foreshadows || []).filter((item) => !["已经回收", "已废弃"].includes(item.status));
+    return open.length ? open.slice(0, 30).map((item) => `${item.title}（${item.status}）：埋设 ${item.plantedAt?.length || 0} / 强化 ${item.reinforcedAt?.length || 0} / 回收 ${item.payoffAt?.length || 0}`).join("\n") : "没有未回收伏笔";
+  }
+  if (tool === "timeline_lookup") {
+    const events = analysis.timeline?.events || [];
+    return events.length ? events.slice(0, 80).map((item) => `${item.order + 1}. ${item.timeHint || item.title} / ${item.chapterTitle}：${item.summary}`).join("\n") : "尚未保存时间线，请先在分析页刷新时间线";
+  }
+  if (tool === "chapter_transition_check") {
+    return `衔接位置：${previous?.title || "开篇"} -> ${chapter.title} -> ${next?.title || "目录末尾"}；当前开头：${currentText.slice(0, 220)}；当前结尾：${currentText.slice(-220)}`;
+  }
+  if (tool === "setting_conflict_check") {
+    const unresolved = (analysis.consistency?.issues || []).filter((item) => !["已修复", "已忽略"].includes(item.status));
+    return unresolved.length ? unresolved.slice(0, 40).map((item) => `${item.severity}/${item.category}：${item.title} - ${item.detail}`).join("\n") : "没有已保存的待处理一致性问题";
+  }
+  if (tool === "outline_goal_lookup") {
+    const outlines = (summaries.sources || []).filter((item) => item.knowledgeRole === "大纲");
+    return `项目大纲 ${outlines.length} 份：${outlines.slice(0, 30).map((item) => `${item.volume || "未分卷"}/${item.title}`).join("、") || "知识库未标记大纲"}`;
+  }
+  if (tool === "knowledge_coverage_check") {
+    const audit = run.retrievalAudit || {};
+    return `本次范围 ${run.scopeLabel}；已选 ${audit.selectedChunks || 0} 个片段 / ${(audit.selectedSources || []).length} 份资料；证据置信度 ${audit.evidenceConfidence || "未评估"}；仍缺证据 ${(audit.uncoveredTargets || []).join("、") || "无"}`;
+  }
+  if (tool === "chapter_health_check") return `${run.scopeLabel || chapter.title}：${pacingReport(scopedText || currentText)}；场景计划 ${(workspace.scenes || []).filter((item) => item.chapterId === chapter.id).length} 个；筹备项 ${board?.items?.length || 0} 个`;
+  if (tool === "chapter_planner") {
+    return `范围：${run.scopeLabel || chapter.title}；位置：${previous?.title || "开篇"} → ${chapter.title} → ${next?.title || "目录末尾"}；当前筹备板 ${board?.items?.length || 0} 项；大纲摘要 ${summaries.sources.filter((item) => item.knowledgeRole === "大纲").length} 份`;
+  }
+  if (tool === "plot_causality_advisor") {
+    const nodes = (workspace.causalNodes || []).filter((item) => !item.chapterId || item.chapterId === chapter.id);
+    return `当前相关因果节点 ${nodes.length} 个；剧情事实 ${(storyContext.facts || []).length} 条；${nodes.slice(0, 6).map((item) => item.title).join("、") || "尚无人工确认的因果节点"}`;
+  }
+  if (tool === "character_development_advisor") {
+    const matched = characters.filter((item) => item.name && (scopedText || currentText).includes(item.name));
+    const scopedIds = new Set((scopeChapters || []).map((item) => item.id));
+    const arcs = (workspace.arcs || []).filter((item) => (!item.chapterId || scopedIds.has(item.chapterId)) && matched.some((card) => card.id === item.characterId || card.name === item.characterName));
+    return `当前范围命中角色卡 ${matched.length} 张：${matched.slice(0, 12).map((item) => item.name).join("、") || "无"}；相关人物弧节点 ${arcs.length} 个；最新角色状态 ${(storyContext.characterStates || []).length} 条`;
+  }
+  if (tool === "foreshadow_manager") {
+    const open = (storyContext.foreshadows || []).filter((item) => !["已经回收", "已废弃"].includes(item.status));
+    return `待处理伏笔 ${open.length} 条：${open.slice(0, 10).map((item) => `${item.title}（${item.status}）`).join("、") || "暂无已记录伏笔"}`;
+  }
+  if (tool === "pacing_analyzer") return `${run.scopeLabel || chapter.title}：${pacingReport(scopedText || currentText)}；覆盖 ${scopeChapters?.length || 1} 份文档`;
+  if (tool === "continuity_checker") {
+    const unresolved = (analysis.consistency?.issues || []).filter((item) => !["已修复", "忽略"].includes(item.status));
+    const scopedIds = new Set((scopeChapters || []).map((item) => item.id));
+    return `现有一致性问题 ${unresolved.length} 个；当前范围相关 ${unresolved.filter((item) => scopedIds.has(item.chapterId) || (scopeChapters || []).some((chapterItem) => chapterItem.title === item.chapterTitle)).length} 个；时间线事件 ${analysis.timeline?.events?.length || 0} 个`;
+  }
+  if (tool === "setting_verifier") {
+    const matched = worldDocs.filter((item) => item.title && (scopedText || currentText).includes(item.title));
+    return `当前范围直接命中世界观 ${matched.length} 条：${matched.slice(0, 12).map((item) => item.title).join("、") || "无"}；项目共有 ${worldDocs.length} 条世界观资料`;
+  }
+  if (tool === "safe_revision_proposer") {
+    return run.selectedText ? `已取得作者选中的 ${countWords(run.selectedText)} 字原文，将生成独立的待确认修订，不会覆盖正文` : "没有选中文字，已跳过修订候选";
+  }
+  throw new Error(`未知的 Agent 工具：${tool}`);
+}
+
+function inferRevisionAction(objective) {
+  if (/扩写/.test(objective)) return "扩写";
+  if (/精简/.test(objective)) return "精简";
+  if (/改写/.test(objective)) return "改写";
+  return "润色";
+}
+
+function updateAgentStage(run, stageId, patch) {
+  const checkpoints = (run.stageCheckpoints || []).map((item) => item.id === stageId ? { ...item, ...patch } : item);
+  const stageSummary = {
+    completed: checkpoints.filter((item) => item.status === "已完成").map((item) => item.id),
+    failed: checkpoints.filter((item) => item.status === "失败").map((item) => item.id),
+    skipped: checkpoints.filter((item) => item.status === "已跳过").map((item) => item.id),
+  };
+  return { ...run, stageCheckpoints: checkpoints, stageSummary };
+}
+
+async function executeCreativeAgentRun(projectPath, runId, control = {}, onlyTool = "") {
+  const workspaceState = await creativeWorkspace.loadWorkspace(projectPath);
+  let run = workspaceState.agentRuns.find((item) => item.id === runId);
+  if (!run) throw new Error("没有找到待执行的 Agent 计划，请重新准备。");
+  run = await creativeWorkspace.upsertItem(projectPath, "agentRuns", { ...run, status: "运行中", error: "" });
+  const reports = onlyTool
+    ? run.toolStates.filter((item) => item.status === "已完成" && item.tool !== onlyTool).map((item) => ({ name: item.label, detail: item.partialOutput || item.detail }))
+    : [];
+  const total = Math.max(1, run.toolStates.filter((item) => item.status !== "已跳过" && (!onlyTool || item.tool === onlyTool)).length + 1);
+  let current = 0;
+  try {
+    const context = await buildCreativeAgentExecutionContext(projectPath, run);
+    for (const state of run.toolStates) {
+      if (state.status === "已跳过" || (onlyTool && state.tool !== onlyTool)) continue;
+      if (!onlyTool && state.status === "已完成") {
+        reports.push({ name: state.label, detail: state.partialOutput || state.detail });
+        current += 1;
+        continue;
+      }
+      if (control.signal?.aborted) throw Object.assign(new Error("任务已停止"), { name: "AbortError" });
+      run = await creativeWorkspace.upsertItem(projectPath, "agentRuns", {
+        ...updateAgentStage(run, state.tool, { status: "运行中", startedAt: nowIso(), completedAt: "", detail: "正在检查", error: "" }),
+        toolStates: run.toolStates.map((item) => item.tool === state.tool ? { ...item, status: "运行中", error: "" } : item),
+      });
+      await control.update?.({ phase: `${state.label}正在检查`, current, total, detail: run.chapterTitle });
+      try {
+        const detail = await runCreativeAgentTool(state.tool, context, run);
+        reports.push({ name: state.label, detail });
+        current += 1;
+        const partialLine = `【${state.label}】${detail}`;
+        run = await creativeWorkspace.upsertItem(projectPath, "agentRuns", {
+          ...updateAgentStage(run, state.tool, { status: "已完成", completedAt: nowIso(), detail, error: "" }),
+          partialOutput: `${run.partialOutput || ""}\n${partialLine}`.trim(),
+          toolStates: run.toolStates.map((item) => item.tool === state.tool ? { ...item, status: "已完成", detail: "检查完成", partialOutput: detail, error: "" } : item),
+        });
+        await control.appendPartial?.(`${partialLine}\n`);
+        await control.update?.({ current, total, detail });
+      } catch (error) {
+        current += 1;
+        run = await creativeWorkspace.upsertItem(projectPath, "agentRuns", {
+          ...updateAgentStage(run, state.tool, { status: "失败", completedAt: nowIso(), error: error?.message || String(error) }),
+          toolStates: run.toolStates.map((item) => item.tool === state.tool ? { ...item, status: "失败", error: error?.message || String(error) } : item),
+        });
+        await control.update?.({ current, total, detail: `${state.label}失败，继续执行其他工具` });
+      }
+    }
+
+    run = await creativeWorkspace.upsertItem(projectPath, "agentRuns", updateAgentStage(run, "creative_advisor", { status: "运行中", startedAt: nowIso(), completedAt: "", detail: "正在汇总已完成阶段", error: "" }));
+    await control.update?.({ phase: "正在汇总创作建议", current, total, detail: "已完成的工具结果会持续保留" });
+    const advice = await buildCreativeAdvice(projectPath, {
+      mode: run.mode,
+      chapterId: run.chapterId,
+      focus: run.objective,
+      contextIds: run.contextIds,
+      includeSourceIds: run.includeSourceIds,
+      excludeSourceIds: run.excludeSourceIds,
+      scopeType: run.scopeType,
+      scopeIds: run.scopeIds,
+      scopeLabel: run.scopeLabel,
+      workflowToolReports: reports,
+    }, control);
+    const outputs = { ...(run.outputs || {}) };
+    const completedTools = new Set(run.toolStates.filter((item) => item.status === "已完成").map((item) => item.tool));
+    if (novelAgent.permissionRank(run.permissionLevel) >= novelAgent.permissionRank("可创建规划") && completedTools.has("chapter_planner")) {
+      let board = context.board || await storyState.generateLocalBoard(projectPath, context.chapter, context.next);
+      const retained = (board.items || []).filter((item) => item.locked);
+      const generated = advice.items.map((item, index) => ({
+        id: `beat_agent_${stableHash(`${run.id}_${item.id}`)}`,
+        type: item.type,
+        title: item.title,
+        detail: `${item.summary}${item.suggestedUse ? `\n使用建议：${item.suggestedUse}` : ""}`,
+        order: retained.length + index,
+        locked: false,
+        completed: false,
+        sourceRefs: item.sourceRefs || [],
+      }));
+      board = await storyState.saveBoard(projectPath, { ...board, items: [...retained, ...generated], generatedAt: nowIso() });
+      outputs.boardId = board.id;
+    }
+    if (novelAgent.permissionRank(run.permissionLevel) >= novelAgent.permissionRank("可生成修订候选") && completedTools.has("safe_revision_proposer") && run.selectedText) {
+      try {
+        const revision = await createSafeRevision(projectPath, {
+          chapterId: run.chapterId,
+          original: run.selectedText,
+          sourceRevision: run.selectedTextRevision,
+          action: inferRevisionAction(run.objective),
+          instruction: run.objective,
+        }, control);
+        outputs.revisionId = revision.id;
+      } catch (error) {
+        run = await creativeWorkspace.upsertItem(projectPath, "agentRuns", {
+          ...run,
+          toolStates: run.toolStates.map((item) => item.tool === "safe_revision_proposer" ? { ...item, status: "失败", error: error?.message || String(error) } : item),
+        });
+      }
+    }
+    const completed = await creativeWorkspace.upsertItem(projectPath, "agentRuns", {
+      ...updateAgentStage(run, "creative_advisor", { status: "已完成", completedAt: nowIso(), detail: `${advice.items.length} 条建议`, error: "" }),
+      status: "已完成",
+      retrievalAudit: advice.retrievalAudit || run.retrievalAudit,
+      result: advice,
+      outputs,
+      error: "",
+    });
+    await control.update?.({ phase: "创作 Agent 已完成", current: total, total, detail: `${advice.items.length} 条建议` });
+    return { run: completed, advice, outputs };
+  } catch (error) {
+    const interrupted = control.signal?.aborted || error?.name === "AbortError";
+    const activeStage = (run.stageCheckpoints || []).find((item) => item.status === "运行中")?.id;
+    const failedRun = activeStage ? updateAgentStage(run, activeStage, { status: "失败", completedAt: nowIso(), error: error?.message || String(error) }) : run;
+    await creativeWorkspace.upsertItem(projectPath, "agentRuns", { ...failedRun, status: interrupted ? "已中断" : "失败", error: error?.message || String(error) });
+    throw error;
+  }
+}
+
+async function queueCreativeAgentRun(projectPath, runId, onlyTool = "") {
+  const workspaceState = await creativeWorkspace.loadWorkspace(projectPath);
+  let run = workspaceState.agentRuns.find((item) => item.id === runId);
+  if (!run) throw new Error("没有找到待执行的 Agent 计划，请重新准备。");
+  if (onlyTool && !run.toolStates.some((item) => item.tool === onlyTool && item.status === "失败")) throw new Error("只能单独重试执行失败的工具。");
+  const task = await (await getProjectTaskCenter(projectPath)).enqueue({
+    type: "agent-workflow",
+    title: onlyTool ? `重试 Agent 工具：${run.chapterTitle}` : `创作 Agent：${run.chapterTitle}`,
+    total: Math.max(1, run.toolStates.filter((item) => item.status !== "已跳过" && (!onlyTool || item.tool === onlyTool)).length + 1),
+    scope: { chapterId: run.chapterId, chapterIds: run.scopeIds?.length ? run.scopeIds : [run.chapterId] },
+    options: { runId: run.id, onlyTool },
+  });
+  run = await creativeWorkspace.upsertItem(projectPath, "agentRuns", { ...run, status: "等待中", taskId: task.id, error: "" });
+  return { run, task };
+}
+
+async function createSafeRevision(projectPath, payload = {}, control = {}) {
+  const config = await loadConfig(projectPath);
+  const chapter = config.chapters.find((item) => item.id === payload.chapterId);
+  if (!chapter) throw new Error("没有找到选中文字所属的章节。");
+  const original = String(payload.original || "").trim();
+  if (!original) throw new Error("请先在正文中选中要修订的文字。");
+  const action = ["改写", "润色", "扩写", "精简"].includes(payload.action) ? payload.action : "润色";
+  let revision = await creativeWorkspace.upsertItem(projectPath, "revisions", {
+    chapterId: chapter.id,
+    chapterTitle: chapter.title,
+    action,
+    instruction: String(payload.instruction || "").trim(),
+    original,
+    replacement: "",
+    sourceRevision: String(payload.sourceRevision || await cachedChapterRevision(projectPath, chapter)),
+    status: "生成中",
+  });
+  try {
+    const systemPrompt = `你是小说文字修订助手。请按“${action}”处理原文，保留人物、事实、视角和专有名词，不补写未经资料支持的剧情。只输出可直接替换原文的文字，不要解释，不要 Markdown 标记。`;
+    const instruction = String(payload.instruction || "").trim();
+    const revisionQuestion = `${instruction ? `【作者要求】\n${instruction}\n\n` : ""}【待修订原文】\n${original}`;
+    const replacement = typeof control.update === "function" || control.signal
+      ? await callStructuredChatWithProgress(config, systemPrompt, revisionQuestion, control, "正在生成安全修订候选")
+      : await callChatApi(config, systemPrompt, revisionQuestion, []);
+    revision = await creativeWorkspace.upsertItem(projectPath, "revisions", { ...revision, replacement, status: "待确认", error: "" });
+    return revision;
+  } catch (error) {
+    await creativeWorkspace.upsertItem(projectPath, "revisions", { ...revision, status: "生成失败", error: error?.message || String(error) });
+    throw error;
+  }
+}
+
+function countExactOccurrences(text, needle) {
+  if (!needle) return 0;
+  let count = 0;
+  let offset = 0;
+  while ((offset = text.indexOf(needle, offset)) >= 0) {
+    count += 1;
+    offset += needle.length;
+  }
+  return count;
+}
+
+function replaceUniqueSelection(content, original, replacement) {
+  const directCount = countExactOccurrences(content, original);
+  if (directCount === 1) return content.replace(original, replacement);
+  if (directCount > 1) throw new Error("原文在章节中出现多次，无法确定要替换哪一处。修订已保留，请重新选中更长的文字后生成。");
+  if (isHtmlContent(content)) {
+    const escapedOriginal = escapeHtml(original);
+    const escapedCount = countExactOccurrences(content, escapedOriginal);
+    if (escapedCount === 1) return content.replace(escapedOriginal, escapeHtml(replacement).replace(/\r?\n/g, "<br>"));
+  }
+  throw new Error("修订对应的原文已经变化或跨越了复杂格式，无法安全替换。请重新选中文字生成修订。");
+}
+
+async function applySafeRevision(projectPath, revisionId) {
+  const workspaceState = await creativeWorkspace.loadWorkspace(projectPath);
+  const revision = workspaceState.revisions.find((item) => item.id === revisionId);
+  if (!revision) throw new Error("没有找到这条修订建议。");
+  if (revision.status !== "待确认") throw new Error("只有待确认的修订建议可以采纳。");
+  const config = await loadConfig(projectPath);
+  const chapter = config.chapters.find((item) => item.id === revision.chapterId);
+  if (!chapter) throw new Error("修订对应的章节已不存在。");
+  let filePath = getChapterPath(projectPath, chapter);
+  const previousContent = await fs.readFile(filePath, "utf8").catch(() => "");
+  const currentRevision = contentRevision(previousContent);
+  if (revision.sourceRevision && revision.sourceRevision !== currentRevision && countExactOccurrences(previousContent, revision.original) !== 1) {
+    await creativeWorkspace.upsertItem(projectPath, "revisions", { ...revision, status: "已失效", error: "正文已变化，无法唯一定位原文。" });
+    throw new Error("正文已经变化，并且无法唯一定位原文；修订已标记为失效，没有修改章节。");
+  }
+  const nextContent = replaceUniqueSelection(previousContent, revision.original, revision.replacement);
+  const didSplitSharedFile = await ensureExclusiveChapterFile(projectPath, config, chapter, previousContent, { snapshot: false, reason: "应用安全修订前拆分共享文件" });
+  if (didSplitSharedFile) filePath = getChapterPath(projectPath, chapter);
+  await snapshotChapterVersion(projectPath, chapter, previousContent, `应用安全修订：${revision.action}`);
+  await fs.writeFile(filePath, nextContent, "utf8");
+  chapter.wordCount = countWords(nextContent);
+  chapter.outline = extractOutline(nextContent);
+  chapter.updatedAt = nowIso();
+  await calculateTotalWords(projectPath, config);
+  await saveConfig(projectPath, config);
+  await indexSource(projectPath, { id: chapter.id, type: "chapter", title: chapter.title, volume: chapter.volume || "未分卷", category: chapter.volume || "未分卷", knowledgeRole: getKnowledgeRole(chapter), content: nextContent });
+  if (config.agent?.autoLocalAnalysis !== false) await refreshLocalStoryState(projectPath, chapter.id, nextContent).catch(() => null);
+  await creativeWorkspace.upsertItem(projectPath, "revisions", { ...revision, status: "已采纳", appliedAt: nowIso(), error: "" });
+  return { state: await buildAppState(projectPath, chapter.id), revision: { ...revision, status: "已采纳" } };
+}
+
+async function applySafeRevisionPart(projectPath, payload = {}) {
+  const workspaceState = await creativeWorkspace.loadWorkspace(projectPath);
+  const revision = workspaceState.revisions.find((item) => item.id === payload.revisionId);
+  if (!revision) throw new Error("没有找到这条修订建议。");
+  if (!["待确认", "部分采纳"].includes(revision.status)) throw new Error("这条修订建议当前不能局部采纳。");
+  const originalPart = String(payload.original || "").trim();
+  const replacementPart = String(payload.replacement || "").trim();
+  if (!originalPart) throw new Error("局部采纳必须包含可定位的原文。");
+  if (!revision.original.includes(originalPart)) throw new Error("所选原文不属于这条修订建议。");
+  if (replacementPart && !revision.replacement.includes(replacementPart)) throw new Error("所选建议文字不属于这条修订建议。");
+  if ((revision.acceptedParts || []).some((item) => item.original === originalPart && item.replacement === replacementPart)) throw new Error("这一部分已经采纳过了。");
+  const config = await loadConfig(projectPath);
+  const chapter = config.chapters.find((item) => item.id === revision.chapterId);
+  if (!chapter) throw new Error("修订对应的章节已不存在。");
+  let filePath = getChapterPath(projectPath, chapter);
+  const previousContent = await fs.readFile(filePath, "utf8").catch(() => "");
+  const nextContent = replaceUniqueSelection(previousContent, originalPart, replacementPart);
+  const didSplitSharedFile = await ensureExclusiveChapterFile(projectPath, config, chapter, previousContent, { snapshot: false, reason: "局部应用安全修订前拆分共享文件" });
+  if (didSplitSharedFile) filePath = getChapterPath(projectPath, chapter);
+  await snapshotChapterVersion(projectPath, chapter, previousContent, `局部应用安全修订：${revision.action}`);
+  await fs.writeFile(filePath, nextContent, "utf8");
+  chapter.wordCount = countWords(nextContent);
+  chapter.outline = extractOutline(nextContent);
+  chapter.updatedAt = nowIso();
+  await calculateTotalWords(projectPath, config);
+  await saveConfig(projectPath, config);
+  await indexSource(projectPath, { id: chapter.id, type: "chapter", title: chapter.title, volume: chapter.volume || "未分卷", category: chapter.volume || "未分卷", knowledgeRole: getKnowledgeRole(chapter), content: nextContent });
+  if (config.agent?.autoLocalAnalysis !== false) await refreshLocalStoryState(projectPath, chapter.id, nextContent).catch(() => null);
+  const appliedAt = nowIso();
+  const updated = await creativeWorkspace.upsertItem(projectPath, "revisions", {
+    ...revision,
+    status: "部分采纳",
+    appliedAt,
+    acceptedParts: [...(revision.acceptedParts || []), { original: originalPart, replacement: replacementPart, appliedAt }],
+    error: "",
+  });
+  return { state: await buildAppState(projectPath, chapter.id), revision: updated, workspace: await getCreativeWorkspaceView(projectPath) };
+}
+
+async function uniqueFileNameInDirectory(directory, requestedBase, extension) {
+  const base = sanitizeFileName(requestedBase || "导入资料") || "导入资料";
+  let fileName = `${base}${extension}`;
+  let counter = 2;
+  while (existsSync(path.join(directory, fileName))) fileName = `${base}_${counter++}${extension}`;
+  return fileName;
+}
+
+function importedCopyTitle(title, existingTitles) {
+  const base = String(title || "导入资料").trim() || "导入资料";
+  if (!existingTitles.has(base)) {
+    existingTitles.add(base);
+    return base;
+  }
+  let counter = 1;
+  let candidate = `${base}（导入）`;
+  while (existingTitles.has(candidate)) candidate = `${base}（导入 ${++counter}）`;
+  existingTitles.add(candidate);
+  return candidate;
+}
+
+async function buildProjectExchangeArchive(projectPath, targetFile, options = {}) {
+  const config = await loadConfig(projectPath);
+  const includeWorkspace = options.includeWorkspace !== false;
+  const characters = await loadCharacters(projectPath);
+  const worldDocs = await loadWorldDocs(projectPath);
+  const materials = await loadMaterials(projectPath);
+  const exportConfig = {
+    version: config.version,
+    title: config.title,
+    author: config.author,
+    createdAt: config.createdAt,
+    updatedAt: config.updatedAt,
+    chapters: config.chapters.map(({ importedFrom, originalDocxFile, ...chapter }) => ({ ...chapter, importedFrom: undefined, originalDocxFile: undefined })),
+  };
+  const manifest = {
+    format: "ai-novel-project-exchange",
+    version: 1,
+    createdAt: nowIso(),
+    appVersion: options.appVersion || app.getVersion(),
+    project: { title: config.title, author: config.author },
+    counts: { chapters: config.chapters.length, characters: characters.length, worldDocs: worldDocs.length, materials: materials.length },
+    workspaceIncluded: includeWorkspace,
+    security: { apiSettingsIncluded: false, vectorIndexIncluded: false, backupsIncluded: false, passwordProtected: Boolean(options.password) },
+  };
+  const zip = new AdmZip();
+  zip.addFile("manifest.json", Buffer.from(JSON.stringify(manifest, null, 2), "utf8"));
+  zip.addFile("project/novel.config.json", Buffer.from(JSON.stringify(exportConfig, null, 2), "utf8"));
+  for (const chapter of config.chapters) {
+    const buffer = await fs.readFile(getChapterPath(projectPath, chapter)).catch(() => Buffer.from("", "utf8"));
+    zip.addFile(`project/chapters/${normalizeChapterFileName(chapter.fileName)}`, buffer);
+  }
+  for (const card of characters) zip.addFile(`project/characters/${path.basename(card.fileName || `${card.id}.json`)}`, Buffer.from(JSON.stringify({ ...card, fileName: undefined }, null, 2), "utf8"));
+  for (const doc of worldDocs) zip.addFile(`project/worldbuilding/${path.basename(doc.fileName || `${doc.id}.md`)}`, Buffer.from(buildWorldDocFile(doc), "utf8"));
+  for (const item of materials) zip.addFile(`project/materials/${item.id}.json`, Buffer.from(JSON.stringify(item, null, 2), "utf8"));
+  if (includeWorkspace) {
+    const workspace = await creativeWorkspace.loadWorkspace(projectPath);
+    zip.addFile("project/analysis/creative-workspace/state.json", Buffer.from(JSON.stringify(workspace, null, 2), "utf8"));
+  }
+  const archive = zip.toBuffer();
+  const output = options.password ? await exchangeSecurity.encryptBuffer(archive, options.password) : archive;
+  await fs.writeFile(targetFile, output);
+  return { filePath: targetFile, manifest, encrypted: Boolean(options.password) };
+}
+
+async function exportProjectExchange(projectPath, options = {}) {
+  const config = await loadConfig(projectPath);
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: "导出项目交换包",
+    defaultPath: path.join(projectPath, `${sanitizeFileName(config.title || "小说项目")}_交换包_${exportTimestamp()}${options.password ? ".ainovelx" : ".ainovel.zip"}`),
+    filters: options.password ? [{ name: "加密 AI 小说项目交换包", extensions: ["ainovelx"] }] : [{ name: "AI 小说项目交换包", extensions: ["zip"] }],
+  });
+  if (result.canceled || !result.filePath) return { canceled: true };
+  return buildProjectExchangeArchive(projectPath, result.filePath, options);
+}
+
+function readExchangeJson(zip, entryName, fallback = null) {
+  const entry = zip.getEntry(entryName);
+  if (!entry) return fallback;
+  try {
+    return JSON.parse(zip.readAsText(entry));
+  } catch {
+    return fallback;
+  }
+}
+
+async function previewProjectExchange(projectPath, options = {}) {
+  let token = String(options.token || "");
+  let pending = token ? pendingExchangeImports.get(token) : null;
+  let filePath = pending?.filePath || "";
+  if (!filePath) {
+    const result = await dialog.showOpenDialog(mainWindow, { title: "选择项目交换包", properties: ["openFile"], filters: [{ name: "AI 小说项目交换包", extensions: ["zip", "ainovelx"] }] });
+    if (result.canceled || !result.filePaths[0]) return { canceled: true };
+    filePath = result.filePaths[0];
+    token = crypto.randomBytes(16).toString("hex");
+    pending = { filePath, projectPath, createdAt: Date.now() };
+    pendingExchangeImports.set(token, pending);
+  }
+  const raw = await fs.readFile(filePath);
+  const encrypted = exchangeSecurity.isEncrypted(raw);
+  if (encrypted && !options.password) return { token, filePath, encrypted: true, requiresPassword: true };
+  const archive = await exchangeSecurity.decryptBuffer(raw, options.password || "");
+  const zip = new AdmZip(archive);
+  const manifest = readExchangeJson(zip, "manifest.json", null);
+  const importedConfig = readExchangeJson(zip, "project/novel.config.json", null);
+  if (manifest?.format !== "ai-novel-project-exchange" || !Array.isArray(importedConfig?.chapters)) throw new Error("这不是有效的 AI 小说项目交换包。");
+  const currentConfig = await loadConfig(projectPath);
+  const currentCharacters = await loadCharacters(projectPath);
+  const currentWorld = await loadWorldDocs(projectPath);
+  const importedCharacterNames = zip.getEntries().filter((entry) => entry.entryName.startsWith("project/characters/") && !entry.isDirectory).map((entry) => readExchangeJson(zip, entry.entryName, {})?.name).filter(Boolean);
+  const importedWorldTitles = zip.getEntries().filter((entry) => entry.entryName.startsWith("project/worldbuilding/") && !entry.isDirectory).map((entry) => parseWorldDocFile(path.basename(entry.entryName), zip.readAsText(entry)).title);
+  const conflicts = {
+    chapters: importedConfig.chapters.filter((item) => currentConfig.chapters.some((current) => current.title === item.title)).map((item) => item.title),
+    characters: importedCharacterNames.filter((name) => currentCharacters.some((item) => item.name === name)),
+    worldDocs: importedWorldTitles.filter((title) => currentWorld.some((item) => item.title === title)),
+  };
+  pendingExchangeImports.set(token, { filePath, projectPath, createdAt: Date.now(), encrypted });
+  for (const [key, pending] of pendingExchangeImports) if (Date.now() - pending.createdAt > 30 * 60 * 1000) pendingExchangeImports.delete(key);
+  return { token, filePath, manifest, conflicts, encrypted, requiresPassword: false };
+}
+
+async function importProjectExchange(projectPath, token, options = {}) {
+  const pending = pendingExchangeImports.get(String(token || ""));
+  if (!pending || path.resolve(pending.projectPath) !== path.resolve(projectPath)) throw new Error("交换包预览已失效，请重新选择文件。");
+  const raw = await fs.readFile(pending.filePath);
+  const archive = await exchangeSecurity.decryptBuffer(raw, options.password || "");
+  const zip = new AdmZip(archive);
+  const importedConfig = readExchangeJson(zip, "project/novel.config.json", null);
+  if (!Array.isArray(importedConfig?.chapters)) throw new Error("交换包缺少项目目录信息。");
+  await projectSnapshots.createSnapshot(projectPath, { name: "导入项目交换包前", reason: `导入 ${path.basename(pending.filePath)} 前自动保存` });
+  const config = await loadConfig(projectPath);
+  const chapterTitles = new Set(config.chapters.map((item) => item.title));
+  const chapterIdMap = new Map();
+  let importedChapters = 0;
+  for (const source of options.includeChapters === false ? [] : importedConfig.chapters) {
+    const entry = zip.getEntry(`project/chapters/${normalizeChapterFileName(source.fileName)}`);
+    if (!entry) continue;
+    const id = makeId("chapter");
+    chapterIdMap.set(source.id, id);
+    const extension = [".html", ".md"].includes(path.extname(source.fileName).toLowerCase()) ? path.extname(source.fileName).toLowerCase() : ".md";
+    const title = importedCopyTitle(source.title, chapterTitles);
+    const fileName = await uniqueChapterFileName(projectPath, config, `${sanitizeFileName(title)}_import`, extension);
+    const content = zip.readAsText(entry);
+    await fs.writeFile(path.join(projectPath, "chapters", fileName), content, "utf8");
+    config.chapters.push({ ...source, id, title, fileName, order: config.chapters.length, importedFrom: undefined, originalDocxFile: undefined, wordCount: countWords(content), outline: extractOutline(content), createdAt: nowIso(), updatedAt: nowIso() });
+    importedChapters += 1;
+  }
+  await calculateTotalWords(projectPath, config);
+  await saveConfig(projectPath, config);
+
+  const existingCharacters = await loadCharacters(projectPath);
+  const characterNames = new Set(existingCharacters.map((item) => item.name));
+  let importedCharacters = 0;
+  for (const entry of (options.includeCharacters === false ? [] : zip.getEntries().filter((item) => item.entryName.startsWith("project/characters/") && !item.isDirectory))) {
+    const source = readExchangeJson(zip, entry.entryName, null);
+    if (!source) continue;
+    const id = makeId("character");
+    const card = { ...source, id, name: importedCopyTitle(source.name, characterNames), fileName: `${id}.json`, createdAt: source.createdAt || nowIso(), updatedAt: nowIso() };
+    await writeJson(getCharacterPath(projectPath, card), card);
+    importedCharacters += 1;
+  }
+
+  const existingWorld = await loadWorldDocs(projectPath);
+  const worldTitles = new Set(existingWorld.map((item) => item.title));
+  let importedWorldDocs = 0;
+  for (const entry of (options.includeWorld === false ? [] : zip.getEntries().filter((item) => item.entryName.startsWith("project/worldbuilding/") && !item.isDirectory))) {
+    const source = parseWorldDocFile(path.basename(entry.entryName), zip.readAsText(entry));
+    const id = makeId("world");
+    const fileName = await uniqueFileNameInDirectory(path.join(projectPath, "worldbuilding"), id, ".md");
+    await writeWorldDoc(projectPath, { ...source, id, title: importedCopyTitle(source.title, worldTitles), fileName, updatedAt: nowIso() });
+    importedWorldDocs += 1;
+  }
+
+  let importedMaterials = 0;
+  for (const entry of (options.includeMaterials === false ? [] : zip.getEntries().filter((item) => item.entryName.startsWith("project/materials/") && !item.isDirectory))) {
+    const source = readExchangeJson(zip, entry.entryName, null);
+    if (!source) continue;
+    await saveMaterial(projectPath, { ...source, id: makeId("material"), title: `${source.title || "导入素材"}${options.renameMaterials === false ? "" : "（导入）"}` });
+    importedMaterials += 1;
+  }
+  const importedWorkspace = readExchangeJson(zip, "project/analysis/creative-workspace/state.json", null);
+  if (importedWorkspace && options.includeWorkspace !== false && options.includeChapters !== false) await creativeWorkspace.mergeImportedWorkspace(projectPath, importedWorkspace, chapterIdMap);
+  await rebuildIndex(projectPath);
+  pendingExchangeImports.delete(String(token || ""));
+  return { state: await buildAppState(projectPath), imported: { chapters: importedChapters, characters: importedCharacters, worldDocs: importedWorldDocs, materials: importedMaterials }, renamedConflicts: true };
+}
+
+async function buildCreativeStatistics(projectPath, label = "", control = null) {
+  const config = await loadConfig(projectPath);
+  const workspace = await creativeWorkspace.loadWorkspace(projectPath);
+  const overview = await storyState.getStoryOverview(projectPath, { projectChapters: config.chapters, factLimit: 2000, characterLimit: 1000, foreshadowLimit: 2000 });
+  const characters = await loadCharacters(projectPath);
+  const contents = {};
+  const chapters = config.chapters.slice().sort((a, b) => Number(a.order || 0) - Number(b.order || 0));
+  for (let index = 0; index < chapters.length; index += 1) {
+    control?.throwIfCanceled?.();
+    const chapter = chapters[index];
+    contents[chapter.id] = await fs.readFile(getChapterPath(projectPath, chapter), "utf8").catch(() => "");
+    if (control?.update && (index % 10 === 0 || index === chapters.length - 1)) await control.update({ phase: "正在统计章节", current: index + 1, total: chapters.length, detail: chapter.title });
+  }
+  const snapshot = creativeStatistics.analyzeProjectStatistics({ chapters, contents, characters, workspace, storyOverview: overview, label });
+  await creativeWorkspace.upsertItem(projectPath, "statisticsHistory", snapshot);
+  return { snapshot, workspace: await getCreativeWorkspaceView(projectPath) };
+}
+
+async function executeBackgroundTask(projectPath, task, control) {
+  const config = await loadConfig(projectPath);
+  if (task.type === "agent-workflow") {
+    return executeCreativeAgentRun(projectPath, String(task.options?.runId || ""), control, String(task.options?.onlyTool || ""));
+  }
+  if (task.type === "story-analysis") {
+    const requestedIds = new Set((task.scope?.chapterIds || []).map(String));
+    const chapters = config.chapters
+      .filter((chapter) => !requestedIds.size || requestedIds.has(chapter.id))
+      .sort((a, b) => a.order - b.order);
+    let aiCount = 0;
+    let localCount = 0;
+    const warnings = [];
+    const characters = task.options?.useAI ? null : await loadCharacters(projectPath);
+    await control.update({ phase: "准备剧情事实分析", current: 0, total: chapters.length, detail: `${chapters.length} 个文档` });
+    for (let index = 0; index < chapters.length; index += 1) {
+      if (control.isCanceled()) throw Object.assign(new Error("任务已停止"), { name: "AbortError" });
+      const chapter = chapters[index];
+      await control.update({ phase: task.options?.useAI ? "AI 深度整理" : "本地增量整理", current: index, total: chapters.length, detail: chapter.title });
+      if (task.options?.useAI) {
+        const result = await analyzeStoryStateWithAI(projectPath, chapter.id, control);
+        if (result.apiError) warnings.push(`${chapter.title}：${result.apiError}`);
+        if (result.ledger.analysisMode === "ai") aiCount += 1;
+        else localCount += 1;
+      } else {
+        await refreshLocalStoryState(projectPath, chapter.id, null, { config, characters });
+        localCount += 1;
+      }
+      await control.update({ current: index + 1, total: chapters.length, detail: chapter.title });
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    return { analyzed: chapters.length, aiCount, localCount, warnings: warnings.slice(0, 40) };
+  }
+
+  if (task.type === "creative-board") {
+    const ordered = config.chapters.slice().sort((a, b) => a.order - b.order);
+    const index = ordered.findIndex((chapter) => chapter.id === task.scope?.chapterId);
+    const chapter = ordered[index];
+    if (!chapter) throw new Error("没有找到筹备板对应的章节。");
+    await control.update({ phase: "整理本地创作状态", current: 1, total: task.options?.useAI ? 3 : 2, detail: chapter.title });
+    let board = await storyState.generateLocalBoard(projectPath, chapter, ordered[index + 1] || null);
+    if (task.options?.useAI && !control.isCanceled()) {
+      await control.update({ phase: "创作参谋正在补充筹备项", current: 2, total: 3, detail: chapter.title });
+      const advice = await buildCreativeAdvice(projectPath, { mode: "next", chapterId: chapter.id, focus: task.options?.focus || "" }, control);
+      const locked = board.items.filter((item) => item.locked);
+      const generated = advice.items.map((item, itemIndex) => ({
+        id: `beat_${stableHash(`${chapter.id}_${item.id}_${itemIndex}`)}`,
+        type: item.type,
+        title: item.title,
+        detail: `${item.summary}${item.suggestedUse ? `\n使用建议：${item.suggestedUse}` : ""}${item.risks?.length ? `\n注意：${item.risks.join("；")}` : ""}`,
+        order: locked.length + itemIndex,
+        locked: false,
+        completed: false,
+        sourceRefs: item.sourceRefs || [],
+      }));
+      board = await storyState.saveBoard(projectPath, { ...board, items: [...locked, ...generated], generatedAt: nowIso(), apiError: advice.apiError || "" });
+    }
+    await control.update({ phase: "筹备板已保存", current: task.options?.useAI ? 3 : 2, total: task.options?.useAI ? 3 : 2, detail: `${board.items.length} 项` });
+    return { board };
+  }
+
+  if (task.type === "consistency-check") {
+    await control.update({ phase: "正在执行全书一致性检查", current: 0, total: 1, detail: "可继续编辑正文" });
+    const result = await analyzeConsistency(projectPath, { ...(task.options || {}), refresh: true }, control);
+    await saveAnalysisState(projectPath, { consistency: result, consistencyOptions: task.options || {} });
+    await control.update({ current: 1, total: 1, detail: `${result.issues.length} 个问题` });
+    return result;
+  }
+
+  if (task.type === "timeline-analysis") {
+    await control.update({ phase: "正在识别剧情时间线", current: 0, total: 1, detail: "可继续编辑正文" });
+    const result = task.options?.mode === "local" ? await buildTimelineEvents(projectPath, task.options || {}) : await buildAiTimelineEvents(projectPath, task.options || {}, control);
+    await saveAnalysisState(projectPath, { timeline: result, timelineOptions: task.options || {} });
+    await control.update({ current: 1, total: 1, detail: `${result.events.length} 个事件` });
+    return result;
+  }
+
+  if (task.type === "knowledge-rebuild") {
+    await control.update({ phase: "正在重建长篇知识库", current: 0, total: 1, detail: "索引会增量写入" });
+    const result = await rebuildIndex(projectPath, {
+      signal: control.signal,
+      onProgress: (progress) => control.update({ phase: "正在重建长篇知识库", ...progress }),
+    });
+    await control.update({ current: 1, total: 1, detail: `${result.chunks} 个片段` });
+    return result;
+  }
+
+  if (task.type === "snapshot") {
+    const manifest = await projectSnapshots.createSnapshot(projectPath, {
+      name: task.options?.name || task.title,
+      reason: task.options?.reason || "后台创建项目快照",
+      onProgress: (progress) => control.update({ phase: "正在创建项目快照", ...progress }),
+    });
+    return { snapshot: manifest };
+  }
+  if (task.type === "creative-statistics") {
+    return buildCreativeStatistics(projectPath, String(task.options?.label || ""), control);
+  }
+
+  throw new Error(`不支持的后台任务类型：${task.type}`);
+}
+
+async function getProjectTaskCenter(projectPath) {
+  if (!projectTaskCenters.has(projectPath)) {
+    projectTaskCenters.set(projectPath, new PersistentTaskCenter({
+      projectPath,
+      executor: (task, control) => executeBackgroundTask(projectPath, task, control),
+      onEvent: (task) => sendRendererEvent("task:progress", { ...task, projectPath }),
+    }));
+  }
+  const center = projectTaskCenters.get(projectPath);
+  await center.init();
+  if (!center.agentRunsReconciled) {
+    center.agentRunsReconciled = true;
+    const interrupted = (await center.list()).tasks.filter((task) => task.type === "agent-workflow" && task.status === "已中断");
+    if (interrupted.length) {
+      const workspace = await creativeWorkspace.loadWorkspace(projectPath);
+      for (const task of interrupted) {
+        const run = workspace.agentRuns.find((item) => item.id === task.options?.runId && ["等待中", "运行中"].includes(item.status));
+        if (run) await creativeWorkspace.upsertItem(projectPath, "agentRuns", { ...run, status: "已中断", taskId: task.id, error: "软件关闭时工作流尚未完成，可在任务中心重试。" });
+      }
+    }
+  }
+  return center;
+}
+
+async function queueKnowledgeRebuildAfterRestore(projectPath, reason) {
+  await vectorShards.reset(projectPath);
+  await writeJson(getKnowledgeSummariesPath(projectPath), { version: 2, updatedAt: "", sources: [], volumes: [], book: null });
+  return (await getProjectTaskCenter(projectPath)).enqueue({
+    type: "knowledge-rebuild",
+    title: "恢复后重建知识库",
+    total: 1,
+    options: { automatic: true, reason },
+  });
+}
+
+function scheduleIdleDeepAnalysis(projectPath, chapter) {
+  const key = `${projectPath}\u0000${chapter.id}`;
+  const previous = deepAnalysisTimers.get(key);
+  if (previous) clearTimeout(previous);
+  const timer = setTimeout(async () => {
+    deepAnalysisTimers.delete(key);
+    try {
+      const center = await getProjectTaskCenter(projectPath);
+      const { tasks } = await center.list();
+      const duplicate = tasks.some((task) => ["等待中", "运行中", "正在停止", "已暂停"].includes(task.status) && task.type === "story-analysis" && task.scope?.chapterIds?.includes(chapter.id));
+      if (duplicate) return;
+      await center.enqueue({
+        type: "story-analysis",
+        title: `空闲后深度分析：${chapter.title}`,
+        total: 1,
+        scope: { chapterIds: [chapter.id] },
+        options: { useAI: true, automatic: true },
+      });
+    } catch {
+      // Automatic deep analysis must never interfere with editing or saving.
+    }
+  }, 45000);
+  deepAnalysisTimers.set(key, timer);
 }
 
 async function buildAppearanceStats(projectPath) {
@@ -3131,21 +5290,115 @@ async function compareChapterVersion(projectPath, chapterId, versionId) {
   };
 }
 
+async function restoreChapterVersion(projectPath, chapterId, versionId) {
+  const config = await loadConfig(projectPath);
+  const chapter = config.chapters.find((item) => item.id === chapterId);
+  if (!chapter) throw new Error("章节不存在，无法恢复版本。");
+  const versions = await listChapterVersions(projectPath, chapterId);
+  const version = versions.find((item) => item.id === versionId);
+  if (!version) throw new Error("找不到要恢复的历史版本。");
+  const currentContent = await fs.readFile(getChapterPath(projectPath, chapter), "utf8").catch(() => "");
+  const restoredContent = await fs.readFile(getChapterVersionContentPath(projectPath, chapterId, version), "utf8");
+  if (currentContent && currentContent !== restoredContent) await snapshotChapterVersion(projectPath, chapter, currentContent, "恢复历史版本前自动备份");
+  await ensureExclusiveChapterFile(projectPath, config, chapter, currentContent, { snapshot: false });
+  await fs.writeFile(getChapterPath(projectPath, chapter), restoredContent, "utf8");
+  chapter.wordCount = countWords(restoredContent);
+  chapter.outline = extractOutline(restoredContent);
+  chapter.updatedAt = nowIso();
+  await calculateTotalWords(projectPath, config);
+  await saveConfig(projectPath, config);
+  await indexSource(projectPath, {
+    id: chapter.id,
+    type: "chapter",
+    title: chapter.title,
+    volume: chapter.volume || "未分卷",
+    category: chapter.volume || "未分卷",
+    knowledgeRole: getKnowledgeRole(chapter),
+    content: restoredContent,
+  });
+  return { state: await buildAppState(projectPath, chapter.id), restoredVersion: version };
+}
+
 function stripMarkdown(text) {
   return contentToPlainText(text);
 }
 
-function textRunsFromMarkdown(text, options = {}) {
-  const clean = stripMarkdown(text);
+function createDocxReviewContext(annotations = [], revisions = []) {
+  const comments = annotations
+    .filter((item) => item?.quote && item?.comment)
+    .map((item, index) => ({ ...item, commentId: index }));
+  const tracked = revisions
+    .filter((item) => item && ["待确认", "部分采纳", "已采纳"].includes(item.status) && (item.original || item.replacement))
+    .map((item, index) => ({ ...item, revisionId: index * 2 + 1 }));
+  return { comments, revisions: tracked };
+}
+
+function reviewRunsForText(text, options = {}, reviewContext = null) {
+  const clean = sanitizeDocxText(String(text || ""));
+  if (!clean || !reviewContext) return clean ? [new TextRun({ text: clean, ...options })] : [];
+  const commentCandidates = [];
+  for (const item of reviewContext.comments || []) {
+    const quote = sanitizeDocxText(String(item.quote || "")).replace(/\s+/g, " ").trim();
+    const start = quote ? clean.indexOf(quote) : -1;
+    if (start >= 0) commentCandidates.push({ kind: "comment", start, end: start + quote.length, item });
+  }
+  const revisionCandidates = [];
+  for (const item of reviewContext.revisions || []) {
+    const anchorText = item.status === "已采纳" ? item.replacement : item.original;
+    const anchor = sanitizeDocxText(String(anchorText || "")).replace(/\s+/g, " ").trim();
+    const start = anchor ? clean.indexOf(anchor) : -1;
+    if (start >= 0) revisionCandidates.push({ kind: "revision", start, end: start + anchor.length, item });
+  }
+  revisionCandidates.sort((a, b) => a.start - b.start || (b.end - b.start) - (a.end - a.start));
+  const selectedRevisions = [];
+  for (const candidate of revisionCandidates) {
+    if (selectedRevisions.some((item) => candidate.start < item.end && candidate.end > item.start)) continue;
+    selectedRevisions.push(candidate);
+  }
+  commentCandidates.sort((a, b) => a.start - b.start || (b.end - b.start) - (a.end - a.start));
+  const selectedComments = [];
+  for (const candidate of commentCandidates) {
+    const revision = selectedRevisions.find((item) => candidate.start < item.end && candidate.end > item.start);
+    if (revision) {
+      revision.comments = [...(revision.comments || []), candidate.item];
+      continue;
+    }
+    if (selectedComments.some((item) => candidate.start < item.end && candidate.end > item.start)) continue;
+    selectedComments.push(candidate);
+  }
+  const selected = [...selectedRevisions, ...selectedComments];
+  selected.sort((a, b) => a.start - b.start);
+  if (!selected.length) return [new TextRun({ text: clean, ...options })];
+  const runs = [];
+  let cursor = 0;
+  for (const match of selected) {
+    if (match.start > cursor) runs.push(new TextRun({ text: clean.slice(cursor, match.start), ...options }));
+    if (match.kind === "comment") {
+      runs.push(new CommentRangeStart(match.item.commentId));
+      runs.push(new TextRun({ text: clean.slice(match.start, match.end), ...options }));
+      runs.push(new CommentRangeEnd(match.item.commentId));
+      runs.push(new CommentReference(match.item.commentId));
+    } else {
+      for (const comment of match.comments || []) runs.push(new CommentRangeStart(comment.commentId));
+      const author = sanitizeDocxText(match.item.instruction || "AI小说创作平台").slice(0, 80) || "AI小说创作平台";
+      const date = match.item.updatedAt || nowIso();
+      if (match.item.original) runs.push(new DeletedTextRun({ id: match.item.revisionId, author, date, text: sanitizeDocxText(match.item.original), ...options }));
+      if (match.item.replacement) runs.push(new InsertedTextRun({ id: match.item.revisionId + 1, author, date, text: sanitizeDocxText(match.item.replacement), ...options }));
+      for (const comment of [...(match.comments || [])].reverse()) {
+        runs.push(new CommentRangeEnd(comment.commentId));
+        runs.push(new CommentReference(comment.commentId));
+      }
+    }
+    cursor = match.end;
+  }
+  if (cursor < clean.length) runs.push(new TextRun({ text: clean.slice(cursor), ...options }));
+  return runs;
+}
+
+function textRunsFromMarkdown(text, options = {}, reviewContext = null) {
+  const clean = sanitizeDocxText(stripMarkdown(text));
   if (!clean) return [new TextRun({ text: "" })];
-  return [
-    new TextRun({
-      text: clean,
-      bold: Boolean(options.bold),
-      italics: Boolean(options.italics),
-      size: options.size,
-    }),
-  ];
+  return reviewRunsForText(clean, { bold: Boolean(options.bold), italics: Boolean(options.italics), size: options.size }, reviewContext);
 }
 
 function parseMarkdownTable(lines, startIndex) {
@@ -3164,12 +5417,12 @@ function parseMarkdownTable(lines, startIndex) {
       .replace(/^\|/, "")
       .replace(/\|$/, "")
       .split("|")
-      .map((cell) => stripMarkdown(cell)),
+      .map((cell) => sanitizeDocxText(stripMarkdown(cell))),
   );
   return { rows, nextIndex: index };
 }
 
-function markdownToDocxChildren(markdown) {
+function markdownToDocxChildren(markdown, reviewContext = null) {
   const lines = String(markdown || "").replace(/\r\n/g, "\n").split("\n");
   const children = [];
 
@@ -3198,7 +5451,7 @@ function markdownToDocxChildren(markdown) {
                       new Paragraph({
                         children: [
                           new TextRun({
-                            text: row[cellIndex] || "",
+                            text: sanitizeDocxText(row[cellIndex] || ""),
                             bold: rowIndex === 0,
                           }),
                         ],
@@ -3228,7 +5481,7 @@ function markdownToDocxChildren(markdown) {
       children.push(
         new Paragraph({
           heading: headingMap[level],
-          children: textRunsFromMarkdown(heading[2], { bold: true }),
+          children: textRunsFromMarkdown(heading[2], { bold: true }, reviewContext),
         }),
       );
       continue;
@@ -3239,7 +5492,7 @@ function markdownToDocxChildren(markdown) {
       children.push(
         new Paragraph({
           indent: { left: 420 },
-          children: textRunsFromMarkdown(quote[1], { italics: true }),
+          children: textRunsFromMarkdown(quote[1], { italics: true }, reviewContext),
         }),
       );
       continue;
@@ -3250,7 +5503,7 @@ function markdownToDocxChildren(markdown) {
       children.push(
         new Paragraph({
           bullet: { level: 0 },
-          children: textRunsFromMarkdown(bullet[1]),
+          children: textRunsFromMarkdown(bullet[1], {}, reviewContext),
         }),
       );
       continue;
@@ -3270,7 +5523,7 @@ function markdownToDocxChildren(markdown) {
     children.push(
       new Paragraph({
         spacing: { after: 160 },
-        children: textRunsFromMarkdown(trimmed),
+        children: textRunsFromMarkdown(trimmed, {}, reviewContext),
       }),
     );
   }
@@ -3279,20 +5532,20 @@ function markdownToDocxChildren(markdown) {
 }
 
 function normalizeHtmlText(text) {
-  return decodeBasicEntities(String(text || "").replace(/\s+/g, " ")).trim();
+  return sanitizeDocxText(decodeBasicEntities(String(text || "").replace(/\s+/g, " ")).trim());
 }
 
-function htmlInlineRuns(node, options = {}) {
+function htmlInlineRuns(node, options = {}, reviewContext = null) {
   const runs = [];
   const children = node.childNodes || [];
   if (!children.length) {
     const text = normalizeHtmlText(node.text || node.rawText || "");
-    return text ? [new TextRun({ text, bold: options.bold, italics: options.italics, underline: options.underline })] : [];
+    return text ? reviewRunsForText(text, { bold: options.bold, italics: options.italics, underline: options.underline }, reviewContext) : [];
   }
   for (const child of children) {
     if (child.nodeType === 3) {
       const text = normalizeHtmlText(child.rawText || child.text || "");
-      if (text) runs.push(new TextRun({ text, bold: options.bold, italics: options.italics, underline: options.underline }));
+      if (text) runs.push(...reviewRunsForText(text, { bold: options.bold, italics: options.italics, underline: options.underline }, reviewContext));
       continue;
     }
     const tag = String(child.rawTagName || child.tagName || "").toLowerCase();
@@ -3305,7 +5558,7 @@ function htmlInlineRuns(node, options = {}) {
         bold: options.bold || tag === "strong" || tag === "b" || tag === "th",
         italics: options.italics || tag === "em" || tag === "i",
         underline: options.underline || tag === "u",
-      }),
+      }, reviewContext),
     );
   }
   return runs;
@@ -3324,16 +5577,18 @@ async function imageRunFromHtmlNode(node) {
     } else {
       buffer = await fs.readFile(src);
     }
-    return new ImageRun({
-      data: buffer,
-      transformation: { width: 560, height: 320 },
-    });
+    const sourceWidth = Number(node.getAttribute?.("data-docx-width") || node.getAttribute?.("width") || 560);
+    const sourceHeight = Number(node.getAttribute?.("data-docx-height") || node.getAttribute?.("height") || 320);
+    const width = Math.max(1, Math.min(640, Number.isFinite(sourceWidth) ? sourceWidth : 560));
+    const ratio = sourceWidth > 0 && sourceHeight > 0 ? sourceHeight / sourceWidth : 320 / 560;
+    const height = Math.max(1, Math.round(width * ratio));
+    return new ImageRun({ data: buffer, transformation: { width, height } });
   } catch {
     return null;
   }
 }
 
-async function htmlNodeToDocxBlocks(node) {
+async function htmlNodeToDocxBlocks(node, reviewContext = null) {
   const blocks = [];
   const tag = String(node.rawTagName || node.tagName || "").toLowerCase();
   if (!tag) {
@@ -3351,10 +5606,11 @@ async function htmlNodeToDocxBlocks(node) {
       5: HeadingLevel.HEADING_5,
       6: HeadingLevel.HEADING_6,
     };
-    return [new Paragraph({ heading: headingMap[level], children: htmlInlineRuns(node, { bold: true }) })];
+    return [new Paragraph({ heading: headingMap[level], children: htmlInlineRuns(node, { bold: true }, reviewContext) })];
   }
 
   if (tag === "table") {
+    const tableWidth = Math.max(10, Math.min(100, Number(node.getAttribute?.("data-docx-width") || String(node.getAttribute?.("style") || "").match(/width\s*:\s*(\d+(?:\.\d+)?)%/i)?.[1] || 100)));
     const rows = node.querySelectorAll("tr").map((row) => {
       const cells = row.querySelectorAll("th,td");
       const columnCount = Math.max(1, cells.length);
@@ -3362,10 +5618,10 @@ async function htmlNodeToDocxBlocks(node) {
         children: cells.map(
           (cell) =>
             new TableCell({
-              width: { size: Math.floor(100 / columnCount), type: WidthType.PERCENTAGE },
+              width: { size: Math.max(3, Math.min(100, Number(cell.getAttribute?.("style")?.match(/width\s*:\s*(\d+(?:\.\d+)?)%/i)?.[1] || Math.floor(100 / columnCount)))), type: WidthType.PERCENTAGE },
               children: [
                 new Paragraph({
-                  children: htmlInlineRuns(cell, { bold: String(cell.rawTagName || cell.tagName).toLowerCase() === "th" }),
+                  children: htmlInlineRuns(cell, { bold: String(cell.rawTagName || cell.tagName).toLowerCase() === "th" }, reviewContext),
                 }),
               ],
             }),
@@ -3375,7 +5631,7 @@ async function htmlNodeToDocxBlocks(node) {
     return rows.length
       ? [
           new Table({
-            width: { size: 100, type: WidthType.PERCENTAGE },
+            width: { size: tableWidth, type: WidthType.PERCENTAGE },
             rows,
           }),
         ]
@@ -3388,7 +5644,7 @@ async function htmlNodeToDocxBlocks(node) {
         new Paragraph({
           bullet: tag === "ul" ? { level: 0 } : undefined,
           numbering: tag === "ol" ? { reference: "default-numbering", level: 0 } : undefined,
-          children: htmlInlineRuns(li),
+          children: htmlInlineRuns(li, {}, reviewContext),
         }),
       );
     }
@@ -3399,17 +5655,18 @@ async function htmlNodeToDocxBlocks(node) {
     return [
       new Paragraph({
         indent: { left: 420 },
-        children: htmlInlineRuns(node, { italics: true }),
+        children: htmlInlineRuns(node, { italics: true }, reviewContext),
       }),
     ];
   }
 
   if (tag === "img") {
     const imageRun = await imageRunFromHtmlNode(node);
+    const imageAlign = String(node.getAttribute?.("data-docx-align") || "center").toLowerCase();
     return [
       new Paragraph({
-        alignment: AlignmentType.CENTER,
-        children: imageRun ? [imageRun] : [new TextRun({ text: node.getAttribute?.("alt") || "图片", italics: true })],
+        alignment: imageAlign === "left" ? AlignmentType.LEFT : imageAlign === "right" ? AlignmentType.RIGHT : AlignmentType.CENTER,
+        children: imageRun ? [imageRun] : [new TextRun({ text: sanitizeDocxText(node.getAttribute?.("alt") || "图片"), italics: true })],
       }),
     ];
   }
@@ -3418,69 +5675,65 @@ async function htmlNodeToDocxBlocks(node) {
     const images = node.querySelectorAll("img");
     if (images.length === 1 && normalizeHtmlText(node.text || "") === "") {
       const imageRun = await imageRunFromHtmlNode(images[0]);
-      return [new Paragraph({ alignment: AlignmentType.CENTER, children: imageRun ? [imageRun] : [new TextRun({ text: "图片" })] })];
+      const imageAlign = String(images[0].getAttribute?.("data-docx-align") || "center").toLowerCase();
+      return [new Paragraph({ alignment: imageAlign === "left" ? AlignmentType.LEFT : imageAlign === "right" ? AlignmentType.RIGHT : AlignmentType.CENTER, children: imageRun ? [imageRun] : [new TextRun({ text: sanitizeDocxText("图片") })] })];
     }
-    const runs = htmlInlineRuns(node);
+    const runs = htmlInlineRuns(node, {}, reviewContext);
     return runs.length ? [new Paragraph({ spacing: { after: 160 }, children: runs })] : [new Paragraph({ text: "" })];
   }
 
   for (const child of node.childNodes || []) {
-    blocks.push(...(await htmlNodeToDocxBlocks(child)));
+    blocks.push(...(await htmlNodeToDocxBlocks(child, reviewContext)));
   }
   return blocks;
 }
 
-async function htmlToDocxChildren(html) {
+async function htmlToDocxChildren(html, reviewContext = null) {
   const root = parseHtml(promoteMarkdownHeadingsInHtml(String(html || "")));
   const blocks = [];
   for (const child of root.childNodes) {
-    blocks.push(...(await htmlNodeToDocxBlocks(child)));
+    blocks.push(...(await htmlNodeToDocxBlocks(child, reviewContext)));
   }
   return blocks.length ? blocks : [new Paragraph({ text: "" })];
 }
 
-async function exportChapterToDocx(projectPath, chapter, targetFile) {
-  const content = await fs.readFile(getChapterPath(projectPath, chapter), "utf8");
+async function exportContentToDocx(title, content, targetFile, description = "由 AI小说创作平台导出的文档", reviewData = {}) {
+  const reviewContext = createDocxReviewContext(reviewData.annotations || [], reviewData.revisions || []);
+  let children;
   if (isHtmlContent(content)) {
-    const children = await htmlToDocxChildren(content);
-    const doc = new Document({
-      creator: "AI小说创作平台",
-      title: chapter.title,
-      description: "由 AI小说创作平台导出的富文档",
-      numbering: {
-        config: [
-          {
-            reference: "default-numbering",
-            levels: [
-              {
-                level: 0,
-                format: "decimal",
-                text: "%1.",
-                alignment: AlignmentType.LEFT,
-              },
-            ],
-          },
-        ],
-      },
-      sections: [
-        {
-          properties: {
-            page: {
-              margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 },
-            },
-          },
-          children,
-        },
-      ],
-    });
-    const buffer = await Packer.toBuffer(doc);
-    await fs.writeFile(targetFile, buffer);
-    return targetFile;
+    children = await htmlToDocxChildren(content, reviewContext);
+  } else {
+    children = markdownToDocxChildren(content, reviewContext);
   }
   const doc = new Document({
     creator: "AI小说创作平台",
-    title: chapter.title,
-    description: "由 AI小说创作平台导出的章节文档",
+    title: sanitizeDocxText(title),
+    description: sanitizeDocxText(description),
+    comments: reviewContext.comments.length ? {
+      children: reviewContext.comments.map((item) => ({
+        id: item.commentId,
+        author: sanitizeDocxText(item.origin === "ai" ? "AI小说创作平台" : "作者"),
+        initials: item.origin === "ai" ? "AI" : "作者",
+        date: new Date(item.updatedAt || nowIso()),
+        children: [new Paragraph({ children: [new TextRun({ text: sanitizeDocxText(item.comment) })] })],
+      })),
+    } : undefined,
+    features: { trackRevisions: reviewContext.revisions.length > 0 },
+    numbering: {
+      config: [
+        {
+          reference: "default-numbering",
+          levels: [
+            {
+              level: 0,
+              format: "decimal",
+              text: "%1.",
+              alignment: AlignmentType.LEFT,
+            },
+          ],
+        },
+      ],
+    },
     sections: [
       {
         properties: {
@@ -3488,13 +5741,98 @@ async function exportChapterToDocx(projectPath, chapter, targetFile) {
             margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 },
           },
         },
-        children: markdownToDocxChildren(content),
+        children,
       },
     ],
   });
-  const buffer = await Packer.toBuffer(doc);
+  const buffer = await normalizeExportedDocxBuffer(await Packer.toBuffer(doc));
   await fs.writeFile(targetFile, buffer);
   return targetFile;
+}
+
+async function exportChapterToDocx(projectPath, chapter, targetFile) {
+  const content = await fs.readFile(getChapterPath(projectPath, chapter), "utf8");
+  const workspace = await creativeWorkspace.loadWorkspace(projectPath);
+  return exportContentToDocx(chapter.title, content, targetFile, "由 AI小说创作平台导出的目录树文档", {
+    annotations: workspace.annotations.filter((item) => item.chapterId === chapter.id),
+    revisions: workspace.revisions.filter((item) => item.chapterId === chapter.id),
+  });
+}
+
+async function exportBookDocumentsToDirectory(projectPath, parentDirectory, options = {}) {
+  const config = await loadConfig(projectPath);
+  const includedRoles = new Set(["正文"]);
+  if (options.includeOutline) includedRoles.add("大纲");
+  if (options.includeMaterials) includedRoles.add("补充材料");
+
+  const chapters = config.chapters
+    .slice()
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+    .filter((chapter) => includedRoles.has(getKnowledgeRole(chapter)));
+  const characters = options.includeCharacters ? await loadCharacters(projectPath) : [];
+  const worldDocs = options.includeWorld ? await loadWorldDocs(projectPath) : [];
+  if (!chapters.length && !characters.length && !worldDocs.length) {
+    throw new Error("当前导出选项下没有可导出的文档。");
+  }
+
+  const rootName = `${config.title || "未命名小说"}_逐篇导出_${exportTimestamp()}`;
+  const directoryPath = await createUniqueDirectory(parentDirectory, rootName);
+  const exportedFiles = [];
+  const failures = [];
+
+  async function exportOne({ directorySegments, title, sourceType, sourceId, write }) {
+    try {
+      const categoryDirectory = path.join(directoryPath, ...directorySegments);
+      await fs.mkdir(categoryDirectory, { recursive: true });
+      const fileName = await uniqueExportFileName(categoryDirectory, title);
+      const filePath = path.join(categoryDirectory, fileName);
+      await write(filePath);
+      exportedFiles.push({ sourceType, sourceId, title, filePath });
+    } catch (error) {
+      failures.push({ sourceType, sourceId, title, message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  for (const chapter of chapters) {
+    await exportOne({
+      directorySegments: exportCategorySegments(chapter.volume, "未分卷"),
+      title: chapter.title,
+      sourceType: "chapter",
+      sourceId: chapter.id,
+      write: (filePath) => exportChapterToDocx(projectPath, chapter, filePath),
+    });
+  }
+
+  for (const card of characters) {
+    await exportOne({
+      directorySegments: ["角色卡", ...exportCategorySegments(card.category, "未分类")],
+      title: card.name,
+      sourceType: "character",
+      sourceId: card.id,
+      write: (filePath) => exportContentToDocx(card.name, characterToMarkdown(card), filePath, "由 AI小说创作平台导出的角色卡"),
+    });
+  }
+
+  for (const worldDoc of worldDocs) {
+    await exportOne({
+      directorySegments: ["世界观", ...exportCategorySegments(worldDoc.category, "未分类")],
+      title: worldDoc.title,
+      sourceType: "world",
+      sourceId: worldDoc.id,
+      write: (filePath) => exportContentToDocx(worldDoc.title, worldDoc.content, filePath, "由 AI小说创作平台导出的世界观文档"),
+    });
+  }
+
+  return {
+    directoryPath,
+    exportedCount: exportedFiles.length,
+    failedCount: failures.length,
+    chapterCount: chapters.length,
+    characterCount: characters.length,
+    worldCount: worldDocs.length,
+    files: exportedFiles,
+    failures,
+  };
 }
 
 async function chapterContentToDocxChildren(content) {
@@ -3510,11 +5848,11 @@ async function exportBookToDocx(projectPath, targetFile, options = {}) {
     new Paragraph({
       heading: HeadingLevel.HEADING_1,
       alignment: AlignmentType.CENTER,
-      children: [new TextRun({ text: config.title || "未命名小说", bold: true, size: 36 })],
+      children: [new TextRun({ text: sanitizeDocxText(config.title || "未命名小说"), bold: true, size: 36 })],
     }),
     new Paragraph({
       alignment: AlignmentType.CENTER,
-      children: [new TextRun({ text: config.author ? `作者：${config.author}` : "由 AI小说创作平台导出", size: 22 })],
+      children: [new TextRun({ text: sanitizeDocxText(config.author ? `作者：${config.author}` : "由 AI小说创作平台导出"), size: 22 })],
     }),
     new Paragraph({ text: "" }),
   ];
@@ -3527,14 +5865,14 @@ async function exportBookToDocx(projectPath, targetFile, options = {}) {
         new Paragraph({
           heading: HeadingLevel.HEADING_1,
           pageBreakBefore: children.length > 3,
-          children: [new TextRun({ text: volume, bold: true })],
+          children: [new TextRun({ text: sanitizeDocxText(volume), bold: true })],
         }),
       );
     }
     children.push(
       new Paragraph({
         heading: HeadingLevel.HEADING_2,
-        children: [new TextRun({ text: chapter.title || "未命名章节", bold: true })],
+        children: [new TextRun({ text: sanitizeDocxText(chapter.title || "未命名章节"), bold: true })],
       }),
     );
     const content = await fs.readFile(getChapterPath(projectPath, chapter), "utf8").catch(() => "");
@@ -3544,7 +5882,7 @@ async function exportBookToDocx(projectPath, targetFile, options = {}) {
   if (options.includeOutline) {
     children.push(new Paragraph({ heading: HeadingLevel.HEADING_1, pageBreakBefore: true, children: [new TextRun({ text: "大纲目录", bold: true })] }));
     for (const chapter of outlineChapters) {
-      children.push(new Paragraph({ heading: HeadingLevel.HEADING_2, children: [new TextRun({ text: `${chapter.volume || "未分卷"} / ${chapter.title}`, bold: true })] }));
+      children.push(new Paragraph({ heading: HeadingLevel.HEADING_2, children: [new TextRun({ text: sanitizeDocxText(`${chapter.volume || "未分卷"} / ${chapter.title}`), bold: true })] }));
       const content = await fs.readFile(getChapterPath(projectPath, chapter), "utf8").catch(() => "");
       const blocks = await chapterContentToDocxChildren(content);
       children.push(...blocks, new Paragraph({ text: "" }));
@@ -3553,12 +5891,12 @@ async function exportBookToDocx(projectPath, targetFile, options = {}) {
       children.push(new Paragraph({ heading: HeadingLevel.HEADING_2, children: [new TextRun({ text: "正文小标题目录", bold: true })] }));
     }
     for (const chapter of bodyChapters) {
-      children.push(new Paragraph({ heading: HeadingLevel.HEADING_2, children: [new TextRun({ text: `${chapter.volume || "未分卷"} / ${chapter.title}`, bold: true })] }));
+      children.push(new Paragraph({ heading: HeadingLevel.HEADING_2, children: [new TextRun({ text: sanitizeDocxText(`${chapter.volume || "未分卷"} / ${chapter.title}`), bold: true })] }));
       for (const item of chapter.outline || []) {
         children.push(
           new Paragraph({
             indent: { left: Math.max(0, (Number(item.level || 1) - 1) * 260) },
-            children: [new TextRun({ text: `${"  ".repeat(Math.max(0, Number(item.level || 1) - 1))}${item.title}` })],
+            children: [new TextRun({ text: sanitizeDocxText(`${"  ".repeat(Math.max(0, Number(item.level || 1) - 1))}${item.title}`) })],
           }),
         );
       }
@@ -3566,24 +5904,24 @@ async function exportBookToDocx(projectPath, targetFile, options = {}) {
   }
   if (options.includeCharacters) {
     const characters = await loadCharacters(projectPath);
-    children.push(new Paragraph({ heading: HeadingLevel.HEADING_1, pageBreakBefore: true, children: [new TextRun({ text: "角色卡片", bold: true })] }));
+    children.push(new Paragraph({ heading: HeadingLevel.HEADING_1, pageBreakBefore: true, children: [new TextRun({ text: sanitizeDocxText("角色卡片"), bold: true })] }));
     for (const card of characters) {
-      children.push(new Paragraph({ heading: HeadingLevel.HEADING_2, children: [new TextRun({ text: card.name, bold: true })] }));
+      children.push(new Paragraph({ heading: HeadingLevel.HEADING_2, children: [new TextRun({ text: sanitizeDocxText(card.name), bold: true })] }));
       children.push(...markdownToDocxChildren(characterToMarkdown(card)));
     }
   }
   if (options.includeWorld) {
     const worldDocs = await loadWorldDocs(projectPath);
-    children.push(new Paragraph({ heading: HeadingLevel.HEADING_1, pageBreakBefore: true, children: [new TextRun({ text: "世界观资料", bold: true })] }));
+    children.push(new Paragraph({ heading: HeadingLevel.HEADING_1, pageBreakBefore: true, children: [new TextRun({ text: sanitizeDocxText("世界观资料"), bold: true })] }));
     for (const doc of worldDocs) {
-      children.push(new Paragraph({ heading: HeadingLevel.HEADING_2, children: [new TextRun({ text: `${doc.category || "未分类"} / ${doc.title}`, bold: true })] }));
+      children.push(new Paragraph({ heading: HeadingLevel.HEADING_2, children: [new TextRun({ text: sanitizeDocxText(`${doc.category || "未分类"} / ${doc.title}`), bold: true })] }));
       children.push(...markdownToDocxChildren(doc.content));
     }
   }
   const doc = new Document({
     creator: "AI小说创作平台",
-    title: config.title,
-    description: "由 AI小说创作平台导出的整书 Word 文档",
+    title: sanitizeDocxText(config.title),
+    description: sanitizeDocxText("由 AI小说创作平台导出的整书 Word 文档"),
     numbering: {
       config: [
         {
@@ -3655,10 +5993,74 @@ async function createBackup(projectPath, targetFile = "") {
   return filePath;
 }
 
+function compareVersionNumbers(left, right) {
+  const parse = (value) => String(value || "0").replace(/^v/i, "").split(/[.-]/).slice(0, 3).map((part) => Number(part) || 0);
+  const a = parse(left);
+  const b = parse(right);
+  for (let index = 0; index < 3; index += 1) {
+    if (a[index] !== b[index]) return a[index] > b[index] ? 1 : -1;
+  }
+  return 0;
+}
+
+async function checkForAppUpdate() {
+  const endpoint = "https://api.github.com/repos/MC-freshman/ai-novel-writing-platform/releases/latest";
+  const response = await fetch(endpoint, { headers: { Accept: "application/vnd.github+json", "User-Agent": "AI-Novel-Writing-Platform" }, signal: AbortSignal.timeout(20000) });
+  if (!response.ok) throw new Error(`GitHub 返回 ${response.status}`);
+  const release = await response.json();
+  const latestVersion = String(release.tag_name || release.name || "").replace(/^v/i, "");
+  const assets = Array.isArray(release.assets) ? release.assets : [];
+  const executable = assets.find((item) => /setup.*\.exe$/i.test(item.name)) || assets.find((item) => /\.exe$/i.test(item.name));
+  const currentVersion = app.getVersion();
+  return {
+    currentVersion,
+    latestVersion,
+    updateAvailable: Boolean(latestVersion) && compareVersionNumbers(latestVersion, currentVersion) > 0,
+    releaseName: String(release.name || release.tag_name || latestVersion),
+    notes: String(release.body || "").slice(0, 12000),
+    pageUrl: String(release.html_url || "https://github.com/MC-freshman/ai-novel-writing-platform/releases"),
+    downloadUrl: String(executable?.browser_download_url || ""),
+    assetName: String(executable?.name || ""),
+  };
+}
+
+async function downloadAndOpenAppUpdate(url, suggestedName = "") {
+  const parsed = new URL(String(url || ""));
+  if (parsed.protocol !== "https:" || !["github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"].includes(parsed.hostname)) throw new Error("更新下载地址不是受信任的 GitHub 地址。");
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: "保存软件更新",
+    defaultPath: path.join(app.getPath("downloads"), sanitizeFileName(suggestedName || path.basename(parsed.pathname) || "AI小说创作平台_更新.exe")),
+    filters: [{ name: "Windows 程序", extensions: ["exe"] }],
+  });
+  if (result.canceled || !result.filePath) return { canceled: true };
+  const response = await fetch(url, { headers: { "User-Agent": "AI-Novel-Writing-Platform" }, redirect: "follow" });
+  if (!response.ok || !response.body) throw new Error(`下载更新失败：HTTP ${response.status}`);
+  const temporary = `${result.filePath}.download`;
+  try {
+    await pipeline(Readable.fromWeb(response.body), createWriteStream(temporary));
+    await fs.rename(temporary, result.filePath).catch(async () => {
+      await fs.copyFile(temporary, result.filePath);
+      await fs.rm(temporary, { force: true });
+    });
+  } catch (error) {
+    await fs.rm(temporary, { force: true }).catch(() => null);
+    throw error;
+  }
+  const confirmation = await dialog.showMessageBox(mainWindow, { type: "question", title: "更新已下载", message: "是否现在打开更新程序？", detail: "请先保存正在编辑的章节。软件不会在未确认时自动安装。", buttons: ["暂不打开", "打开更新程序"], defaultId: 1, cancelId: 0 });
+  if (confirmation.response === 1) {
+    const openError = await shell.openPath(result.filePath);
+    if (openError) throw new Error(openError);
+  }
+  return { filePath: result.filePath, opened: confirmation.response === 1 };
+}
+
 async function createWindow() {
+  const savedWindowState = currentProjectPath ? await operationJournal.loadWindowState(currentProjectPath).catch(() => null) : null;
+  const savedBounds = savedWindowState?.bounds || {};
   mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 900,
+    width: Math.max(1180, Number(savedBounds.width) || 1440),
+    height: Math.max(720, Number(savedBounds.height) || 900),
+    ...(Number.isFinite(savedBounds.x) && Number.isFinite(savedBounds.y) ? { x: savedBounds.x, y: savedBounds.y } : {}),
     minWidth: 1180,
     minHeight: 720,
     title: "AI小说创作平台",
@@ -3668,6 +6070,16 @@ async function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
     },
+  });
+
+  if (savedWindowState?.maximized) mainWindow.maximize();
+  mainWindow.on("close", () => {
+    if (!currentProjectPath || mainWindow.isDestroyed()) return;
+    const bounds = mainWindow.getNormalBounds();
+    const maximized = mainWindow.isMaximized();
+    void operationJournal.loadWindowState(currentProjectPath)
+      .then((current) => operationJournal.saveWindowState(currentProjectPath, { ...(current || {}), bounds, maximized }))
+      .catch(() => null);
   });
 
   const devUrl = process.env.VITE_DEV_SERVER_URL;
@@ -3693,7 +6105,7 @@ function setChineseApplicationMenu() {
         { label: "打开项目", accelerator: "CmdOrCtrl+O", click: () => sendMenuAction("openProject") },
         { label: "导入文档", accelerator: "CmdOrCtrl+I", click: () => sendMenuAction("importDocument") },
         { label: "导出当前章节为Word", accelerator: "CmdOrCtrl+E", click: () => sendMenuAction("exportChapterDocx") },
-        { label: "导出整书为Word", click: () => sendMenuAction("exportBookDocx") },
+        { label: "按目录树逐篇导出Word", click: () => sendMenuAction("exportBookDocx") },
         { type: "separator" },
         { label: "导出备份", click: () => sendMenuAction("exportBackup") },
         { type: "separator" },
@@ -3742,6 +6154,7 @@ function setChineseApplicationMenu() {
 async function ensureCurrentProject() {
   if (!currentProjectPath) currentProjectPath = await getDefaultProjectPath();
   await ensureProjectStructure(currentProjectPath);
+  await activateProjectSession(currentProjectPath);
   return currentProjectPath;
 }
 
@@ -3749,6 +6162,47 @@ function registerIpcHandlers() {
   ipcMain.handle("app:get-state", async () => {
     const projectPath = await ensureCurrentProject();
     return buildAppState(projectPath);
+  });
+
+  ipcMain.handle("app:check-update", async () => checkForAppUpdate());
+
+  ipcMain.handle("app:download-update", async (_event, payload) => downloadAndOpenAppUpdate(String(payload?.url || ""), String(payload?.assetName || "")));
+
+  ipcMain.handle("app:privacy-scan", async () => releasePrivacy.scanReleaseInputs(path.resolve(__dirname, "..")));
+
+  ipcMain.handle("recovery:get", async () => {
+    const projectPath = await ensureCurrentProject();
+    return operationJournal.getRecoveryStatus(projectPath);
+  });
+
+  ipcMain.handle("recovery:save-draft", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    const config = await loadConfig(projectPath);
+    if (config.ui?.recoveryEnabled === false) return { disabled: true };
+    return operationJournal.saveDraft(projectPath, payload || {});
+  });
+
+  ipcMain.handle("recovery:clear-draft", async (_event, chapterId) => {
+    const projectPath = await ensureCurrentProject();
+    return operationJournal.clearDraft(projectPath, String(chapterId || ""));
+  });
+
+  ipcMain.handle("recovery:save-window", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    const current = await operationJournal.loadWindowState(projectPath).catch(() => null);
+    const bounds = mainWindow && !mainWindow.isDestroyed() ? mainWindow.getNormalBounds() : current?.bounds;
+    return operationJournal.saveWindowState(projectPath, {
+      ...(current || {}),
+      ...(payload || {}),
+      bounds,
+      maximized: mainWindow && !mainWindow.isDestroyed() ? mainWindow.isMaximized() : current?.maximized,
+    });
+  });
+
+  ipcMain.handle("operations:list", async () => {
+    const projectPath = await ensureCurrentProject();
+    const journal = await operationJournal.loadJournal(projectPath);
+    return { operations: journal.operations.slice(0, 200), sessions: journal.sessions.slice(0, 20) };
   });
 
   ipcMain.handle("project:create", async (_event, payload) => {
@@ -3760,6 +6214,7 @@ function registerIpcHandlers() {
     const title = payload?.title?.trim() || "新小说项目";
     currentProjectPath = path.join(result.filePaths[0], sanitizeFileName(title));
     await ensureProjectStructure(currentProjectPath, title);
+    await activateProjectSession(currentProjectPath);
     return buildAppState(currentProjectPath);
   });
 
@@ -3771,6 +6226,7 @@ function registerIpcHandlers() {
     if (result.canceled || !result.filePaths[0]) return { canceled: true };
     currentProjectPath = result.filePaths[0];
     await ensureProjectStructure(currentProjectPath);
+    await activateProjectSession(currentProjectPath);
     return buildAppState(currentProjectPath);
   });
 
@@ -3791,6 +6247,10 @@ function registerIpcHandlers() {
     const imported = [];
     const failures = [];
     const config = await loadConfig(projectPath);
+    if (result.filePaths.length > 1 && config.agent?.snapshotBeforeBulkChanges !== false) {
+      sendRendererEvent("import:progress", { active: true, phase: "创建导入前快照", current: 0, total: result.filePaths.length, fileName: "正在保护当前项目", cancellable: false });
+      await projectSnapshots.createSnapshot(projectPath, { name: "批量导入前", reason: `导入 ${result.filePaths.length} 个文档前自动保存` });
+    }
     sendRendererEvent("import:progress", { active: true, phase: "导入文档", current: 0, total: result.filePaths.length, fileName: "", cancellable: true });
     for (let index = 0; index < result.filePaths.length; index += 1) {
       if (importCancelRequested) break;
@@ -3804,7 +6264,15 @@ function registerIpcHandlers() {
         cancellable: true,
       });
       try {
-        imported.push(...(await importDocumentIntoProject(projectPath, filePath, { volume: targetVolume || "导入文档", config, skipFinalize: true })));
+        const importedItems = await withJournalOperation(projectPath, {
+          type: "document-import",
+          title: `导入文档：${path.basename(filePath)}`,
+          targetIds: [],
+          recoverable: true,
+          metadata: { fileName: path.basename(filePath), targetVolume: targetVolume || "导入文档" },
+        }, () => importDocumentIntoProject(projectPath, filePath, { volume: targetVolume || "导入文档", config, skipFinalize: true }),
+        (items) => ({ importedChapterIds: items.map((item) => item.chapter.id) }));
+        imported.push(...importedItems);
       } catch (error) {
         failures.push({ filePath, message: error.message || String(error) });
       }
@@ -3827,6 +6295,16 @@ function registerIpcHandlers() {
         projectPath,
         imported.map((item) => item.source),
       );
+      if (config.agent?.autoLocalAnalysis !== false && imported.length) {
+        const center = await getProjectTaskCenter(projectPath);
+        await center.enqueue({
+          type: "story-analysis",
+          title: imported.length === 1 ? `整理导入文档：${imported[0].chapter.title}` : `整理 ${imported.length} 份导入文档的创作状态`,
+          total: imported.length,
+          scope: { chapterIds: imported.map((item) => item.chapter.id) },
+          options: { useAI: false, automatic: true, source: "import" },
+        });
+      }
     }
     sendRendererEvent("import:progress", { active: false, phase: importCancelRequested ? "已取消" : "完成", current: imported.length, total: result.filePaths.length, fileName: "" });
     const state = await buildAppState(projectPath, imported[imported.length - 1]?.chapter.id);
@@ -3851,7 +6329,12 @@ function registerIpcHandlers() {
   ipcMain.handle("project:save-settings", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     const config = await loadConfig(projectPath);
+    const secrets = await saveCredentialSecrets(projectPath, payload?.api || {}, config);
     const nextConfig = configFromRenderer(config, payload || {});
+    nextConfig.api.apiKey = secrets.chatRef;
+    nextConfig.api.embeddingApiKey = secrets.embeddingRef;
+    Object.defineProperty(nextConfig.api, "__chatSecret", { value: secrets.chat, configurable: true, writable: true, enumerable: false });
+    Object.defineProperty(nextConfig.api, "__embeddingSecret", { value: secrets.embedding, configurable: true, writable: true, enumerable: false });
     await saveConfig(projectPath, nextConfig);
     return buildAppState(projectPath, payload?.selectedChapterId);
   });
@@ -3868,17 +6351,32 @@ function registerIpcHandlers() {
     return { filePath };
   });
 
+  ipcMain.handle("project:export-exchange", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return exportProjectExchange(projectPath, payload || {});
+  });
+
+  ipcMain.handle("project:preview-exchange", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return previewProjectExchange(projectPath, payload || {});
+  });
+
+  ipcMain.handle("project:import-exchange", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return withJournalOperation(projectPath, { type: "project-exchange-import", title: "导入项目交换包", recoverable: true },
+      () => importProjectExchange(projectPath, payload?.token, payload || {}),
+      (result) => ({ imported: result.imported }));
+  });
+
   ipcMain.handle("project:export-book-docx", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
-    const config = await loadConfig(projectPath);
-    const result = await dialog.showSaveDialog(mainWindow, {
-      title: "导出整本小说为 Word 文档",
-      defaultPath: path.join(projectPath, `${sanitizeFileName(config.title || "整本小说")}_整书.docx`),
-      filters: [{ name: "Word 文档", extensions: ["docx"] }],
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: "选择逐篇 Word 文档的保存位置",
+      defaultPath: projectPath,
+      properties: ["openDirectory", "createDirectory"],
     });
-    if (result.canceled || !result.filePath) return { canceled: true };
-    const filePath = await exportBookToDocx(projectPath, result.filePath, payload || {});
-    return { filePath };
+    if (result.canceled || !result.filePaths?.[0]) return { canceled: true };
+    return exportBookDocumentsToDirectory(projectPath, result.filePaths[0], payload || {});
   });
 
   ipcMain.handle("global:search", async (_event, payload) => {
@@ -3963,6 +6461,303 @@ function registerIpcHandlers() {
     return updateKnowledgeItems(projectPath, payload?.items || []);
   });
 
+  ipcMain.handle("knowledge:status", async () => {
+    const projectPath = await ensureCurrentProject();
+    return getKnowledgeSyncStatus(projectPath);
+  });
+
+  ipcMain.handle("knowledge:repair", async () => {
+    const projectPath = await ensureCurrentProject();
+    return repairKnowledgeSync(projectPath);
+  });
+
+  ipcMain.handle("maintenance:diagnostics", async () => {
+    const projectPath = await ensureCurrentProject();
+    return getMaintenanceDiagnostics(projectPath);
+  });
+
+  ipcMain.handle("maintenance:repair", async () => {
+    const projectPath = await ensureCurrentProject();
+    return repairMaintenance(projectPath);
+  });
+
+  ipcMain.handle("project:health", async () => {
+    const projectPath = await ensureCurrentProject();
+    return inspectProjectHealth(projectPath);
+  });
+
+  ipcMain.handle("project:repair-health", async () => {
+    const projectPath = await ensureCurrentProject();
+    return repairProjectHealth(projectPath);
+  });
+
+  ipcMain.handle("story:get-overview", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return getStoryOverviewForProject(projectPath, payload || {});
+  });
+
+  ipcMain.handle("story:analyze-local", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    const config = await loadConfig(projectPath);
+    const requestedIds = new Set((payload?.chapterIds || []).map(String));
+    const chapters = config.chapters.filter((chapter) => !requestedIds.size || requestedIds.has(chapter.id));
+    for (const chapter of chapters) await refreshLocalStoryState(projectPath, chapter.id);
+    return getStoryOverviewForProject(projectPath, payload || {});
+  });
+
+  ipcMain.handle("story:update-fact", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return storyState.updateFact(projectPath, String(payload?.factId || ""), payload?.patch || {});
+  });
+
+  ipcMain.handle("story:create-fact", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    const config = await loadConfig(projectPath);
+    const chapter = config.chapters.find((item) => item.id === payload?.chapterId);
+    if (!chapter) throw new Error("请选择要关联的章节或大纲文档。");
+    return storyState.createManualFact(projectPath, { ...payload, chapterTitle: chapter.title, volume: chapter.volume || "未分卷" });
+  });
+
+  ipcMain.handle("story:delete-fact", async (_event, factId) => {
+    const projectPath = await ensureCurrentProject();
+    return storyState.deleteFact(projectPath, String(factId || ""));
+  });
+
+  ipcMain.handle("story:update-foreshadow", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return storyState.updateForeshadow(projectPath, String(payload?.foreshadowId || ""), payload?.patch || {});
+  });
+
+  ipcMain.handle("story:create-foreshadow", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    const config = await loadConfig(projectPath);
+    const chapter = config.chapters.find((item) => item.id === payload?.chapterId);
+    if (!chapter) throw new Error("请选择伏笔首次埋下的章节或大纲文档。");
+    return storyState.createManualForeshadow(projectPath, { ...payload, chapterTitle: chapter.title, volume: chapter.volume || "未分卷" });
+  });
+
+  ipcMain.handle("story:delete-foreshadow", async (_event, foreshadowId) => {
+    const projectPath = await ensureCurrentProject();
+    return storyState.deleteForeshadow(projectPath, String(foreshadowId || ""));
+  });
+
+  ipcMain.handle("story:get-board", async (_event, chapterId) => {
+    const projectPath = await ensureCurrentProject();
+    return { board: await storyState.getBoard(projectPath, String(chapterId || "")) };
+  });
+
+  ipcMain.handle("story:generate-board", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    const config = await loadConfig(projectPath);
+    const ordered = config.chapters.slice().sort((a, b) => a.order - b.order);
+    const index = ordered.findIndex((chapter) => chapter.id === payload?.chapterId);
+    const chapter = ordered[index];
+    if (!chapter) throw new Error("没有找到要生成筹备板的章节。");
+    return { board: await storyState.generateLocalBoard(projectPath, chapter, ordered[index + 1] || null) };
+  });
+
+  ipcMain.handle("story:save-board", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return { board: await storyState.saveBoard(projectPath, payload?.board || {}) };
+  });
+
+  ipcMain.handle("workspace:get", async () => {
+    const projectPath = await ensureCurrentProject();
+    return getCreativeWorkspaceView(projectPath);
+  });
+
+  ipcMain.handle("workspace:upsert", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    const item = await creativeWorkspace.upsertItem(projectPath, String(payload?.collection || ""), payload?.item || {});
+    return { item, workspace: await getCreativeWorkspaceView(projectPath) };
+  });
+
+  ipcMain.handle("workspace:delete", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    await creativeWorkspace.deleteItem(projectPath, String(payload?.collection || ""), String(payload?.itemId || ""));
+    return { workspace: await getCreativeWorkspaceView(projectPath) };
+  });
+
+  ipcMain.handle("workspace:reorder-scenes", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    const scenes = await creativeWorkspace.reorderScenes(projectPath, String(payload?.chapterId || ""), payload?.sceneIds || []);
+    return { scenes, workspace: await getCreativeWorkspaceView(projectPath) };
+  });
+
+  ipcMain.handle("workspace:rebuild-causality", async () => {
+    const projectPath = await ensureCurrentProject();
+    const config = await loadConfig(projectPath);
+    const overview = await storyState.getStoryOverview(projectPath, { projectChapters: config.chapters, factLimit: 2000, characterLimit: 500, foreshadowLimit: 1000 });
+    const chapterOrder = Object.fromEntries(config.chapters.map((chapter) => [chapter.id, chapter.order]));
+    const result = await creativeWorkspace.rebuildCausality(projectPath, { facts: overview.facts, foreshadows: overview.foreshadows, chapterOrder });
+    return { ...result, workspace: await getCreativeWorkspaceView(projectPath) };
+  });
+
+  ipcMain.handle("workspace:generate-arcs", async () => {
+    const projectPath = await ensureCurrentProject();
+    const config = await loadConfig(projectPath);
+    const overview = await storyState.getStoryOverview(projectPath, { projectChapters: config.chapters, characterLimit: 500 });
+    const arcs = await creativeWorkspace.generateArcs(projectPath, overview.characterStates);
+    return { arcs, workspace: await getCreativeWorkspaceView(projectPath) };
+  });
+
+  ipcMain.handle("workspace:quality", async () => {
+    const projectPath = await ensureCurrentProject();
+    const config = await loadConfig(projectPath);
+    const overview = await storyState.getStoryOverview(projectPath, { projectChapters: config.chapters, factLimit: 2000, characterLimit: 500, foreshadowLimit: 1000 });
+    const workspace = await creativeWorkspace.loadWorkspace(projectPath);
+    return { reports: creativeWorkspace.qualityReport(workspace, config.chapters, overview), generatedAt: nowIso() };
+  });
+
+  ipcMain.handle("workspace:statistics", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return buildCreativeStatistics(projectPath, String(payload?.label || ""));
+  });
+
+  ipcMain.handle("agent:prepare", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return prepareCreativeAgentRun(projectPath, payload || {});
+  });
+
+  ipcMain.handle("agent:execute", async (_event, runId) => {
+    const projectPath = await ensureCurrentProject();
+    return queueCreativeAgentRun(projectPath, String(runId || ""));
+  });
+
+  ipcMain.handle("agent:retry-tool", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return queueCreativeAgentRun(projectPath, String(payload?.runId || ""), String(payload?.tool || ""));
+  });
+
+  ipcMain.handle("revision:create", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return createSafeRevision(projectPath, payload || {});
+  });
+
+  ipcMain.handle("revision:apply", async (_event, revisionId) => {
+    const projectPath = await ensureCurrentProject();
+    return withJournalOperation(projectPath, { type: "safe-revision-apply", title: "应用安全修订", targetIds: [revisionId], recoverable: true },
+      () => applySafeRevision(projectPath, String(revisionId || "")),
+      (result) => ({ chapterId: result.revision.chapterId, revisionId: result.revision.id }));
+  });
+
+  ipcMain.handle("revision:apply-part", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return withJournalOperation(projectPath, { type: "safe-revision-apply-part", title: "局部应用安全修订", targetIds: [String(payload?.revisionId || "")], recoverable: true },
+      () => applySafeRevisionPart(projectPath, payload || {}),
+      (result) => ({ chapterId: result.revision.chapterId, revisionId: result.revision.id }));
+  });
+
+  ipcMain.handle("revision:update-status", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    const workspace = await creativeWorkspace.loadWorkspace(projectPath);
+    const revision = workspace.revisions.find((item) => item.id === payload?.revisionId);
+    if (!revision) throw new Error("没有找到这条修订建议。");
+    const status = ["已拒绝", "已失效"].includes(payload?.status) ? payload.status : "已拒绝";
+    const item = await creativeWorkspace.upsertItem(projectPath, "revisions", { ...revision, status });
+    return { item, workspace: await getCreativeWorkspaceView(projectPath) };
+  });
+
+  ipcMain.handle("tasks:list", async () => {
+    const projectPath = await ensureCurrentProject();
+    return (await getProjectTaskCenter(projectPath)).list();
+  });
+
+  ipcMain.handle("tasks:enqueue", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    const allowedTypes = new Set(["story-analysis", "creative-board", "consistency-check", "timeline-analysis", "knowledge-rebuild", "snapshot", "creative-statistics"]);
+    if (!allowedTypes.has(payload?.type)) throw new Error("不支持的后台任务类型。");
+    return { task: await (await getProjectTaskCenter(projectPath)).enqueue(payload || {}) };
+  });
+
+  ipcMain.handle("tasks:cancel", async (_event, taskId) => {
+    const projectPath = await ensureCurrentProject();
+    return (await getProjectTaskCenter(projectPath)).cancel(String(taskId || ""));
+  });
+
+  ipcMain.handle("tasks:pause", async (_event, taskId) => {
+    const projectPath = await ensureCurrentProject();
+    return (await getProjectTaskCenter(projectPath)).pause(String(taskId || ""));
+  });
+
+  ipcMain.handle("tasks:resume", async (_event, taskId) => {
+    const projectPath = await ensureCurrentProject();
+    return (await getProjectTaskCenter(projectPath)).resume(String(taskId || ""));
+  });
+
+  ipcMain.handle("tasks:retry", async (_event, taskId) => {
+    const projectPath = await ensureCurrentProject();
+    return { task: await (await getProjectTaskCenter(projectPath)).retry(String(taskId || "")) };
+  });
+
+  ipcMain.handle("tasks:remove", async (_event, taskId) => {
+    const projectPath = await ensureCurrentProject();
+    return (await getProjectTaskCenter(projectPath)).remove(String(taskId || ""));
+  });
+
+  ipcMain.handle("tasks:clear-history", async () => {
+    const projectPath = await ensureCurrentProject();
+    return (await getProjectTaskCenter(projectPath)).clearHistory();
+  });
+
+  ipcMain.handle("snapshots:list", async () => {
+    const projectPath = await ensureCurrentProject();
+    return projectSnapshots.listSnapshots(projectPath);
+  });
+
+  ipcMain.handle("snapshots:create", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return { snapshot: await projectSnapshots.createSnapshot(projectPath, payload || {}) };
+  });
+
+  ipcMain.handle("snapshots:compare", async (_event, snapshotId) => {
+    const projectPath = await ensureCurrentProject();
+    return projectSnapshots.compareSnapshot(projectPath, String(snapshotId || ""));
+  });
+
+  ipcMain.handle("snapshots:restore", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    const result = await projectSnapshots.restoreSnapshot(projectPath, String(payload?.snapshotId || ""), { paths: payload?.paths || [] });
+    const task = await queueKnowledgeRebuildAfterRestore(projectPath, `恢复快照：${result.snapshot.name}`);
+    return { ...result, task, state: await buildAppState(projectPath) };
+  });
+
+  ipcMain.handle("snapshots:rename", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return { snapshot: await projectSnapshots.renameSnapshot(projectPath, String(payload?.snapshotId || ""), String(payload?.name || "")) };
+  });
+
+  ipcMain.handle("snapshots:delete", async (_event, snapshotId) => {
+    const projectPath = await ensureCurrentProject();
+    const activeSnapshotTask = (await (await getProjectTaskCenter(projectPath)).list()).tasks.some((task) => task.type === "snapshot" && ["等待中", "运行中", "正在停止", "已暂停"].includes(task.status));
+    if (activeSnapshotTask) throw new Error("项目快照仍在创建中，请等待任务完成后再删除。");
+    return projectSnapshots.deleteSnapshot(projectPath, String(snapshotId || ""));
+  });
+
+  ipcMain.handle("snapshots:cleanup", async () => {
+    const projectPath = await ensureCurrentProject();
+    const activeSnapshotTask = (await (await getProjectTaskCenter(projectPath)).list()).tasks.some((task) => task.type === "snapshot" && ["等待中", "运行中", "正在停止", "已暂停"].includes(task.status));
+    if (activeSnapshotTask) throw new Error("项目快照仍在创建中，请等待任务完成后再清理。");
+    return projectSnapshots.garbageCollectObjects(projectPath);
+  });
+
+  ipcMain.handle("snapshots:create-branch", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return projectSnapshots.createBranch(projectPath, String(payload?.name || "实验分支"), String(payload?.snapshotId || ""));
+  });
+
+  ipcMain.handle("snapshots:switch-branch", async (_event, branchId) => {
+    const projectPath = await ensureCurrentProject();
+    const result = await projectSnapshots.switchBranch(projectPath, String(branchId || ""));
+    const task = result.restored ? await queueKnowledgeRebuildAfterRestore(projectPath, `切换分支：${result.activeBranch.name}`) : null;
+    return { ...result, task, state: await buildAppState(projectPath) };
+  });
+
+  ipcMain.handle("snapshots:delete-branch", async (_event, branchId) => {
+    const projectPath = await ensureCurrentProject();
+    return projectSnapshots.deleteBranch(projectPath, String(branchId || ""));
+  });
+
   ipcMain.handle("experiments:appearance-stats", async () => {
     const projectPath = await ensureCurrentProject();
     return buildAppearanceStats(projectPath);
@@ -3999,6 +6794,7 @@ function registerIpcHandlers() {
         mode: result.mode,
         chapterId: result.chapterId,
         focus: String(payload?.focus || "").trim(),
+        contextIds: Array.isArray(payload?.contextIds) ? payload.contextIds.map(String).slice(0, 60) : [],
       },
     });
     return result;
@@ -4037,11 +6833,16 @@ function registerIpcHandlers() {
 
   ipcMain.handle("chapter:save", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
+    return withJournalOperation(projectPath, {
+      type: "chapter-save", title: "保存章节", targetIds: [payload?.chapterId], recoverable: true,
+      metadata: { expectedRevision: String(payload?.expectedRevision || "").slice(0, 128) },
+    }, async () => {
     const config = await loadConfig(projectPath);
     const chapter = config.chapters.find((item) => item.id === payload.chapterId);
     if (!chapter) throw new Error("章节不存在，无法保存。");
     let filePath = getChapterPath(projectPath, chapter);
     const previousContent = await fs.readFile(filePath, "utf8").catch(() => "");
+    assertExpectedChapterRevision(String(payload?.expectedRevision || ""), previousContent);
     const previousWords = countWords(previousContent);
     const nextContent = String(payload.content ?? "");
     const didSplitSharedFile = await ensureExclusiveChapterFile(projectPath, config, chapter, previousContent, {
@@ -4076,6 +6877,13 @@ function registerIpcHandlers() {
       knowledgeRole: getKnowledgeRole(chapter),
       content: nextContent,
     });
+    let storyStateWarning = "";
+    if (config.agent?.autoLocalAnalysis !== false) {
+      await refreshLocalStoryState(projectPath, chapter.id, nextContent).catch((error) => {
+        storyStateWarning = error?.message || String(error);
+      });
+    }
+    if (config.agent?.autoDeepAnalysis === true) scheduleIdleDeepAnalysis(projectPath, chapter);
 
     if (config.ui.backupOnSave) {
       await createBackup(projectPath).catch(() => null);
@@ -4086,7 +6894,10 @@ function registerIpcHandlers() {
       config: configForRenderer(config),
       indexResult,
       vectorStats: { chunks: indexResult.totalChunks, updatedAt: nowIso() },
+      revision: contentRevision(nextContent),
+      storyStateWarning,
     };
+    }, (result) => ({ chapterId: result.chapter.id, revision: result.revision, chunks: result.indexResult.chunks }));
   });
 
   ipcMain.handle("chapter:delete", async (_event, chapterId) => {
@@ -4094,6 +6905,11 @@ function registerIpcHandlers() {
     const config = await loadConfig(projectPath);
     const chapter = config.chapters.find((item) => item.id === chapterId);
     if (!chapter) throw new Error("章节不存在，无法删除。");
+    const deepAnalysisKey = `${projectPath}\u0000${chapterId}`;
+    if (deepAnalysisTimers.has(deepAnalysisKey)) {
+      clearTimeout(deepAnalysisTimers.get(deepAnalysisKey));
+      deepAnalysisTimers.delete(deepAnalysisKey);
+    }
     if (config.chapters.length <= 1) throw new Error("至少需要保留一个章节。");
     const hasOtherChapterUsingFile = config.chapters.some(
       (item) => item.id !== chapterId && normalizeChapterFileName(item.fileName) === normalizeChapterFileName(chapter.fileName),
@@ -4103,6 +6919,8 @@ function registerIpcHandlers() {
     }
     config.chapters = config.chapters.filter((item) => item.id !== chapterId).map((item, index) => ({ ...item, order: index }));
     await removeSourceFromIndex(projectPath, chapterId);
+    await storyState.removeChapterLedger(projectPath, chapterId).catch(() => null);
+    await creativeWorkspace.removeChapterReferences(projectPath, chapterId).catch(() => null);
     await calculateTotalWords(projectPath, config);
     await saveConfig(projectPath, config);
     return buildAppState(projectPath, config.chapters[0]?.id);
@@ -4150,8 +6968,14 @@ function registerIpcHandlers() {
     return compareChapterVersion(projectPath, String(payload?.chapterId || ""), String(payload?.versionId || ""));
   });
 
+  ipcMain.handle("chapter:restore-version", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return restoreChapterVersion(projectPath, String(payload?.chapterId || ""), String(payload?.versionId || ""));
+  });
+
   ipcMain.handle("chapter:reorder", async (_event, chapterIds) => {
     const projectPath = await ensureCurrentProject();
+    return withJournalOperation(projectPath, { type: "chapter-reorder", title: "调整目录顺序", targetIds: chapterIds, recoverable: true }, async () => {
     const config = await loadConfig(projectPath);
     const idOrder = new Map(chapterIds.map((id, index) => [id, index]));
     config.chapters = config.chapters
@@ -4160,10 +6984,12 @@ function registerIpcHandlers() {
       .map((item, index) => ({ ...item, order: index }));
     await saveConfig(projectPath, config);
     return { chapters: config.chapters };
+    }, (result) => ({ count: result.chapters.length }));
   });
 
   ipcMain.handle("chapter:move-to-volume", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
+    return withJournalOperation(projectPath, { type: "chapter-move", title: "移动目录文档", targetIds: [payload?.chapterId], recoverable: true, metadata: { volume: String(payload?.volume || "") } }, async () => {
     const config = await loadConfig(projectPath);
     const chapterId = String(payload?.chapterId || "");
     const targetVolume = String(payload?.volume || "未分卷").trim() || "未分卷";
@@ -4186,6 +7012,7 @@ function registerIpcHandlers() {
     config.chapters = rest.map((item, index) => ({ ...item, order: index }));
     await saveConfig(projectPath, config);
     return buildAppState(projectPath, chapterId);
+    }, (result) => ({ chapterId: result.selectedChapter?.id || "" }));
   });
 
   ipcMain.handle("character:save", async (_event, payload) => {
@@ -4264,11 +7091,19 @@ function registerIpcHandlers() {
 
   ipcMain.handle("ai:generate-characters", async () => {
     const projectPath = await ensureCurrentProject();
+    const config = await loadConfig(projectPath);
+    if (config.agent?.snapshotBeforeBulkChanges !== false) {
+      await projectSnapshots.createSnapshot(projectPath, { name: "AI 生成角色卡前", reason: "批量更新角色卡前自动保存" });
+    }
     return generateCharactersFromOutline(projectPath);
   });
 
   ipcMain.handle("ai:generate-world", async () => {
     const projectPath = await ensureCurrentProject();
+    const config = await loadConfig(projectPath);
+    if (config.agent?.snapshotBeforeBulkChanges !== false) {
+      await projectSnapshots.createSnapshot(projectPath, { name: "AI 生成世界观前", reason: "批量更新世界观前自动保存" });
+    }
     return generateWorldDocsFromOutline(projectPath);
   });
 
@@ -4279,6 +7114,10 @@ function registerIpcHandlers() {
 
   ipcMain.handle("ai:save-world-card-candidates", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
+    const config = await loadConfig(projectPath);
+    if (config.agent?.snapshotBeforeBulkChanges !== false && (payload?.candidates || []).length > 1) {
+      await projectSnapshots.createSnapshot(projectPath, { name: "写入设定候选前", reason: "批量写入世界观候选前自动保存" });
+    }
     return saveWorldCardCandidates(projectPath, payload?.candidates || []);
   });
 
@@ -4304,8 +7143,20 @@ function registerIpcHandlers() {
     const config = await loadConfig(projectPath);
     const question = String(payload.question || "").trim();
     if (!question) throw new Error("请输入要询问 AI 的内容。");
-    const retrievalPackage = await buildChatRetrievalPackage(projectPath, config, payload || {}, question);
+    const requestId = String(payload?.requestId || makeId("ai_stream"));
+    activeAiRequests.get(requestId)?.abort();
+    const requestController = new AbortController();
+    activeAiRequests.set(requestId, requestController);
+    sendRendererEvent("ai:stream", { requestId, type: "phase", phase: "正在规划检索范围" });
+    let retrievalPackage;
+    try {
+      retrievalPackage = await buildChatRetrievalPackage(projectPath, config, payload || {}, question);
+    } catch (error) {
+      activeAiRequests.delete(requestId);
+      throw error;
+    }
     const { search, materials, retrieval, inventorySummary } = retrievalPackage;
+    sendRendererEvent("ai:stream", { requestId, type: "retrieval", phase: "检索完成，正在生成", retrieval });
     const analysisState = await loadAnalysisState(projectPath);
     const projectMemory = buildProjectMemorySummary(analysisState, payload.projectMemory || "");
     const systemPrompt = buildSystemPrompt({
@@ -4317,8 +7168,34 @@ function registerIpcHandlers() {
       inventorySummary,
     });
 
+    let streamedChars = 0;
+    let partialAnswer = "";
+    let lastCheckpointAt = 0;
+    let lastCheckpointChars = 0;
+    const saveStreamCheckpoint = (status = "streaming") =>
+      saveAnalysisState(projectPath, {
+        aiStreamRecovery: { requestId, question, answer: partialAnswer, status, updatedAt: nowIso() },
+      });
     try {
-      const answer = await callChatApi(config, systemPrompt, question, payload.history || []);
+      const answer = await callChatApi(config, systemPrompt, question, payload.history || [], {
+        stream: true,
+        signal: requestController.signal,
+        onToken: (token) => {
+          const text = String(token || "");
+          streamedChars += text.length;
+          partialAnswer += text;
+          sendRendererEvent("ai:stream", { requestId, type: "chunk", text: token, streamedChars });
+          const now = Date.now();
+          if (now - lastCheckpointAt >= 1800 || partialAnswer.length - lastCheckpointChars >= 2400) {
+            lastCheckpointAt = now;
+            lastCheckpointChars = partialAnswer.length;
+            void saveStreamCheckpoint("streaming").catch(() => null);
+          }
+        },
+      });
+      partialAnswer = answer;
+      await saveStreamCheckpoint(requestController.signal.aborted ? "interrupted" : "completed").catch(() => null);
+      sendRendererEvent("ai:stream", { requestId, type: "done", phase: requestController.signal.aborted ? "已停止，内容已保留" : "生成完成", streamedChars });
       return {
         answer,
         context: contextFromChunks(search.chunks),
@@ -4328,8 +7205,11 @@ function registerIpcHandlers() {
         scannedCount: search.scannedCount || search.candidateCount || search.chunks.length,
         embeddingSource: search.embeddingSource,
         embeddingWarning: search.embeddingWarning,
+        streamedChars,
       };
     } catch (error) {
+      if (partialAnswer) await saveStreamCheckpoint("interrupted").catch(() => null);
+      sendRendererEvent("ai:stream", { requestId, type: "error", phase: "生成中断，已保留收到的内容", error: error.message || String(error) });
       return {
         answer: `我已经完成本地检索，但暂时没有成功连接到大模型接口。\n\n${error.message}\n\n你可以先查看下方“引用片段”，确认知识库是否已经索引成功。配置接口后再次提问即可获得模型回答。`,
         context: contextFromChunks(search.chunks),
@@ -4341,7 +7221,17 @@ function registerIpcHandlers() {
         embeddingWarning: search.embeddingWarning,
         apiError: error.message,
       };
+    } finally {
+      activeAiRequests.delete(requestId);
     }
+  });
+
+  ipcMain.handle("ai:cancel", async (_event, requestId) => {
+    const id = String(requestId || "");
+    const controller = activeAiRequests.get(id);
+    if (!controller) return { canceled: false };
+    controller.abort(new Error("user-canceled"));
+    return { canceled: true };
   });
 
   ipcMain.handle("index:rebuild", async () => {
@@ -4358,6 +7248,7 @@ if (process.env.NOVEL_PLATFORM_TEST === "1") {
     buildAppState,
     buildChatRetrievalPackage,
     buildCreativeAdvice,
+    buildProjectExchangeArchive,
     buildInventorySummary,
     buildProjectSourceCatalog,
     buildRelationshipGraph,
@@ -4369,25 +7260,47 @@ if (process.env.NOVEL_PLATFORM_TEST === "1") {
     contentToPlainText,
     defaultConfig,
     ensureProjectStructure,
+    getCreativeWorkspaceView,
+    assertExpectedChapterRevision,
     exportBookToDocx,
+    exportBookDocumentsToDirectory,
+    exportChapterToDocx,
     generateCharactersFromOutline,
     getChapterPath,
     getConfigPath,
     getKnowledgeRole,
+    getKnowledgeSyncStatus,
+    getMaintenanceDiagnostics,
+    inspectProjectHealth,
+    applySafeRevision,
+    applySafeRevisionPart,
+    buildCreativeStatistics,
+    replaceUniqueSelection,
     importDocumentIntoProject,
     indexSource,
     indexSources,
     loadAnalysisState,
     loadCharacters,
     loadConfig,
+    loadKnowledgeSummaries,
     loadVectorStore,
     loadWorldDocs,
     prepareWorldCardCandidates,
+    prepareCreativeAgentRun,
+    analyzeStoryStateWithAI,
+    executeBackgroundTask,
+    getStoryOverviewForProject,
+    refreshLocalStoryState,
+    repairKnowledgeSync,
+    repairMaintenance,
     rebuildIndex,
     saveConfig,
     saveAnalysisState,
     saveWorldCardCandidates,
     searchRelevantChunks,
+    updateKnowledgeSummaries,
+    projectSnapshots,
+    storyState,
   };
 } else {
   app.whenReady().then(async () => {
@@ -4396,6 +7309,7 @@ if (process.env.NOVEL_PLATFORM_TEST === "1") {
     registerIpcHandlers();
     currentProjectPath = await getDefaultProjectPath();
     await ensureProjectStructure(currentProjectPath);
+    await activateProjectSession(currentProjectPath);
     await createWindow();
 
     app.on("activate", () => {
@@ -4405,5 +7319,12 @@ if (process.env.NOVEL_PLATFORM_TEST === "1") {
 
   app.on("window-all-closed", () => {
     if (process.platform !== "darwin") app.quit();
+  });
+
+  app.on("before-quit", (event) => {
+    if (gracefulShutdownStarted || !projectSessions.size) return;
+    event.preventDefault();
+    gracefulShutdownStarted = true;
+    void finishProjectSessions().finally(() => app.quit());
   });
 }
