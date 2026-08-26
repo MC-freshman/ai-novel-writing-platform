@@ -14,6 +14,8 @@ const runDirectory = path.join(workspace, ".test-runs", `ui_visual_${runId}`);
 const projectPath = path.join(runDirectory, "project");
 const userDataPath = path.join(runDirectory, "user-data");
 const port = 9300 + Math.floor(Math.random() * 300);
+const undoIsolationMarker = "撤销历史隔离标记";
+const undoIsolationSecondContent = "<h1>第二章 独立内容</h1><p>本章内容只属于第二章，不得被其他章节的撤销历史替换。</p>";
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -80,8 +82,22 @@ async function seedVisualProject() {
   chapter.contentFormat = "html";
   chapter.wordCount = content.length;
   chapter.outline = [{ id: "h1", level: 1, title: "第一章 开篇", line: 0 }, { id: "h2", level: 2, title: "城门线索", line: 1 }];
+  const secondChapter = {
+    ...chapter,
+    id: "visual_chapter_2",
+    title: "第二章 独立内容",
+    fileName: "visual_chapter_2.html",
+    order: 1,
+    wordCount: undoIsolationSecondContent.length,
+    outline: [{ id: "h1-second", level: 1, title: "第二章 独立内容", line: 0 }],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  chapter.order = 0;
+  config.chapters = [chapter, secondChapter];
   config.title = "界面回归测试项目";
   await fs.writeFile(platform.getChapterPath(projectPath, chapter), content, "utf8");
+  await fs.writeFile(platform.getChapterPath(projectPath, secondChapter), undoIsolationSecondContent, "utf8");
   await platform.saveConfig(projectPath, config);
   await fs.writeFile(path.join(projectPath, "characters", "visual_li.json"), JSON.stringify({ id: "visual_li", fileName: "visual_li.json", name: "李明", category: "主角团", relationships: "王雪：同伴", notes: "追查徽章秘密" }), "utf8");
   await fs.writeFile(path.join(projectPath, "characters", "visual_wang.json"), JSON.stringify({ id: "visual_wang", fileName: "visual_wang.json", name: "王雪", category: "主角团", relationships: "李明：同伴", notes: "协助调查" }), "utf8");
@@ -92,6 +108,67 @@ async function seedVisualProject() {
   await creativeWorkspace.upsertItem(projectPath, "causalEdges", { id: "visual_edge", source: "visual_cause", target: "visual_result", relation: "促使", detail: "线索推动行动", color: "#3f7f78", direction: "forward", origin: "manual" });
   await projectSnapshots.createSnapshot(projectPath, { name: "界面回归起点", reason: "检查选择恢复列表" });
   await fs.writeFile(platform.getChapterPath(projectPath, chapter), `${content}<p>快照后新增的段落。</p>`, "utf8");
+}
+
+async function auditUndoIsolation(cdp) {
+  const edited = await cdp.call("Runtime.evaluate", {
+    expression: `(() => {
+      const editor = document.querySelector('.ProseMirror');
+      if (!editor) return false;
+      editor.focus();
+      const selection = window.getSelection();
+      selection?.selectAllChildren(editor);
+      selection?.collapseToEnd();
+      return document.execCommand('insertText', false, '${undoIsolationMarker}');
+    })()`,
+    returnByValue: true,
+  });
+  if (!edited.result?.value) throw new Error("无法在第一章写入撤销隔离测试标记。");
+  await wait(250);
+  const switched = await cdp.call("Runtime.evaluate", {
+    expression: `(() => {
+      const item = [...document.querySelectorAll('.chapter-item')].find((node) => node.textContent.includes('第二章 独立内容'));
+      item?.click();
+      return Boolean(item);
+    })()`,
+    returnByValue: true,
+  });
+  if (!switched.result?.value) throw new Error("无法切换到第二章执行撤销隔离测试。");
+  await wait(2800);
+  for (let index = 0; index < 8; index += 1) {
+    await cdp.call("Input.dispatchKeyEvent", { type: "keyDown", modifiers: 2, key: "z", code: "KeyZ", windowsVirtualKeyCode: 90, nativeVirtualKeyCode: 90 });
+    await cdp.call("Input.dispatchKeyEvent", { type: "keyUp", modifiers: 2, key: "z", code: "KeyZ", windowsVirtualKeyCode: 90, nativeVirtualKeyCode: 90 });
+  }
+  await wait(2400);
+  const audit = await cdp.call("Runtime.evaluate", {
+    expression: `(() => ({
+      title: document.querySelector('.title-input')?.value || '',
+      text: document.querySelector('.ProseMirror')?.innerText || '',
+      activeTreeItem: document.querySelector('.chapter-item.active')?.innerText || '',
+    }))()`,
+    returnByValue: true,
+  });
+  const value = audit.result?.value || {};
+  if (!String(value.title).includes("第二章 独立内容") || !String(value.activeTreeItem).includes("第二章 独立内容")) {
+    throw new Error("连续撤销后编辑器章节身份发生变化。");
+  }
+  if (String(value.text).includes(undoIsolationMarker) || String(value.text).includes("第一章 开篇")) {
+    throw new Error("富文档撤销历史跨越了章节边界。");
+  }
+  const latestConfig = await platform.loadConfig(projectPath);
+  const first = latestConfig.chapters.find((item) => item.title === "第一章 开篇");
+  const second = latestConfig.chapters.find((item) => item.title === "第二章 独立内容");
+  const [firstDiskContent, secondDiskContent] = await Promise.all([
+    fs.readFile(platform.getChapterPath(projectPath, first), "utf8"),
+    fs.readFile(platform.getChapterPath(projectPath, second), "utf8"),
+  ]);
+  if (!firstDiskContent.includes(undoIsolationMarker)) throw new Error("切章前的第一章修改没有正确保存。");
+  if (secondDiskContent !== undoIsolationSecondContent) throw new Error("连续撤销错误覆盖了第二章文件。");
+  await cdp.call("Runtime.evaluate", {
+    expression: `(() => { const item = [...document.querySelectorAll('.chapter-item')].find((node) => node.textContent.includes('第一章 开篇')); item?.click(); return Boolean(item); })()`,
+    returnByValue: true,
+  });
+  await wait(1200);
 }
 
 async function main() {
@@ -114,6 +191,7 @@ async function main() {
     await cdp.ready;
     await cdp.call("Page.enable");
     await wait(1500);
+    await auditUndoIsolation(cdp);
     const mainScreenshot = await capture(cdp, "ui-main.png");
     const openedInlineReview = await cdp.call("Runtime.evaluate", {
       expression: `(() => { const mark = document.querySelector('.inline-review'); mark?.dispatchEvent(new MouseEvent('click', { bubbles: true })); return Boolean(mark); })()`,

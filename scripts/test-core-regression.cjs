@@ -157,6 +157,83 @@ async function testCancelableStreaming() {
   }
 }
 
+async function testChapterUndoAndSaveIsolation() {
+  const isolationProject = path.join(runDirectory, "chapter-isolation");
+  await platform.ensureProjectStructure(isolationProject, "章节隔离测试");
+  const config = await platform.loadConfig(isolationProject);
+  const firstContent = `# 序章测试\n\n${"序章原始内容。".repeat(80)}`;
+  const secondContent = `# 当前章节测试\n\n${"当前章节独立内容。".repeat(80)}`;
+  const first = {
+    ...config.chapters[0],
+    id: "isolation_prologue",
+    title: "序章测试",
+    fileName: "isolation_prologue.md",
+    order: 0,
+  };
+  const second = {
+    ...config.chapters[0],
+    id: "isolation_current",
+    title: "当前章节测试",
+    fileName: "isolation_current.md",
+    order: 1,
+  };
+  config.chapters = [first, second];
+  await platform.saveConfig(isolationProject, config);
+  await fs.writeFile(platform.getChapterPath(isolationProject, first), firstContent, "utf8");
+  await fs.writeFile(platform.getChapterPath(isolationProject, second), secondContent, "utf8");
+  await platform.buildAppState(isolationProject, first.id);
+
+  await assert.rejects(
+    platform.loadChapterContent(isolationProject, "missing-chapter"),
+    /已经不存在/,
+    "不存在的章节不得静默回退并打开序章",
+  );
+
+  const loadedFirst = await platform.loadChapterContent(isolationProject, first.id);
+  const savedFirstContent = `${firstContent}\n\n第一次保存。`;
+  const staleFirstContent = `${firstContent}\n\n过期请求不应覆盖。`;
+  const concurrent = await Promise.allSettled([
+    platform.saveChapterContent(isolationProject, {
+      chapterId: first.id,
+      title: first.title,
+      volume: first.volume,
+      content: savedFirstContent,
+      expectedRevision: loadedFirst.revision,
+    }),
+    platform.saveChapterContent(isolationProject, {
+      chapterId: first.id,
+      title: first.title,
+      volume: first.volume,
+      content: staleFirstContent,
+      expectedRevision: loadedFirst.revision,
+    }),
+  ]);
+  assert.equal(concurrent[0].status, "fulfilled", "队列中的第一份有效保存应成功");
+  assert.equal(concurrent[1].status, "rejected", "同一旧修订号的后到保存必须被拒绝");
+  assert.match(String(concurrent[1].reason?.message || concurrent[1].reason), /保存已停止/, "被拒绝的并发保存应说明版本冲突");
+  assert.equal(await fs.readFile(platform.getChapterPath(isolationProject, first), "utf8"), savedFirstContent, "过期保存不得覆盖先完成的正文");
+
+  const latestFirst = await platform.loadChapterContent(isolationProject, first.id);
+  await assert.rejects(
+    platform.saveChapterContent(isolationProject, {
+      chapterId: first.id,
+      title: first.title,
+      volume: first.volume,
+      content: secondContent,
+      expectedRevision: latestFirst.revision,
+    }),
+    /整章内容.*完全相同|跨章节撤销|误覆盖/,
+    "把一章整篇变成另一章时必须阻止自动保存",
+  );
+  assert.equal(await fs.readFile(platform.getChapterPath(isolationProject, first), "utf8"), savedFirstContent, "跨章节克隆被拦截后序章必须保持不变");
+  assert.equal(await fs.readFile(platform.getChapterPath(isolationProject, second), "utf8"), secondContent, "跨章节保存检查不得修改来源章节");
+
+  const versionDir = path.join(isolationProject, "backups", "versions", first.id);
+  const versionMetadata = (await fs.readdir(versionDir)).filter((file) => file.endsWith(".json"));
+  const revisions = await Promise.all(versionMetadata.map(async (file) => JSON.parse(await fs.readFile(path.join(versionDir, file), "utf8"))));
+  assert.equal(new Set(revisions.map((item) => item.contentRevision).filter(Boolean)).size, revisions.filter((item) => item.contentRevision).length, "相同正文不得重复占用历史版本名额");
+}
+
 async function testSafeRevisionAndExchange() {
   const revisionProject = path.join(runDirectory, "safe-revision");
   await platform.ensureProjectStructure(revisionProject, "安全修订测试");
@@ -290,11 +367,15 @@ async function testFrontendSafetyContracts() {
   assert.match(mainSource, /aiStreamRecovery/, "主进程必须保存 AI 流式回答恢复点");
   assert.match(appSource, /remainingChars\s*=\s*600000/, "会话持久化总容量不得意外降级");
   assert.match(appSource, /expectedRevision:\s*chapterRevisionRef\.current/, "章节保存必须携带已读取版本");
+  assert.match(appSource, /key=\{selectedChapter\?\.id \|\| "empty-document"\}/, "不同章节必须重建编辑器并隔离撤销历史");
+  assert.match(appSource, /selectedChapterIdRef\.current !== documentId/, "富文档更新必须校验事件所属章节");
+  assert.match(appSource, /requestId !== chapterLoadRequestRef\.current/, "快速切换章节时必须丢弃迟到的加载结果");
 }
 
 async function main() {
   await fs.mkdir(runDirectory, { recursive: true });
   await testKnowledgeAndHealth();
+  await testChapterUndoAndSaveIsolation();
   await testCancelableStreaming();
   await testSafeRevisionAndExchange();
   await testReleasePrivacyScanner();

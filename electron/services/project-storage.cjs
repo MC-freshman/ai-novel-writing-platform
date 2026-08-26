@@ -14,11 +14,10 @@ async function readJson(filePath, fallback) {
   }
 }
 
-async function writeJsonAtomic(filePath, value) {
+async function writeFileAtomic(filePath, value, encoding = "utf8") {
   await ensureDir(path.dirname(filePath));
   const temporaryPath = `${filePath}.${process.pid}.${crypto.randomBytes(5).toString("hex")}.tmp`;
-  const body = JSON.stringify(value, null, 2);
-  await fs.writeFile(temporaryPath, body, "utf8");
+  await fs.writeFile(temporaryPath, value, encoding);
   try {
     await fs.rename(temporaryPath, filePath);
   } catch (error) {
@@ -29,6 +28,10 @@ async function writeJsonAtomic(filePath, value) {
     await fs.copyFile(temporaryPath, filePath);
     await fs.rm(temporaryPath, { force: true });
   }
+}
+
+async function writeJsonAtomic(filePath, value) {
+  return writeFileAtomic(filePath, JSON.stringify(value, null, 2), "utf8");
 }
 
 function sha256(value) {
@@ -53,5 +56,6 @@ module.exports = {
   safeFileSegment,
   sha256,
   stableId,
+  writeFileAtomic,
   writeJsonAtomic,
 };

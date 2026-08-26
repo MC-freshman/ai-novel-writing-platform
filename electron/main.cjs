@@ -10,7 +10,7 @@ const { toUSVString } = require("node:util");
 const AdmZip = require("adm-zip");
 const mammoth = require("mammoth");
 const { parse: parseHtml } = require("node-html-parser");
-const { writeJsonAtomic } = require("./services/project-storage.cjs");
+const { writeFileAtomic, writeJsonAtomic } = require("./services/project-storage.cjs");
 const storyState = require("./services/story-state.cjs");
 const { PersistentTaskCenter } = require("./services/task-center.cjs");
 const projectSnapshots = require("./services/project-snapshots.cjs");
@@ -76,6 +76,7 @@ const analysisSaveQueues = new Map();
 const projectTaskCenters = new Map();
 const deepAnalysisTimers = new Map();
 const chapterRevisionCache = new Map();
+const chapterSaveQueues = new Map();
 const pendingExchangeImports = new Map();
 const projectSessions = new Map();
 const credentialSecretsCache = new Map();
@@ -704,6 +705,10 @@ async function snapshotChapterVersion(projectPath, chapter, content, reason = "�
   if (!chapter?.id || !String(content || "").trim()) return null;
   const versionDir = getChapterVersionDir(projectPath, chapter.id);
   await ensureDir(versionDir);
+  const revision = contentRevision(content);
+  const existingVersions = await listChapterVersions(projectPath, chapter.id);
+  const existingVersion = existingVersions.find((item) => item.contentRevision === revision);
+  if (existingVersion) return existingVersion;
   const createdAt = nowIso();
   const stamp = createdAt.replace(/[:.]/g, "-");
   const extension = path.extname(chapter.fileName).toLowerCase() === ".html" || isHtmlContent(content) ? ".html" : ".md";
@@ -717,6 +722,7 @@ async function snapshotChapterVersion(projectPath, chapter, content, reason = "�
     wordCount: countWords(content),
     fileName,
     reason,
+    contentRevision: revision,
   };
   await fs.writeFile(path.join(versionDir, fileName), content, "utf8");
   await writeJson(path.join(versionDir, `${id}.json`), version);
@@ -1675,7 +1681,9 @@ async function loadWorldDocs(projectPath) {
 
 async function loadChapterContent(projectPath, chapterId) {
   const config = await loadConfig(projectPath);
-  const chapter = config.chapters.find((item) => item.id === chapterId) || config.chapters[0];
+  const requestedChapterId = String(chapterId || "");
+  const chapter = requestedChapterId ? config.chapters.find((item) => item.id === requestedChapterId) : config.chapters[0];
+  if (requestedChapterId && !chapter) throw new Error("要打开的章节已经不存在，已停止加载，当前章节不会改变。");
   if (!chapter) return { chapter: null, content: "", revision: contentRevision("") };
   const filePath = getChapterPath(projectPath, chapter);
   let content = "";
@@ -1959,6 +1967,7 @@ async function calculateTotalWords(projectPath, config) {
       const content = await fs.readFile(filePath, "utf8");
       chapter.wordCount = countWords(content);
       chapter.outline = extractOutline(content);
+      chapter.contentRevision = contentRevision(content);
       total += chapter.wordCount;
     } catch {
       chapter.wordCount = chapter.wordCount || 0;
@@ -1966,6 +1975,98 @@ async function calculateTotalWords(projectPath, config) {
     }
   }
   config.stats.totalWords = total;
+}
+
+function enqueueChapterSave(projectPath, action) {
+  const key = path.resolve(projectPath);
+  const previous = chapterSaveQueues.get(key) || Promise.resolve();
+  const queued = previous.catch(() => null).then(action);
+  chapterSaveQueues.set(key, queued);
+  return queued.finally(() => {
+    if (chapterSaveQueues.get(key) === queued) chapterSaveQueues.delete(key);
+  });
+}
+
+async function assertNoAccidentalChapterClone(projectPath, config, chapter, previousContent, nextContent) {
+  if (previousContent === nextContent || contentToPlainText(nextContent).trim().length < 200) return;
+  const nextRevision = contentRevision(nextContent);
+  const possibleMatches = (config.chapters || []).filter(
+    (item) => item.id !== chapter.id && item.contentRevision === nextRevision,
+  );
+  for (const other of possibleMatches) {
+    const otherContent = await fs.readFile(getChapterPath(projectPath, other), "utf8").catch(() => "");
+    if (otherContent === nextContent) {
+      throw new Error(`检测到本次整章内容与《${other.title}》完全相同，疑似跨章节撤销或误覆盖。保存已停止，原章节和历史版本均未改变。`);
+    }
+  }
+}
+
+async function saveChapterContent(projectPath, payload = {}) {
+  return enqueueChapterSave(projectPath, async () => {
+    const config = await loadConfig(projectPath);
+    const chapterId = String(payload?.chapterId || "");
+    const chapter = config.chapters.find((item) => item.id === chapterId);
+    if (!chapter) throw new Error("章节不存在，无法保存。");
+    let filePath = getChapterPath(projectPath, chapter);
+    const previousContent = await fs.readFile(filePath, "utf8").catch(() => "");
+    assertExpectedChapterRevision(String(payload?.expectedRevision || ""), previousContent);
+    const previousWords = countWords(previousContent);
+    const nextContent = String(payload.content ?? "");
+    await assertNoAccidentalChapterClone(projectPath, config, chapter, previousContent, nextContent);
+    const didSplitSharedFile = await ensureExclusiveChapterFile(projectPath, config, chapter, previousContent, {
+      snapshot: false,
+      reason: "保存前自动拆分共享章节文件",
+    });
+    if (didSplitSharedFile) filePath = getChapterPath(projectPath, chapter);
+    if (previousContent && previousContent !== nextContent) {
+      await snapshotChapterVersion(projectPath, chapter, previousContent).catch(() => null);
+    }
+    await writeFileAtomic(filePath, nextContent, "utf8");
+
+    if (payload.title && payload.title.trim()) chapter.title = payload.title.trim();
+    if (payload.volume && payload.volume.trim()) chapter.volume = payload.volume.trim();
+    chapter.wordCount = countWords(nextContent);
+    chapter.outline = extractOutline(nextContent);
+    chapter.contentRevision = contentRevision(nextContent);
+    chapter.updatedAt = nowIso();
+    if (config.stats.todayDate !== todayKey()) {
+      config.stats.todayDate = todayKey();
+      config.stats.todayWords = 0;
+    }
+    config.stats.todayWords += Math.max(0, chapter.wordCount - previousWords);
+    await calculateTotalWords(projectPath, config);
+    await saveConfig(projectPath, config);
+
+    const indexResult = await indexSource(projectPath, {
+      id: chapter.id,
+      type: "chapter",
+      title: chapter.title,
+      volume: chapter.volume || "未分卷",
+      category: chapter.volume || "未分卷",
+      knowledgeRole: getKnowledgeRole(chapter),
+      content: nextContent,
+    });
+    let storyStateWarning = "";
+    if (config.agent?.autoLocalAnalysis !== false) {
+      await refreshLocalStoryState(projectPath, chapter.id, nextContent).catch((error) => {
+        storyStateWarning = error?.message || String(error);
+      });
+    }
+    if (config.agent?.autoDeepAnalysis === true) scheduleIdleDeepAnalysis(projectPath, chapter);
+
+    if (config.ui.backupOnSave) {
+      await createBackup(projectPath).catch(() => null);
+    }
+
+    return {
+      chapter,
+      config: configForRenderer(config),
+      indexResult,
+      vectorStats: { chunks: indexResult.totalChunks, updatedAt: nowIso() },
+      revision: contentRevision(nextContent),
+      storyStateWarning,
+    };
+  });
 }
 
 async function buildAppState(projectPath, preferredChapterId = "") {
@@ -6836,68 +6937,8 @@ function registerIpcHandlers() {
     return withJournalOperation(projectPath, {
       type: "chapter-save", title: "保存章节", targetIds: [payload?.chapterId], recoverable: true,
       metadata: { expectedRevision: String(payload?.expectedRevision || "").slice(0, 128) },
-    }, async () => {
-    const config = await loadConfig(projectPath);
-    const chapter = config.chapters.find((item) => item.id === payload.chapterId);
-    if (!chapter) throw new Error("章节不存在，无法保存。");
-    let filePath = getChapterPath(projectPath, chapter);
-    const previousContent = await fs.readFile(filePath, "utf8").catch(() => "");
-    assertExpectedChapterRevision(String(payload?.expectedRevision || ""), previousContent);
-    const previousWords = countWords(previousContent);
-    const nextContent = String(payload.content ?? "");
-    const didSplitSharedFile = await ensureExclusiveChapterFile(projectPath, config, chapter, previousContent, {
-      snapshot: false,
-      reason: "保存前自动拆分共享章节文件",
-    });
-    if (didSplitSharedFile) filePath = getChapterPath(projectPath, chapter);
-    if (previousContent && previousContent !== nextContent) {
-      await snapshotChapterVersion(projectPath, chapter, previousContent).catch(() => null);
-    }
-    await fs.writeFile(filePath, nextContent, "utf8");
-
-    if (payload.title && payload.title.trim()) chapter.title = payload.title.trim();
-    if (payload.volume && payload.volume.trim()) chapter.volume = payload.volume.trim();
-    chapter.wordCount = countWords(nextContent);
-    chapter.outline = extractOutline(nextContent);
-    chapter.updatedAt = nowIso();
-    if (config.stats.todayDate !== todayKey()) {
-      config.stats.todayDate = todayKey();
-      config.stats.todayWords = 0;
-    }
-    config.stats.todayWords += Math.max(0, chapter.wordCount - previousWords);
-    await calculateTotalWords(projectPath, config);
-    await saveConfig(projectPath, config);
-
-    const indexResult = await indexSource(projectPath, {
-      id: chapter.id,
-      type: "chapter",
-      title: chapter.title,
-      volume: chapter.volume || "未分卷",
-      category: chapter.volume || "未分卷",
-      knowledgeRole: getKnowledgeRole(chapter),
-      content: nextContent,
-    });
-    let storyStateWarning = "";
-    if (config.agent?.autoLocalAnalysis !== false) {
-      await refreshLocalStoryState(projectPath, chapter.id, nextContent).catch((error) => {
-        storyStateWarning = error?.message || String(error);
-      });
-    }
-    if (config.agent?.autoDeepAnalysis === true) scheduleIdleDeepAnalysis(projectPath, chapter);
-
-    if (config.ui.backupOnSave) {
-      await createBackup(projectPath).catch(() => null);
-    }
-
-    return {
-      chapter,
-      config: configForRenderer(config),
-      indexResult,
-      vectorStats: { chunks: indexResult.totalChunks, updatedAt: nowIso() },
-      revision: contentRevision(nextContent),
-      storyStateWarning,
-    };
-    }, (result) => ({ chapterId: result.chapter.id, revision: result.revision, chunks: result.indexResult.chunks }));
+    }, () => saveChapterContent(projectPath, payload),
+    (result) => ({ chapterId: result.chapter.id, revision: result.revision, chunks: result.indexResult.chunks }));
   });
 
   ipcMain.handle("chapter:delete", async (_event, chapterId) => {
@@ -7283,6 +7324,7 @@ if (process.env.NOVEL_PLATFORM_TEST === "1") {
     loadCharacters,
     loadConfig,
     loadKnowledgeSummaries,
+    loadChapterContent,
     loadVectorStore,
     loadWorldDocs,
     prepareWorldCardCandidates,
@@ -7295,6 +7337,7 @@ if (process.env.NOVEL_PLATFORM_TEST === "1") {
     repairMaintenance,
     rebuildIndex,
     saveConfig,
+    saveChapterContent,
     saveAnalysisState,
     saveWorldCardCandidates,
     searchRelevantChunks,

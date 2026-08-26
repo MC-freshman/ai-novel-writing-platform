@@ -742,6 +742,8 @@ export default function App() {
   const workspaceRef = useRef<HTMLElement | null>(null);
   const selectedChapterIdRef = useRef("");
   const chapterRevisionRef = useRef("");
+  const chapterLoadRequestRef = useRef(0);
+  const savePromiseRef = useRef<Promise<boolean> | null>(null);
   const chatMessagesRef = useRef<ChatMessage[]>([]);
   const chapterDraftRef = useRef({ content: "", title: "", volume: "" });
 
@@ -756,6 +758,13 @@ export default function App() {
   }, []);
 
   const applyAppState = useCallback((nextState: AppState) => {
+    chapterLoadRequestRef.current += 1;
+    selectedChapterIdRef.current = nextState.selectedChapter?.id ?? "";
+    chapterDraftRef.current = {
+      content: nextState.chapterContent,
+      title: nextState.selectedChapter?.title ?? "",
+      volume: nextState.selectedChapter?.volume ?? "卷一",
+    };
     setState(nextState);
     setSelectedChapter(nextState.selectedChapter);
     setChapterContent(nextState.chapterContent);
@@ -947,14 +956,14 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [activeChatSessionId, aiProjectMemory, chatLoaded, chatMessages, chatRetrievalMode]);
 
-  const saveChapter = useCallback(async () => {
+  const saveChapter = useCallback((): Promise<boolean> => {
     if (!selectedChapter) {
       setStatus("请先选择一个文档再保存。");
-      return false;
+      return Promise.resolve(false);
     }
-    if (saving) {
+    if (savePromiseRef.current) {
       setStatus("当前文档正在保存，请稍候。");
-      return false;
+      return savePromiseRef.current;
     }
     const draft = {
       chapterId: selectedChapter.id,
@@ -963,56 +972,58 @@ export default function App() {
       content: chapterContent,
       expectedRevision: chapterRevisionRef.current,
     };
-    setSaving(true);
-    setStatus("正在保存并更新知识库...");
-    try {
-      const result = await window.novelAPI.saveChapter(draft);
-      const stillViewingSameChapter = selectedChapterIdRef.current === draft.chapterId;
-      const currentDraft = chapterDraftRef.current;
-      const draftUnchanged =
-        currentDraft.content === draft.content && currentDraft.title === draft.title && currentDraft.volume === draft.volume;
-      if (stillViewingSameChapter) {
-        setSelectedChapter(result.chapter);
-      }
-      setState((current) =>
-        current
-          ? {
-              ...current,
-              config: result.config,
-              chapters: result.config.chapters,
-              selectedChapter: current.selectedChapter?.id === draft.chapterId ? result.chapter : current.selectedChapter,
-              vectorStats: result.vectorStats,
-              chapterRevision: current.selectedChapter?.id === draft.chapterId ? result.revision : current.chapterRevision,
-            }
-          : current,
-      );
-      if (stillViewingSameChapter) {
-        chapterRevisionRef.current = result.revision;
-        if (draftUnchanged) {
-          setDirty(false);
-          setRecoveryDrafts((current) => current.filter((item) => item.chapterId !== draft.chapterId));
-          void window.novelAPI.clearRecoveryDraft(draft.chapterId).catch(() => null);
+    let operation!: Promise<boolean>;
+    operation = (async () => {
+      setSaving(true);
+      setStatus("正在保存并更新知识库...");
+      try {
+        const result = await window.novelAPI.saveChapter(draft);
+        const stillViewingSameChapter = selectedChapterIdRef.current === draft.chapterId;
+        const currentDraft = chapterDraftRef.current;
+        const draftUnchanged =
+          currentDraft.content === draft.content && currentDraft.title === draft.title && currentDraft.volume === draft.volume;
+        if (stillViewingSameChapter) {
+          setSelectedChapter(result.chapter);
         }
+        setState((current) =>
+          current
+            ? {
+                ...current,
+                config: result.config,
+                chapters: result.config.chapters,
+                selectedChapter: current.selectedChapter?.id === draft.chapterId ? result.chapter : current.selectedChapter,
+                vectorStats: result.vectorStats,
+                chapterRevision: current.selectedChapter?.id === draft.chapterId ? result.revision : current.chapterRevision,
+              }
+            : current,
+        );
+        if (stillViewingSameChapter) {
+          chapterRevisionRef.current = result.revision;
+          if (draftUnchanged) {
+            setDirty(false);
+            setRecoveryDrafts((current) => current.filter((item) => item.chapterId !== draft.chapterId));
+            void window.novelAPI.clearRecoveryDraft(draft.chapterId).catch(() => null);
+          }
+        }
+        const mode = result.indexResult.chunks > 0 ? `索引 ${result.indexResult.chunks} 个片段` : "暂无可索引内容";
+        setStatus(draftUnchanged ? `已保存，${mode}` : "已保存此前版本，当前还有新改动待保存");
+        return stillViewingSameChapter && draftUnchanged;
+      } catch (error) {
+        setStatus(`保存失败：${error instanceof Error ? error.message : String(error)}`);
+        return false;
+      } finally {
+        if (savePromiseRef.current === operation) savePromiseRef.current = null;
+        setSaving(false);
       }
-      const mode = result.indexResult.chunks > 0 ? `索引 ${result.indexResult.chunks} 个片段` : "暂无可索引内容";
-      setStatus(draftUnchanged ? `已保存，${mode}` : "已保存此前版本，当前还有新改动待保存");
-      return stillViewingSameChapter && draftUnchanged;
-    } catch (error) {
-      setStatus(`保存失败：${error instanceof Error ? error.message : String(error)}`);
-      return false;
-    } finally {
-      setSaving(false);
-    }
-  }, [chapterContent, chapterTitle, chapterVolume, saving, selectedChapter]);
+    })();
+    savePromiseRef.current = operation;
+    return operation;
+  }, [chapterContent, chapterTitle, chapterVolume, selectedChapter]);
 
   const saveBeforeLeavingChapter = useCallback(async () => {
     if (!dirty) return true;
-    if (saving) {
-      setStatus("当前章节正在保存，请等保存完成后再切换或执行其他操作。");
-      return false;
-    }
     return saveChapter();
-  }, [dirty, saveChapter, saving]);
+  }, [dirty, saveChapter]);
 
   useEffect(() => {
     if (!dirty || !state?.config.ui.autosaveMs) return;
@@ -1098,14 +1109,30 @@ export default function App() {
   }, [aiExpanded, leftWidth, rightWidth, viewportWidth]);
 
   async function selectChapter(chapterId: string, line?: number, quote?: string) {
+    const requestId = ++chapterLoadRequestRef.current;
     if (!(await saveBeforeLeavingChapter())) return;
+    if (requestId !== chapterLoadRequestRef.current) return;
     try {
       const payload = await window.novelAPI.loadChapter(chapterId);
+      if (requestId !== chapterLoadRequestRef.current) return;
+      if (!payload.chapter || payload.chapter.id !== chapterId) throw new Error("章节身份校验失败，已停止切换。");
+      selectedChapterIdRef.current = payload.chapter.id;
+      chapterDraftRef.current = {
+        content: payload.content,
+        title: payload.chapter.title,
+        volume: payload.chapter.volume || "卷一",
+      };
       setSelectedChapter(payload.chapter);
       setChapterContent(payload.content);
       setChapterTitle(payload.chapter?.title ?? "");
       setChapterVolume(payload.chapter?.volume ?? "卷一");
       chapterRevisionRef.current = payload.revision || "";
+      setState((current) => current ? {
+        ...current,
+        selectedChapter: payload.chapter,
+        chapterContent: payload.content,
+        chapterRevision: payload.revision || "",
+      } : current);
       setDirty(false);
       setView("chapters");
       if (typeof line === "number" || quote) {
@@ -1126,7 +1153,7 @@ export default function App() {
         });
       }
     } catch (error) {
-      setStatus(`打开文档失败：${getErrorMessage(error)}`);
+      if (requestId === chapterLoadRequestRef.current) setStatus(`打开文档失败：${getErrorMessage(error)}`);
     }
   }
 
@@ -2024,7 +2051,7 @@ export default function App() {
 
         <section className="center-pane">
           {view === "chapters" && (
-            <section className="editor-panel">
+            <section key={selectedChapter?.id || "empty-document"} className="editor-panel">
               <div className="editor-header">
                 <input
                   className="title-input"
@@ -2100,12 +2127,15 @@ export default function App() {
                   />
                 ) : (
                   <RichDocumentEditor
+                    key={selectedChapter?.id || "empty-document"}
+                    documentId={selectedChapter?.id || ""}
                     value={chapterContent}
                     fontSize={state.config.ui.fontSize}
                     lineHeight={state.config.ui.lineHeight}
                     scrollAnchor={scrollAnchor}
                     reviews={editorReviews}
-                    onChange={(next) => {
+                    onChange={(documentId, next) => {
+                      if (!documentId || selectedChapterIdRef.current !== documentId) return;
                       setChapterContent(next);
                       setDirty(true);
                     }}
@@ -3181,6 +3211,7 @@ function TaskCenterDrawer({
 }
 
 function RichDocumentEditor({
+  documentId,
   value,
   fontSize,
   lineHeight,
@@ -3192,18 +3223,20 @@ function RichDocumentEditor({
   onReady,
   onOpenReview,
 }: {
+  documentId: string;
   value: string;
   fontSize: number;
   lineHeight: number;
   scrollAnchor: EditorScrollAnchor | null;
   reviews: InlineReviewItem[];
-  onChange: (value: string) => void;
+  onChange: (documentId: string, value: string) => void;
   onSelection: () => void;
   onContextMenu: (event: React.MouseEvent<HTMLElement>) => void;
   onReady?: (editor: Editor | null) => void;
   onOpenReview: (review: InlineReviewItem) => void;
 }) {
   const lastHtmlRef = useRef("");
+  const onChangeRef = useRef(onChange);
   const [activeReviewId, setActiveReviewId] = useState("");
   const activeReview = reviews.find((item) => item.id === activeReviewId) || null;
   const editor = useEditor(
@@ -3242,11 +3275,15 @@ function RichDocumentEditor({
       onUpdate({ editor }) {
         const next = editor.getHTML();
         lastHtmlRef.current = next;
-        onChange(next);
+        onChangeRef.current(documentId, next);
       },
     },
     [],
   );
+
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
 
   useEffect(() => {
     onReady?.(editor);

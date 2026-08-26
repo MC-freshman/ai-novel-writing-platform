@@ -126,6 +126,7 @@ export interface Chapter {
   order: number;
   fileName: string;
   wordCount: number;
+  contentRevision?: string;
   importedFrom?: string;
   importId?: string;
   imageCount?: number;
