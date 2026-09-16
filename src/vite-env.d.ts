@@ -47,6 +47,8 @@ import type {
 declare global {
   interface Window {
     novelAPI: {
+      onAppCloseRequested: (callback: () => void) => () => void;
+      confirmAppClose: () => void;
       onMenuAction: (callback: (action: string) => void) => () => void;
       onImportProgress: (callback: (progress: ProgressState) => void) => () => void;
       onIndexProgress: (callback: (progress: ProgressState) => void) => () => void;

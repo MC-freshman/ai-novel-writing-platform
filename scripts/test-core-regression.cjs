@@ -157,6 +157,58 @@ async function testCancelableStreaming() {
   }
 }
 
+async function testClaudeHistoryVectorCompatibilityAndBackups() {
+  let receivedPayload = null;
+  const server = http.createServer(async (request, response) => {
+    const parts = [];
+    for await (const part of request) parts.push(part);
+    receivedPayload = JSON.parse(Buffer.concat(parts).toString("utf8"));
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ content: [{ text: "保留上下文的回答" }] }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = server.address().port;
+  try {
+    const answer = await platform.callChatApi(
+      { api: { provider: "claude", apiKey: "test-key", baseUrl: `http://127.0.0.1:${port}`, chatModel: "mock-claude", maxTokens: 1000, temperature: 0 } },
+      "system",
+      "继续回答",
+      [
+        { role: "user", content: "第一问" },
+        { role: "assistant", content: "第一答" },
+      ],
+    );
+    assert.equal(answer, "保留上下文的回答", "Claude 响应必须正常解析");
+    assert.deepEqual(receivedPayload.messages, [
+      { role: "user", content: "第一问" },
+      { role: "assistant", content: "第一答" },
+      { role: "user", content: "继续回答" },
+    ], "Claude 请求必须携带压缩后的多轮历史");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+
+  assert.equal(
+    platform.compatibleVectorScore({ source: "api", identity: "api:a:model", vector: [1, 0] }, [0, 1], { embeddingSource: "local", embedding: [0, 1] }),
+    1,
+    "本地索引必须使用本地查询向量计算相似度",
+  );
+  assert.equal(
+    platform.compatibleVectorScore({ source: "api", identity: "api:a:model", vector: [1, 0] }, [0, 1], { embeddingSource: "api", embeddingIdentity: "api:b:model", embedding: [1, 0] }),
+    0,
+    "不同远程向量模型的结果不得混算",
+  );
+
+  const backupProject = path.join(runDirectory, "backup-recursion");
+  await platform.ensureProjectStructure(backupProject, "备份递归测试");
+  await fs.writeFile(path.join(backupProject, "backups", "old-backup.zip"), "old backup", "utf8");
+  const backupPath = path.join(backupProject, "backups", "new-backup.zip");
+  await platform.createBackup(backupProject, backupPath);
+  const backupZip = new AdmZip(backupPath);
+  const backupEntries = backupZip.getEntries().map((entry) => entry.entryName.replace(/\\/g, "/"));
+  assert.ok(backupEntries.every((name) => !name.includes("/backups/")), "新备份不得递归包含历史 backups 目录");
+}
+
 async function testChapterUndoAndSaveIsolation() {
   const isolationProject = path.join(runDirectory, "chapter-isolation");
   await platform.ensureProjectStructure(isolationProject, "章节隔离测试");
@@ -370,6 +422,9 @@ async function testFrontendSafetyContracts() {
   assert.match(appSource, /key=\{selectedChapter\?\.id \|\| "empty-document"\}/, "不同章节必须重建编辑器并隔离撤销历史");
   assert.match(appSource, /selectedChapterIdRef\.current !== documentId/, "富文档更新必须校验事件所属章节");
   assert.match(appSource, /requestId !== chapterLoadRequestRef\.current/, "快速切换章节时必须丢弃迟到的加载结果");
+  assert.match(appSource, /onAppCloseRequested/, "关闭窗口前必须请求渲染层保存正文或恢复草稿");
+  assert.match(mainSource, /app:before-close/, "主进程关闭窗口前必须等待正文保护流程");
+  assert.match(mainSource, /!normalized\.startsWith\("backups\/"\)/, "项目备份必须排除历史 backups 目录");
 }
 
 async function main() {
@@ -377,6 +432,7 @@ async function main() {
   await testKnowledgeAndHealth();
   await testChapterUndoAndSaveIsolation();
   await testCancelableStreaming();
+  await testClaudeHistoryVectorCompatibilityAndBackups();
   await testSafeRevisionAndExchange();
   await testReleasePrivacyScanner();
   await testFrontendSafetyContracts();

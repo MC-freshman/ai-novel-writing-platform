@@ -71,6 +71,8 @@ const CREDENTIAL_EMBEDDING_REF = "credential://windows/embedding";
 let mainWindow;
 let currentProjectPath = "";
 let importCancelRequested = false;
+let windowCloseApproved = false;
+let windowCloseRequestTimer = null;
 const activeAiRequests = new Map();
 const analysisSaveQueues = new Map();
 const projectTaskCenters = new Map();
@@ -2173,12 +2175,19 @@ async function remoteEmbedding(text, apiConfig, options = {}) {
 async function getEmbedding(text, apiConfig, options = {}) {
   try {
     const remote = await remoteEmbedding(text, apiConfig, options);
-    if (remote) return { vector: remote, source: "api", warning: "" };
+    if (remote) return { vector: remote, source: "api", identity: embeddingIdentity(apiConfig, "api"), warning: "" };
   } catch (error) {
     if (options.signal?.aborted || error?.name === "AbortError") throw Object.assign(new Error("任务已停止"), { name: "AbortError" });
-    return { vector: localEmbedding(text), source: "local", warning: error.message };
+    return { vector: localEmbedding(text), source: "local", identity: embeddingIdentity(apiConfig, "local"), warning: error.message };
   }
-  return { vector: localEmbedding(text), source: "local", warning: "" };
+  return { vector: localEmbedding(text), source: "local", identity: embeddingIdentity(apiConfig, "local"), warning: "" };
+}
+
+function embeddingIdentity(apiConfig = {}, source = "local") {
+  if (source !== "api") return "local-hash-v1";
+  const baseUrl = String(apiConfig.embeddingBaseUrl || apiConfig.baseUrl || "").replace(/\/$/, "").toLowerCase();
+  const model = String(apiConfig.embeddingModel || "text-embedding-3-small").trim().toLowerCase();
+  return `api:${baseUrl}:${model}`;
 }
 
 function extractMetadata(text, characterNames = []) {
@@ -2217,6 +2226,17 @@ function cosineSimilarity(a, b) {
   }
   if (!normA || !normB) return 0;
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+function compatibleVectorScore(queryEmbedding, localQueryVector, item) {
+  const itemVector = Array.isArray(item?.embedding) ? item.embedding : [];
+  const itemSource = item?.embeddingSource === "api" ? "api" : "local";
+  if (itemSource === "local") {
+    return itemVector.length === localQueryVector.length ? cosineSimilarity(localQueryVector, itemVector) : 0;
+  }
+  if (queryEmbedding.source !== "api" || itemVector.length !== queryEmbedding.vector.length) return 0;
+  if (item.embeddingIdentity && item.embeddingIdentity !== queryEmbedding.identity) return 0;
+  return cosineSimilarity(queryEmbedding.vector, itemVector);
 }
 
 function compactSearchText(value) {
@@ -2375,6 +2395,7 @@ async function buildIndexEntries(source, config, characterNames, options = {}) {
       text: chunk.text,
       embedding: embedding.vector,
       embeddingSource: embedding.source,
+      embeddingIdentity: embedding.identity,
       embeddingWarning: embedding.warning,
       metadata: extractMetadata(chunk.text, characterNames),
       sourceHash,
@@ -2519,10 +2540,11 @@ async function searchRelevantChunks(projectPath, question, topK, options = {}) {
   const loadSourceIds = [...new Set([...sourceIds, ...candidateSourceIds, ...(Array.isArray(options.additionalLoadSourceIds) ? options.additionalLoadSourceIds : [])].map(String).filter(Boolean))];
   const store = await vectorShards.loadStore(projectPath, loadSourceIds.length ? { sourceIds: loadSourceIds } : {});
   const embedding = await getEmbedding(question, config.api);
+  const localQueryVector = embedding.source === "local" ? embedding.vector : localEmbedding(question);
   const boostSourceIds = new Set((Array.isArray(options.boostSourceIds) ? options.boostSourceIds : []).map((id) => String(id || "")).filter(Boolean));
   const candidates = store.vectors
     .map((item) => {
-      const vectorScore = cosineSimilarity(embedding.vector, item.embedding || []);
+      const vectorScore = compatibleVectorScore(embedding, localQueryVector, item);
       const keywordScore = lexicalRelevanceScore(item, question);
       const hierarchyBoost = boostSourceIds.has(item.sourceId) ? 0.2 : 0;
       const hybrid = retrievalPlanner.scoreCandidate(item, {
@@ -3147,12 +3169,13 @@ async function callChatApi(config, systemPrompt, question, history = [], options
   }
 
   if (provider === "claude") {
+    const safeHistory = compactChatHistory(history);
     const payload = {
       model,
       max_tokens: maxTokens,
       temperature,
       system: systemPrompt,
-      messages: [{ role: "user", content: question }],
+      messages: [...safeHistory, { role: "user", content: question }],
     };
     const { response, bodyBytes } = await fetchJsonWithDiagnostics(
       `${baseUrl || "https://api.anthropic.com"}/v1/messages`,
@@ -6088,7 +6111,8 @@ async function createBackup(projectPath, targetFile = "") {
   const filePath = targetFile || path.join(projectPath, "backups", `backup_${stamp}.zip`);
   const zip = new AdmZip();
   zip.addLocalFolder(projectPath, sanitizeFileName(config.title || "NovelProject"), (filename) => {
-    return !filename.includes("node_modules") && !filename.includes("\\release\\") && !filename.includes("/release/");
+    const normalized = String(filename || "").replace(/\\/g, "/").replace(/^\.\//, "");
+    return !normalized.startsWith("backups/") && !normalized.includes("/backups/") && !normalized.includes("/node_modules/") && !normalized.startsWith("node_modules/") && !normalized.includes("/release/") && !normalized.startsWith("release/");
   });
   zip.writeZip(filePath);
   return filePath;
@@ -6156,6 +6180,9 @@ async function downloadAndOpenAppUpdate(url, suggestedName = "") {
 }
 
 async function createWindow() {
+  windowCloseApproved = false;
+  if (windowCloseRequestTimer) clearTimeout(windowCloseRequestTimer);
+  windowCloseRequestTimer = null;
   const savedWindowState = currentProjectPath ? await operationJournal.loadWindowState(currentProjectPath).catch(() => null) : null;
   const savedBounds = savedWindowState?.bounds || {};
   mainWindow = new BrowserWindow({
@@ -6170,7 +6197,18 @@ async function createWindow() {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
     },
+  });
+
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
+    return { action: "deny" };
+  });
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    if (url === mainWindow.webContents.getURL()) return;
+    event.preventDefault();
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
   });
 
   if (savedWindowState?.maximized) mainWindow.maximize();
@@ -6181,6 +6219,18 @@ async function createWindow() {
     void operationJournal.loadWindowState(currentProjectPath)
       .then((current) => operationJournal.saveWindowState(currentProjectPath, { ...(current || {}), bounds, maximized }))
       .catch(() => null);
+  });
+
+  mainWindow.on("close", (event) => {
+    if (windowCloseApproved || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
+    event.preventDefault();
+    if (windowCloseRequestTimer) return;
+    mainWindow.webContents.send("app:before-close");
+    windowCloseRequestTimer = setTimeout(() => {
+      windowCloseRequestTimer = null;
+      windowCloseApproved = true;
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+    }, 5000);
   });
 
   const devUrl = process.env.VITE_DEV_SERVER_URL;
@@ -6260,6 +6310,12 @@ async function ensureCurrentProject() {
 }
 
 function registerIpcHandlers() {
+  ipcMain.on("app:confirm-close", () => {
+    if (windowCloseRequestTimer) clearTimeout(windowCloseRequestTimer);
+    windowCloseRequestTimer = null;
+    windowCloseApproved = true;
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+  });
   ipcMain.handle("app:get-state", async () => {
     const projectPath = await ensureCurrentProject();
     return buildAppState(projectPath);
@@ -7297,8 +7353,10 @@ if (process.env.NOVEL_PLATFORM_TEST === "1") {
     buildTimelineEvents,
     callChatApi,
     chunkText,
+    compatibleVectorScore,
     collectPromptMaterials,
     contentToPlainText,
+    createBackup,
     defaultConfig,
     ensureProjectStructure,
     getCreativeWorkspaceView,

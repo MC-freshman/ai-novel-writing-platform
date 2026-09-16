@@ -193,6 +193,55 @@ async function main() {
     await wait(1500);
     await auditUndoIsolation(cdp);
     const mainScreenshot = await capture(cdp, "ui-main.png");
+    const paneTabsAudit = await cdp.call("Runtime.evaluate", {
+      expression: `(() => { const tabs = document.querySelector('.pane-tabs'); return { missing: !tabs, width: tabs?.clientWidth || 0, scrollWidth: tabs?.scrollWidth || 0 }; })()`,
+      returnByValue: true,
+    });
+    if (paneTabsAudit.result?.value?.missing || paneTabsAudit.result?.value?.scrollWidth > paneTabsAudit.result?.value?.width + 2) throw new Error("左侧功能标签出现裁切或横向溢出。");
+    const chatLayoutAudit = await cdp.call("Runtime.evaluate", {
+      expression: `(() => {
+        const pane = document.querySelector('.right-pane');
+        const messages = document.querySelector('.messages');
+        const input = document.querySelector('.chat-input');
+        if (!pane || !messages || !input) return { missing: true };
+        const fixture = document.createElement('div');
+        fixture.dataset.layoutFixture = 'true';
+        fixture.style.height = '1600px';
+        messages.appendChild(fixture);
+        const paneRect = pane.getBoundingClientRect();
+        const inputRect = input.getBoundingClientRect();
+        const result = {
+          missing: false,
+          inputVisible: inputRect.top >= paneRect.top && inputRect.bottom <= paneRect.bottom + 2,
+          messagesScrollable: messages.scrollHeight > messages.clientHeight,
+        };
+        fixture.remove();
+        return result;
+      })()`,
+      returnByValue: true,
+    });
+    if (chatLayoutAudit.result?.value?.missing || !chatLayoutAudit.result?.value?.inputVisible || !chatLayoutAudit.result?.value?.messagesScrollable) throw new Error("长对话将右下角 AI 输入框挤出了可视区域。");
+    const enteredFocusMode = await cdp.call("Runtime.evaluate", {
+      expression: `(() => { const button = document.querySelector('button[title="专注模式"]'); button?.click(); return Boolean(button); })()`,
+      returnByValue: true,
+    });
+    await wait(250);
+    const aiChatRecoveryAudit = await cdp.call("Runtime.evaluate", {
+      expression: `(() => {
+        const shortcut = document.querySelector('.ai-chat-shortcut');
+        const hiddenInFocus = !document.querySelector('.right-pane');
+        shortcut?.click();
+        return { hiddenInFocus, shortcutFound: Boolean(shortcut) };
+      })()`,
+      returnByValue: true,
+    });
+    await wait(250);
+    const aiChatRecovered = await cdp.call("Runtime.evaluate", {
+      expression: `(() => ({ rightPane: Boolean(document.querySelector('.right-pane')), chatInput: Boolean(document.querySelector('.chat-input textarea')), chatActive: document.querySelector('.assistant-tabs button.active')?.textContent?.trim() === '对话' }))()`,
+      returnByValue: true,
+    });
+    if (!enteredFocusMode.result?.value || !aiChatRecoveryAudit.result?.value?.hiddenInFocus || !aiChatRecoveryAudit.result?.value?.shortcutFound || !aiChatRecovered.result?.value?.rightPane || !aiChatRecovered.result?.value?.chatInput || !aiChatRecovered.result?.value?.chatActive) throw new Error("顶部 AI 对话入口无法从专注模式恢复右侧提问框。");
+    const aiChatRecoveryScreenshot = await capture(cdp, "ui-ai-chat-recovery.png");
     const openedInlineReview = await cdp.call("Runtime.evaluate", {
       expression: `(() => { const mark = document.querySelector('.inline-review'); mark?.dispatchEvent(new MouseEvent('click', { bubbles: true })); return Boolean(mark); })()`,
       returnByValue: true,
@@ -393,6 +442,8 @@ async function main() {
           modalScrollWidth: modal?.scrollWidth || 0,
           bodyWidth: modal?.querySelector('.story-center-body')?.clientWidth || 0,
           bodyScrollWidth: modal?.querySelector('.story-center-body')?.scrollWidth || 0,
+          rowActionsWidth: modal?.querySelector('.story-row-actions')?.clientWidth || 0,
+          rowActionsScrollWidth: modal?.querySelector('.story-row-actions')?.scrollWidth || 0,
         };
       })()`,
       returnByValue: true,
@@ -400,11 +451,12 @@ async function main() {
     if (narrowAudit.result?.value?.pageWidth > narrowAudit.result?.value?.viewportWidth + 2) throw new Error(`窄窗口页面出现横向溢出：${JSON.stringify(narrowAudit.result?.value)}`);
     if (narrowAudit.result?.value?.modalScrollWidth > narrowAudit.result?.value?.modalWidth + 2) throw new Error("窄窗口创作状态弹窗出现横向溢出。");
     if (narrowAudit.result?.value?.bodyScrollWidth > narrowAudit.result?.value?.bodyWidth + 2) throw new Error("窄窗口弹窗内容出现横向溢出。");
+    if (narrowAudit.result?.value?.rowActionsScrollWidth > narrowAudit.result?.value?.rowActionsWidth + 2) throw new Error("窄窗口事实操作按钮出现裁切。");
     await cdp.call("Emulation.clearDeviceMetricsOverride");
     await cdp.call("Browser.close").catch(() => null);
     await wait(500);
     cdp.close();
-    console.log(JSON.stringify({ mainScreenshot, inlineReviewScreenshot, advisorScreenshot, knowledgeScreenshot, storyScreenshot, workspaceScreenshot, networkScreenshot, snapshotScreenshot, relationScreenshot, settingsScreenshot, narrowStoryScreenshot, audit: audit.result?.value, inlineReviewAudit: inlineReviewAudit.result?.value, advisorAudit: advisorAudit.result?.value, storyAudit: storyAudit.result?.value, workspaceAudit: workspaceAudit.result?.value, networkAudit: networkAudit.result?.value, snapshotAudit: snapshotAudit.result?.value, relationAudit: relationAudit.result?.value, settingsAudit: settingsAudit.result?.value, narrowAudit: narrowAudit.result?.value }, null, 2));
+    console.log(JSON.stringify({ mainScreenshot, aiChatRecoveryScreenshot, inlineReviewScreenshot, advisorScreenshot, knowledgeScreenshot, storyScreenshot, workspaceScreenshot, networkScreenshot, snapshotScreenshot, relationScreenshot, settingsScreenshot, narrowStoryScreenshot, audit: audit.result?.value, inlineReviewAudit: inlineReviewAudit.result?.value, advisorAudit: advisorAudit.result?.value, storyAudit: storyAudit.result?.value, workspaceAudit: workspaceAudit.result?.value, networkAudit: networkAudit.result?.value, snapshotAudit: snapshotAudit.result?.value, relationAudit: relationAudit.result?.value, settingsAudit: settingsAudit.result?.value, narrowAudit: narrowAudit.result?.value }, null, 2));
   } finally {
     child.kill();
   }

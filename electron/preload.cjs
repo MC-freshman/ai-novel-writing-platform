@@ -1,6 +1,12 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("novelAPI", {
+  onAppCloseRequested: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("app:before-close", handler);
+    return () => ipcRenderer.removeListener("app:before-close", handler);
+  },
+  confirmAppClose: () => ipcRenderer.send("app:confirm-close"),
   onMenuAction: (callback) => {
     const handler = (_event, action) => callback(action);
     ipcRenderer.on("menu:action", handler);

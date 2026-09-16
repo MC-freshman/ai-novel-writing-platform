@@ -694,6 +694,50 @@ function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function useDialogFocus(onClose: () => void) {
+  const dialogRef = useRef<HTMLElement | null>(null);
+  const closeRef = useRef(onClose);
+  useEffect(() => {
+    closeRef.current = onClose;
+  }, [onClose]);
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const dialog = dialogRef.current;
+    window.requestAnimationFrame(() => dialog?.focus());
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeRef.current();
+        return;
+      }
+      if (event.key !== "Tab" || !dialogRef.current) return;
+      const focusable = Array.from(
+        dialogRef.current.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'),
+      ).filter((item) => item.offsetParent !== null);
+      if (!focusable.length) {
+        event.preventDefault();
+        dialogRef.current.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      if (previous?.isConnected) previous.focus();
+    };
+  }, []);
+  return dialogRef;
+}
+
 export default function App() {
   const [state, setState] = useState<AppState | null>(null);
   const [selectedChapter, setSelectedChapter] = useState<Chapter | null>(null);
@@ -735,6 +779,7 @@ export default function App() {
   const [rightWidth, setRightWidth] = useState(520);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const [aiExpanded, setAiExpanded] = useState(false);
+  const [aiChatOpenRequest, setAiChatOpenRequest] = useState(0);
   const [previewWidth, setPreviewWidth] = useState(46);
   const [recoveryDrafts, setRecoveryDrafts] = useState<RecoveryDraft[]>([]);
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
@@ -744,6 +789,7 @@ export default function App() {
   const chapterRevisionRef = useRef("");
   const chapterLoadRequestRef = useRef(0);
   const savePromiseRef = useRef<Promise<boolean> | null>(null);
+  const closingRef = useRef(false);
   const chatMessagesRef = useRef<ChatMessage[]>([]);
   const chapterDraftRef = useRef({ content: "", title: "", volume: "" });
 
@@ -1026,6 +1072,56 @@ export default function App() {
   }, [dirty, saveChapter]);
 
   useEffect(() => {
+    return window.novelAPI.onAppCloseRequested(() => {
+      if (closingRef.current) return;
+      closingRef.current = true;
+      void (async () => {
+        try {
+          if (dirty && selectedChapter?.id && state?.config.ui.recoveryEnabled !== false) {
+            const draft = chapterDraftRef.current;
+            await window.novelAPI.saveRecoveryDraft({
+              chapterId: selectedChapter.id,
+              chapterTitle: draft.title,
+              volume: draft.volume,
+              content: draft.content,
+              baseRevision: chapterRevisionRef.current,
+              wordCount: countWords(draft.content),
+            }).catch(() => null);
+          }
+          if (dirty) await saveChapter();
+        } finally {
+          window.novelAPI.confirmAppClose();
+        }
+      })();
+    });
+  }, [dirty, saveChapter, selectedChapter?.id, state?.config.ui.recoveryEnabled]);
+
+  async function changeView(nextView: typeof view) {
+    if (nextView === view) return true;
+    if (view === "chapters" && !(await saveBeforeLeavingChapter())) return false;
+    setView(nextView);
+    return true;
+  }
+
+  async function openSettings() {
+    if (!(await saveBeforeLeavingChapter())) return;
+    setShowSettings(true);
+  }
+
+  async function openStoryCenter(initialTab: "facts" | "workspace" = storyCenterInitialTab, workspaceTab: CreativeWorkspaceTab = workspaceInitialTab) {
+    if (!(await saveBeforeLeavingChapter())) return;
+    setStoryCenterInitialTab(initialTab);
+    setWorkspaceInitialTab(workspaceTab);
+    setShowStoryCenter(true);
+  }
+
+  function showAiChat() {
+    setFocusMode(false);
+    setAiChatOpenRequest((value) => value + 1);
+    setStatus("已显示右侧 AI 对话");
+  }
+
+  useEffect(() => {
     if (!dirty || !state?.config.ui.autosaveMs) return;
     const timer = window.setTimeout(() => {
       void saveChapter();
@@ -1171,6 +1267,7 @@ export default function App() {
 
   async function deleteChapter(chapterId: string) {
     if (!window.confirm("确定删除这个章节吗？对应的本地文件和向量索引都会删除。")) return;
+    if (!(await saveBeforeLeavingChapter())) return;
     try {
       const next = await window.novelAPI.deleteChapter(chapterId);
       applyAppState(next);
@@ -1289,6 +1386,7 @@ export default function App() {
   }
 
   async function createProject() {
+    if (!(await saveBeforeLeavingChapter())) return;
     const title = window.prompt("新小说项目名称", "新小说项目");
     if (!title) return;
     try {
@@ -1301,6 +1399,7 @@ export default function App() {
   }
 
   async function openProject() {
+    if (!(await saveBeforeLeavingChapter())) return;
     try {
       const result = await window.novelAPI.openProject();
       if (!("canceled" in result)) applyAppState(result);
@@ -1424,6 +1523,7 @@ export default function App() {
   }
 
   async function exportBackup() {
+    if (!(await saveBeforeLeavingChapter())) return;
     try {
       const result = await window.novelAPI.exportBackup();
       if (result.canceled) {
@@ -1438,6 +1538,7 @@ export default function App() {
   }
 
   async function rebuildIndex() {
+    if (!(await saveBeforeLeavingChapter())) return;
     setStatus("正在重建整本小说知识库...");
     try {
       const result = await window.novelAPI.rebuildIndex();
@@ -1450,6 +1551,7 @@ export default function App() {
 
   async function toggleTheme() {
     if (!state) return;
+    if (!(await saveBeforeLeavingChapter())) return;
     const nextTheme = state.config.ui.theme === "dark" ? "light" : "dark";
     try {
       const next = await window.novelAPI.saveProjectSettings({
@@ -1514,7 +1616,7 @@ export default function App() {
     const text = chapterContent.slice(editor.selectionStart, editor.selectionEnd).trim();
     if (!text) return;
     event.preventDefault();
-    setContextMenu({ x: event.clientX, y: event.clientY, text });
+    setContextMenu({ x: Math.max(8, Math.min(event.clientX, window.innerWidth - 190)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - 300)), text });
   }
 
   function openRichAskSelectionMenu(event: React.MouseEvent<HTMLElement>) {
@@ -1522,7 +1624,7 @@ export default function App() {
     setSelectedText(text);
     if (!text) return;
     event.preventDefault();
-    setContextMenu({ x: event.clientX, y: event.clientY, text });
+    setContextMenu({ x: Math.max(8, Math.min(event.clientX, window.innerWidth - 190)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - 300)), text });
   }
 
   function findNextInChapter() {
@@ -1711,19 +1813,17 @@ export default function App() {
         extractScope: "chapter",
         worldCandidates: result.candidates,
       });
-      setView("analysis");
+      await changeView("analysis");
       setStatus(`已从选中文字提取 ${result.candidates.length} 个候选；请在分析页勾选后写入世界观`);
     } catch (error) {
       setStatus(`提取设定失败：${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
-  function openWorkspaceFromSelection(tab: CreativeWorkspaceTab, text: string) {
+  async function openWorkspaceFromSelection(tab: CreativeWorkspaceTab, text: string) {
     setContextMenu(null);
     setSelectedText(text);
-    setStoryCenterInitialTab("workspace");
-    setWorkspaceInitialTab(tab);
-    setShowStoryCenter(true);
+    await openStoryCenter("workspace", tab);
   }
 
   function updateChatRetrievalMode(mode: RetrievalMode) {
@@ -1815,6 +1915,7 @@ export default function App() {
   }
 
   async function saveCharacter(card: Partial<CharacterCard>) {
+    if (!(await saveBeforeLeavingChapter())) return;
     try {
       const next = await window.novelAPI.saveCharacter(card);
       applyAppState(next);
@@ -1827,6 +1928,7 @@ export default function App() {
 
   async function deleteCharacter(characterId: string) {
     if (!window.confirm("确定删除这个角色卡片吗？")) return;
+    if (!(await saveBeforeLeavingChapter())) return;
     try {
       const next = await window.novelAPI.deleteCharacter(characterId);
       applyAppState(next);
@@ -1839,6 +1941,7 @@ export default function App() {
 
   async function generateCharactersFromOutline() {
     if (!window.confirm("将检索当前项目中的大纲和正文，并调用 AI 生成角色卡片。生成结果会直接写入“角色”界面；同名角色会更新。继续吗？")) return;
+    if (!(await saveBeforeLeavingChapter())) return;
     setStatus("正在检索大纲并生成角色卡片...");
     try {
       const result = await window.novelAPI.generateCharactersFromOutline();
@@ -1851,6 +1954,7 @@ export default function App() {
   }
 
   async function saveWorldDoc(doc: Partial<WorldDoc>) {
+    if (!(await saveBeforeLeavingChapter())) return;
     try {
       const next = await window.novelAPI.saveWorldDoc(doc);
       applyAppState(next);
@@ -1863,6 +1967,7 @@ export default function App() {
 
   async function deleteWorldDoc(docId: string) {
     if (!window.confirm("确定删除这份世界观设定吗？")) return;
+    if (!(await saveBeforeLeavingChapter())) return;
     try {
       const next = await window.novelAPI.deleteWorldDoc(docId);
       applyAppState(next);
@@ -1875,6 +1980,7 @@ export default function App() {
 
   async function generateWorldFromOutline() {
     if (!window.confirm("将检索当前项目中的大纲和正文，并调用 AI 生成世界观条目。生成结果会直接写入“世界”界面；同名条目会更新。继续吗？")) return;
+    if (!(await saveBeforeLeavingChapter())) return;
     setStatus("正在检索大纲并生成世界观条目...");
     try {
       const result = await window.novelAPI.generateWorldFromOutline();
@@ -1888,6 +1994,7 @@ export default function App() {
 
   async function extractWorldCardsFromOutline() {
     if (!window.confirm("将调用 AI 从大纲和正文中提取地点、势力、物品候选，提取后请在“分析 / 导出/提取”中勾选写入。继续吗？")) return;
+    if (!(await saveBeforeLeavingChapter())) return;
     setStatus("正在从全书提取地点、势力、物品候选...");
     try {
       const result = await window.novelAPI.extractWorldCardsFromOutline({ scope: "book" });
@@ -1914,7 +2021,7 @@ export default function App() {
       if (action === "exportBackup") void exportBackup();
       if (action === "saveChapter") void saveChapter();
       if (action === "rebuildIndex") void rebuildIndex();
-      if (action === "showSettings") setShowSettings(true);
+      if (action === "showSettings") void openSettings();
       if (action === "toggleFocus") setFocusMode((value) => !value);
       if (action === "toggleTheme") void toggleTheme();
     });
@@ -1963,7 +2070,7 @@ export default function App() {
               更多
             </summary>
             <div className="top-more-menu">
-              <button onClick={() => setView("knowledge")} title="整理文档在知识库中的归属">
+              <button onClick={() => void changeView("knowledge")} title="整理文档在知识库中的归属">
                 <ListTree size={16} />
                 知识库整理
               </button>
@@ -1983,10 +2090,14 @@ export default function App() {
           </details>
         </nav>
         <div className="top-actions">
+          <button className="ai-chat-shortcut" onClick={showAiChat} title="显示 AI 对话">
+            <MessageSquarePlus size={18} />
+            <span>AI 对话</span>
+          </button>
           <button onClick={() => setShowQuickPanel(true)} title="功能面板 Ctrl+K">
             <ListTree size={18} />
           </button>
-          <button onClick={() => setShowSettings(true)} title="模型和项目设置">
+          <button onClick={() => void openSettings()} title="模型和项目设置">
             <Settings size={18} />
           </button>
           <button
@@ -2011,19 +2122,19 @@ export default function App() {
         {!focusMode && (
           <aside className="left-pane">
             <div className="pane-tabs">
-              <button className={view === "chapters" ? "active" : ""} onClick={() => setView("chapters")}>
+              <button className={view === "chapters" ? "active" : ""} onClick={() => void changeView("chapters")} title="章节">
                 <BookOpen size={16} /> 章节
               </button>
-              <button className={view === "characters" ? "active" : ""} onClick={() => setView("characters")}>
+              <button className={view === "characters" ? "active" : ""} onClick={() => void changeView("characters")} title="角色">
                 <UserRound size={16} /> 角色
               </button>
-              <button className={view === "world" ? "active" : ""} onClick={() => setView("world")}>
+              <button className={view === "world" ? "active" : ""} onClick={() => void changeView("world")} title="世界">
                 <Boxes size={16} /> 世界
               </button>
-              <button className={view === "knowledge" ? "active" : ""} onClick={() => setView("knowledge")}>
+              <button className={view === "knowledge" ? "active" : ""} onClick={() => void changeView("knowledge")} title="知识库">
                 <ListTree size={16} /> 知识库
               </button>
-              <button className={view === "analysis" ? "active" : ""} onClick={() => setView("analysis")}>
+              <button className={view === "analysis" ? "active" : ""} onClick={() => void changeView("analysis")} title="分析">
                 <Search size={16} /> 分析
               </button>
             </div>
@@ -2144,9 +2255,7 @@ export default function App() {
                     onReady={handleRichEditorReady}
                     onOpenReview={(review) => {
                       setSelectedText(review.quote);
-                      setStoryCenterInitialTab("workspace");
-                      setWorkspaceInitialTab(review.kind === "revision" ? "revisions" : "annotations");
-                      setShowStoryCenter(true);
+                      void openStoryCenter("workspace", review.kind === "revision" ? "revisions" : "annotations");
                     }}
                   />
                 )}
@@ -2181,8 +2290,8 @@ export default function App() {
               onSelectChapter={(chapterId) => void selectChapter(chapterId)}
               onOpenSource={(result) => {
                 if (result.sourceType === "chapter") void selectChapter(result.sourceId);
-                if (result.sourceType === "character") setView("characters");
-                if (result.sourceType === "world") setView("world");
+                if (result.sourceType === "character") void changeView("characters");
+                if (result.sourceType === "world") void changeView("world");
               }}
               onExportBook={() => void exportBookDocx({ includeOutline: false, includeMaterials: false, includeCharacters: false, includeWorld: false })}
               onExportBookWithOptions={(options) => void exportBookDocx(options)}
@@ -2217,8 +2326,9 @@ export default function App() {
             onQuick={(question) => void sendChat(question, question.includes("当前章节") ? chapterContent : selectedText, chatRetrievalMode)}
             onStatus={setStatus}
             expanded={aiExpanded}
+            chatOpenRequest={aiChatOpenRequest}
             onToggleExpanded={() => setAiExpanded((value) => !value)}
-            onOpenStoryCenter={() => setShowStoryCenter(true)}
+            onOpenStoryCenter={() => void openStoryCenter()}
           />
         )}
       </main>
@@ -2299,8 +2409,8 @@ export default function App() {
           currentView={view}
           onClose={() => setShowQuickPanel(false)}
           onOpenView={(nextView) => {
-            setView(nextView);
             setShowQuickPanel(false);
+            void changeView(nextView);
           }}
           onImport={() => {
             setShowQuickPanel(false);
@@ -2324,7 +2434,7 @@ export default function App() {
           }}
           onSettings={() => {
             setShowQuickPanel(false);
-            setShowSettings(true);
+            void openSettings();
           }}
         />
       )}
@@ -2364,7 +2474,7 @@ export default function App() {
           onChange={setBackgroundTasks}
           onOpenStoryCenter={() => {
             setShowTaskCenter(false);
-            setShowStoryCenter(true);
+            void openStoryCenter();
           }}
           onStatus={setStatus}
         />
@@ -2396,6 +2506,7 @@ function QuickPanelModal({
   onRebuildIndex: () => void;
   onSettings: () => void;
 }) {
+  const dialogRef = useDialogFocus(onClose);
   const views = [
     { id: "chapters" as const, label: "章节", icon: <BookOpen size={18} />, count: state.chapters.length },
     { id: "characters" as const, label: "角色", icon: <UserRound size={18} />, count: state.characters.length },
@@ -2405,7 +2516,7 @@ function QuickPanelModal({
   ];
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <section className="quick-panel-modal" onClick={(event) => event.stopPropagation()}>
+      <section ref={dialogRef} className="quick-panel-modal" role="dialog" aria-modal="true" aria-label="功能面板" tabIndex={-1} onClick={(event) => event.stopPropagation()}>
         <header>
           <div>
             <ListTree size={18} />
@@ -2482,6 +2593,7 @@ function StoryCenterModal({
   onTaskCreated: (task: BackgroundTask) => void;
   onStatus: (message: string) => void;
 }) {
+  const dialogRef = useDialogFocus(onClose);
   const [tab, setTab] = useState<StoryCenterTab>(initialTab);
   const [overview, setOverview] = useState<StoryOverview | null>(null);
   const [board, setBoard] = useState<ChapterPreparationBoard | null>(null);
@@ -2912,7 +3024,7 @@ function StoryCenterModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <section className="story-center-modal" onClick={(event) => event.stopPropagation()}>
+      <section ref={dialogRef} className="story-center-modal" role="dialog" aria-modal="true" aria-label="创作状态" tabIndex={-1} onClick={(event) => event.stopPropagation()}>
         <header className="story-center-header">
           <div><Activity size={18} /><strong>创作状态</strong></div>
           <div className="story-center-summary">
@@ -3122,6 +3234,7 @@ function TaskCenterDrawer({
   onOpenStoryCenter: () => void;
   onStatus: (message: string) => void;
 }) {
+  const dialogRef = useDialogFocus(onClose);
   const activeCount = tasks.filter((task) => ["等待中", "运行中", "正在停止", "已暂停"].includes(task.status)).length;
   const [operations, setOperations] = useState<OperationJournalItem[]>([]);
 
@@ -3174,7 +3287,7 @@ function TaskCenterDrawer({
 
   return (
     <div className="task-drawer-backdrop" onClick={onClose}>
-      <aside className="task-center-drawer" onClick={(event) => event.stopPropagation()}>
+      <aside ref={dialogRef} className="task-center-drawer" role="dialog" aria-modal="true" aria-label="后台任务" tabIndex={-1} onClick={(event) => event.stopPropagation()}>
         <header><div><ListChecks size={18} /><strong>后台任务</strong><span>{activeCount ? `${activeCount} 个进行中或暂停` : "当前空闲"}</span></div><div><button onClick={() => void clearTaskHistory()} disabled={!tasks.some((task) => !["等待中", "运行中", "正在停止", "已暂停"].includes(task.status))}>清理记录</button><button onClick={onClose} title="关闭"><X size={17} /></button></div></header>
         <details className="operation-history">
           <summary>项目操作记录（{operations.length}）</summary>
@@ -4250,6 +4363,7 @@ function ChatPanel({
   onQuick,
   onStatus,
   expanded,
+  chatOpenRequest,
   onToggleExpanded,
   onOpenStoryCenter,
 }: {
@@ -4274,6 +4388,7 @@ function ChatPanel({
   onQuick: (question: string) => void;
   onStatus: (message: string) => void;
   expanded: boolean;
+  chatOpenRequest: number;
   onToggleExpanded: () => void;
   onOpenStoryCenter: () => void;
 }) {
@@ -4286,6 +4401,10 @@ function ChatPanel({
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages]);
+
+  useEffect(() => {
+    if (chatOpenRequest > 0) setAssistantTab("chat");
+  }, [chatOpenRequest]);
 
   function submit() {
     const value = input.trim();
@@ -6403,6 +6522,7 @@ function SettingsModal({
   onClose: () => void;
   onSave: (state: AppState) => void;
 }) {
+  const dialogRef = useDialogFocus(onClose);
   const [draft, setDraft] = useState(state.config);
   const [saving, setSaving] = useState(false);
   const [errorText, setErrorText] = useState("");
@@ -6489,7 +6609,7 @@ function SettingsModal({
 
   return (
     <div className="modal-backdrop">
-      <section className="settings-modal">
+      <section ref={dialogRef} className="settings-modal" role="dialog" aria-modal="true" aria-label="设置" tabIndex={-1}>
         <header>
           <div>
             <Settings size={20} />
@@ -6556,7 +6676,7 @@ function SettingsModal({
             />
           </label>
           <label>
-            最大输出字数
+            最大输出 Token 数
             <input
               type="number"
               min="1"
