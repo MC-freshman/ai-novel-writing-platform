@@ -836,6 +836,18 @@ async function getBoard(projectPath, chapterId) {
   return readJson(getBoardPath(projectPath, chapterId), null);
 }
 
+async function listBoards(projectPath) {
+  await ensureStoryState(projectPath);
+  const entries = await fs.readdir(getBoardsDir(projectPath)).catch(() => []);
+  const boards = [];
+  for (const entry of entries) {
+    if (!entry.endsWith(".json")) continue;
+    const board = await readJson(path.join(getBoardsDir(projectPath), entry), null);
+    if (board?.id) boards.push(board);
+  }
+  return boards;
+}
+
 async function saveBoard(projectPath, board) {
   if (!board?.chapterId) throw new Error("筹备板缺少来源章节。");
   const items = (Array.isArray(board.items) ? board.items : []).slice(0, 80).map((item, index) => ({
@@ -918,6 +930,7 @@ module.exports = {
   getAgentContext,
   getBoard,
   getStoryOverview,
+  listBoards,
   normalizeAiChapterAnalysis,
   removeChapterLedger,
   saveBoard,

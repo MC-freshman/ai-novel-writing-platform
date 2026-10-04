@@ -57,6 +57,7 @@ declare global {
         type: "phase" | "retrieval" | "chunk" | "done" | "error";
         text?: string;
         phase?: string;
+        stopped?: boolean;
         streamedChars?: number;
         retrieval?: RetrievalDiagnostics;
         error?: string;
@@ -139,6 +140,7 @@ declare global {
       createForeshadow: (payload: { chapterId: string; title: string; description: string; plannedPayoff?: string; userNote?: string }) => Promise<ForeshadowItem>;
       deleteForeshadow: (foreshadowId: string) => Promise<{ removed: boolean; foreshadowId: string }>;
       getChapterBoard: (chapterId: string) => Promise<{ board: ChapterPreparationBoard | null }>;
+      listChapterBoards: () => Promise<{ boards: ChapterPreparationBoard[] }>;
       generateChapterBoard: (payload: { chapterId: string }) => Promise<{ board: ChapterPreparationBoard }>;
       saveChapterBoard: (payload: { board: ChapterPreparationBoard }) => Promise<{ board: ChapterPreparationBoard }>;
       getCreativeWorkspace: () => Promise<CreativeWorkspaceState>;
@@ -192,6 +194,7 @@ declare global {
       deleteChapter: (chapterId: string) => Promise<AppState>;
       reorderChapters: (chapterIds: string[]) => Promise<{ chapters: AppState["chapters"] }>;
       moveChapterToVolume: (payload: { chapterId: string; volume: string; beforeChapterId?: string }) => Promise<AppState>;
+      setChapterProgress: (payload: { updates: Array<{ chapterId: string; status: string | null; note?: string; hidden?: boolean }>; selectedChapterId?: string }) => Promise<AppState>;
       listChapterVersions: (chapterId: string) => Promise<{ versions: ChapterVersion[] }>;
       compareChapterVersion: (payload: { chapterId: string; versionId: string }) => Promise<ChapterVersionCompare>;
       restoreChapterVersion: (payload: { chapterId: string; versionId: string }) => Promise<{ state: AppState; restoredVersion: ChapterVersion }>;

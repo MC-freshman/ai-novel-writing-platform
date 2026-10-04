@@ -119,6 +119,8 @@ export interface NovelConfig {
   chapters: Chapter[];
 }
 
+export type ChapterProgressStatus = "计划中" | "写作中" | "已完成" | "暂缓";
+
 export interface Chapter {
   id: string;
   title: string;
@@ -126,6 +128,9 @@ export interface Chapter {
   order: number;
   fileName: string;
   wordCount: number;
+  progressStatus?: ChapterProgressStatus;
+  progressNote?: string;
+  progressHidden?: boolean;
   contentRevision?: string;
   importedFrom?: string;
   importId?: string;
@@ -168,6 +173,7 @@ export interface WorldDoc {
 export interface VectorStats {
   chunks: number;
   updatedAt: string;
+  embeddingFallback?: { active: boolean; message: string; at: string };
 }
 
 export interface AppState {

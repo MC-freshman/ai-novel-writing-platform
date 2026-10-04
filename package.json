@@ -1,6 +1,6 @@
 {
   "name": "ai-novel-writing-platform",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "private": true,
   "description": "本地 AI 小说创作平台，支持 Markdown 写作、本地知识库和 RAG 对话。",
   "engines": {
@@ -22,7 +22,8 @@
     "test:ui-visual": "node scripts/capture-ui-regression.cjs",
     "scan:privacy": "node scripts/scan-release-privacy.cjs",
     "preview": "vite preview --host 127.0.0.1",
-    "dist": "npm run build && npm run scan:privacy && electron-builder --win nsis portable"
+    "dist": "npm run build && npm run scan:privacy && electron-builder --win nsis portable",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@tiptap/extension-image": "^3.31.3",
@@ -49,6 +50,7 @@
     "image-size": "^2.0.2"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/adm-zip": "^0.5.7",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.17",
@@ -58,7 +60,11 @@
     "cross-env": "^7.0.3",
     "electron": "^44.4.1",
     "electron-builder": "^26.15.3",
+    "eslint": "^10.12.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.13.0",
     "typescript": "^5.7.2",
+    "typescript-eslint": "^8.71.0",
     "vite": "^6.0.5",
     "wait-on": "^8.0.1"
   },

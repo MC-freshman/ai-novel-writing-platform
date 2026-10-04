@@ -307,6 +307,60 @@ async function main() {
     if (audit.result?.value?.width > audit.result?.value?.viewport + 2) throw new Error("界面出现横向溢出。");
     if (audit.result?.value?.knowledgeOverflow?.length) throw new Error(`知识库内部出现横向溢出：${JSON.stringify(audit.result.value.knowledgeOverflow)}`);
 
+    const openedAnalysisProgress = await cdp.call("Runtime.evaluate", {
+      expression: `(() => {
+        const viewButton = [...document.querySelectorAll('.pane-tabs button')].find((item) => item.textContent.includes('分析'));
+        if (!viewButton) return { ok: false, reason: 'missing-view-button' };
+        viewButton.click();
+        return { ok: true };
+      })()`,
+      returnByValue: true,
+    });
+    if (!openedAnalysisProgress.result?.value?.ok) throw new Error("没有找到分析页签入口。");
+    await wait(900);
+    const clickedProgressTab = await cdp.call("Runtime.evaluate", {
+      expression: `(() => {
+        const tabButton = [...document.querySelectorAll('.analysis-tabs button')].find((item) => item.textContent.includes('进度'));
+        if (!tabButton) return { ok: false, reason: 'missing-progress-tab' };
+        tabButton.click();
+        return { ok: true };
+      })()`,
+      returnByValue: true,
+    });
+    if (!clickedProgressTab.result?.value?.ok) throw new Error("没有找到进度页签。");
+    await wait(900);
+    await capture(cdp, "ui-progress-grid.png");
+    const progressAudit = await cdp.call("Runtime.evaluate", {
+      expression: `(() => {
+        const board = document.querySelector('.progress-board');
+        if (!board) return { missing: true };
+        return {
+          missing: false,
+          volumes: board.querySelectorAll('.progress-volume').length,
+          cells: board.querySelectorAll('.progress-cell').length,
+          pills: board.querySelectorAll('.progress-pill').length,
+          width: document.documentElement.scrollWidth,
+          viewport: window.innerWidth,
+        };
+      })()`,
+      returnByValue: true,
+    });
+    if (progressAudit.result?.value?.missing) throw new Error("进度表没有正常显示。");
+    if (!progressAudit.result?.value?.cells) throw new Error("进度表没有渲染出章节格子。");
+    if (progressAudit.result?.value?.width > progressAudit.result?.value?.viewport + 2) throw new Error("进度表出现横向溢出。");
+
+    const backToChapters = await cdp.call("Runtime.evaluate", {
+      expression: `(() => {
+        const viewButton = [...document.querySelectorAll('.pane-tabs button')].find((item) => item.textContent.includes('章节'));
+        if (!viewButton) return false;
+        viewButton.click();
+        return true;
+      })()`,
+      returnByValue: true,
+    });
+    if (!backToChapters.result?.value) throw new Error("无法从进度页返回章节视图。");
+    await wait(600);
+
     const openedStoryCenter = await cdp.call("Runtime.evaluate", {
       expression: `(() => { const button = document.querySelector('button[title="打开创作状态"]'); if (!button) return false; button.click(); return true; })()`,
       returnByValue: true,

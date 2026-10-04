@@ -6,7 +6,8 @@ const APP_PATH = path.join(WORKSPACE, "src", "App.tsx");
 const PRELOAD_PATH = path.join(WORKSPACE, "electron", "preload.cjs");
 const MAIN_PATH = path.join(WORKSPACE, "electron", "main.cjs");
 const RUN_ID = new Date().toISOString().replace(/[:.]/g, "-");
-const REPORT_PATH = path.join(WORKSPACE, `UI按钮与功能入口审计报告_${RUN_ID}.md`);
+const REPORT_DIR = path.join(WORKSPACE, ".test-runs", `ui_button_audit_${RUN_ID}`);
+const REPORT_PATH = path.join(REPORT_DIR, "UI按钮与功能入口审计报告.md");
 
 const appSource = fs.readFileSync(APP_PATH, "utf8");
 const preloadSource = fs.readFileSync(PRELOAD_PATH, "utf8");
@@ -256,6 +257,7 @@ function writeReport() {
       lines.push("");
     }
   }
+  fs.mkdirSync(REPORT_DIR, { recursive: true });
   fs.writeFileSync(REPORT_PATH, `${lines.join("\n")}\n`, "utf8");
   return { reportPath: REPORT_PATH, counts };
 }

@@ -32,6 +32,7 @@ import {
   ListTree,
   ListChecks,
   Lock,
+  LayoutGrid,
   Maximize2,
   Minimize2,
   MessageSquarePlus,
@@ -53,6 +54,7 @@ import {
   Sun,
   Table2,
   Trash2,
+  TriangleAlert,
   Unlock,
   Underline as UnderlineIcon,
   Undo2,
@@ -124,6 +126,7 @@ import type {
   OperationJournalItem,
 } from "./types";
 import { CreativeWorkspace, type CreativeWorkspaceTab } from "./components/CreativeWorkspace";
+import { ChapterProgressStrip, ProgressGrid } from "./components/ProgressBoard";
 
 const PROVIDER_DEFAULTS: Record<Provider, { baseUrl: string; model: string; label: string }> = {
   deepseek: { label: "DeepSeek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat" },
@@ -152,7 +155,7 @@ interface EditorScrollAnchor {
   quote?: string;
 }
 const DEFAULT_CATEGORY_LABEL = "未分类";
-type AnalysisTab = "search" | "timeline" | "relations" | "consistency" | "versions" | "export";
+type AnalysisTab = "progress" | "search" | "timeline" | "relations" | "consistency" | "versions" | "export";
 
 const RETRIEVAL_MODE_OPTIONS: Array<{ value: RetrievalMode; label: string }> = [
   { value: "auto", label: "自动判断" },
@@ -768,7 +771,7 @@ export default function App() {
   const [chatRetrievalMode, setChatRetrievalMode] = useState<RetrievalMode>("auto");
   const [chatLoaded, setChatLoaded] = useState(false);
   const [activeAiRequestId, setActiveAiRequestId] = useState("");
-  const [aiProgress, setAiProgress] = useState<{ phase: string; streamedChars: number; retrieval?: RetrievalDiagnostics } | null>(null);
+  const [aiProgress, setAiProgress] = useState<{ phase: string; stopped?: boolean; streamedChars: number; retrieval?: RetrievalDiagnostics } | null>(null);
   const [draggingChapterId, setDraggingChapterId] = useState<string | null>(null);
   const [importProgress, setImportProgress] = useState<ProgressState | null>(null);
   const [indexProgress, setIndexProgress] = useState<ProgressState | null>(null);
@@ -967,6 +970,7 @@ export default function App() {
       }
       setAiProgress((current) => ({
         phase: payload.phase || (payload.type === "chunk" ? "正在生成回答" : current?.phase || "处理中"),
+        stopped: payload.stopped ?? current?.stopped ?? false,
         streamedChars: payload.streamedChars ?? current?.streamedChars ?? 0,
         retrieval: payload.retrieval || current?.retrieval,
       }));
@@ -2260,6 +2264,7 @@ export default function App() {
                   />
                 )}
               </div>
+              {selectedChapter && <ChapterProgressStrip chapter={selectedChapter} onApplyState={applyAppState} onStatus={setStatus} />}
             </section>
           )}
 
@@ -4376,7 +4381,7 @@ function ChatPanel({
   retrievalMode: RetrievalMode;
   selectedText: string;
   generating: boolean;
-  progress: { phase: string; streamedChars: number; retrieval?: RetrievalDiagnostics } | null;
+  progress: { phase: string; stopped?: boolean; streamedChars: number; retrieval?: RetrievalDiagnostics } | null;
   onSend: (question: string, retrievalMode: RetrievalMode) => void;
   onRetryWithSources: (question: string, sourceIds: string[], retrievalMode: RetrievalMode) => void;
   onStop: () => void;
@@ -4538,7 +4543,7 @@ function ChatPanel({
 
           <div className="selected-note">{selectedText ? `已选中 ${selectedText.length} 字，可随问题发送。` : "选中正文后右键可向 AI 提问。"}</div>
 
-          {progress && (generating || progress.phase === "已停止，内容已保留") && (
+          {progress && (generating || progress.stopped) && (
             <details className="ai-progress-strip" open={generating}>
               <summary>
                 <span>{progress.phase}</span>
@@ -4553,6 +4558,13 @@ function ChatPanel({
                 </div>
               )}
             </details>
+          )}
+
+          {state.vectorStats?.embeddingFallback?.active && (
+            <div className="embedding-warning" title={state.vectorStats.embeddingFallback.message}>
+              <TriangleAlert size={14} />
+              <span>向量接口降级：嵌入请求失败，正在用本地哈希向量代替，检索质量会明显下降。请在“设置 → 模型接口”检查向量接口配置。</span>
+            </div>
           )}
 
           <div className="messages" ref={scrollRef}>
@@ -5677,6 +5689,10 @@ function AnalysisPanel({
   return (
     <section className="analysis-panel">
       <div className="analysis-tabs">
+        <button className={tab === "progress" ? "active" : ""} onClick={() => setTab("progress")}>
+          <LayoutGrid size={16} />
+          进度
+        </button>
         <button className={tab === "search" ? "active" : ""} onClick={() => setTab("search")}>
           <Search size={16} />
           全局搜索
@@ -5702,6 +5718,16 @@ function AnalysisPanel({
           导出/提取
         </button>
       </div>
+
+      {tab === "progress" && (
+        <ProgressGrid
+          state={state}
+          selectedChapterId={selectedChapter?.id || ""}
+          onSelectChapter={onSelectChapter}
+          onApplyState={onApplyState}
+          onStatus={onStatus}
+        />
+      )}
 
       {tab === "search" && (
         <div className="analysis-section">

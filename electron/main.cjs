@@ -2064,7 +2064,7 @@ async function saveChapterContent(projectPath, payload = {}) {
       chapter,
       config: configForRenderer(config),
       indexResult,
-      vectorStats: { chunks: indexResult.totalChunks, updatedAt: nowIso() },
+      vectorStats: { chunks: indexResult.totalChunks, updatedAt: nowIso(), embeddingFallback: { ...embeddingFallback } },
       revision: contentRevision(nextContent),
       storyStateWarning,
     };
@@ -2097,6 +2097,7 @@ async function buildAppState(projectPath, preferredChapterId = "") {
     vectorStats: {
       chunks: vectorStats.chunks,
       updatedAt: vectorStats.updatedAt,
+      embeddingFallback: { ...embeddingFallback },
     },
   };
 }
@@ -2175,13 +2176,22 @@ async function remoteEmbedding(text, apiConfig, options = {}) {
 async function getEmbedding(text, apiConfig, options = {}) {
   try {
     const remote = await remoteEmbedding(text, apiConfig, options);
-    if (remote) return { vector: remote, source: "api", identity: embeddingIdentity(apiConfig, "api"), warning: "" };
+    if (remote) {
+      embeddingFallback.active = false;
+      embeddingFallback.message = "";
+      return { vector: remote, source: "api", identity: embeddingIdentity(apiConfig, "api"), warning: "" };
+    }
   } catch (error) {
     if (options.signal?.aborted || error?.name === "AbortError") throw Object.assign(new Error("任务已停止"), { name: "AbortError" });
-    return { vector: localEmbedding(text), source: "local", identity: embeddingIdentity(apiConfig, "local"), warning: error.message };
+    embeddingFallback.active = true;
+    embeddingFallback.message = String(error.message || error).slice(0, 400);
+    embeddingFallback.at = nowIso();
+    return { vector: localEmbedding(text), source: "local", identity: embeddingIdentity(apiConfig, "local"), warning: embeddingFallback.message };
   }
   return { vector: localEmbedding(text), source: "local", identity: embeddingIdentity(apiConfig, "local"), warning: "" };
 }
+
+const embeddingFallback = { active: false, message: "", at: "" };
 
 function embeddingIdentity(apiConfig = {}, source = "local") {
   if (source !== "api") return "local-hash-v1";
@@ -6703,6 +6713,11 @@ function registerIpcHandlers() {
     return { board: await storyState.getBoard(projectPath, String(chapterId || "")) };
   });
 
+  ipcMain.handle("story:list-boards", async () => {
+    const projectPath = await ensureCurrentProject();
+    return { boards: await storyState.listBoards(projectPath) };
+  });
+
   ipcMain.handle("story:generate-board", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     const config = await loadConfig(projectPath);
@@ -7112,6 +7127,37 @@ function registerIpcHandlers() {
     }, (result) => ({ chapterId: result.selectedChapter?.id || "" }));
   });
 
+  ipcMain.handle("chapter:set-progress", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return withJournalOperation(projectPath, { type: "chapter-progress", title: "更新章节进度", recoverable: false, metadata: { count: Array.isArray(payload?.updates) ? payload.updates.length : 0 } }, async () => {
+      const config = await loadConfig(projectPath);
+      const allowed = ["计划中", "写作中", "已完成", "暂缓"];
+      const updates = Array.isArray(payload?.updates) ? payload.updates : [];
+      const touched = [];
+      for (const update of updates) {
+        const chapter = config.chapters.find((item) => item.id === String(update?.chapterId || ""));
+        if (!chapter) continue;
+        if (update.status === null || update.status === "") {
+          delete chapter.progressStatus;
+        } else if (allowed.includes(update.status)) {
+          chapter.progressStatus = update.status;
+        }
+        if (typeof update.note === "string") {
+          const note = update.note.trim();
+          if (note) chapter.progressNote = note;
+          else delete chapter.progressNote;
+        }
+        if (update.hidden === true) chapter.progressHidden = true;
+        else if (update.hidden === false) delete chapter.progressHidden;
+        chapter.updatedAt = nowIso();
+        touched.push(chapter.id);
+      }
+      if (!touched.length) throw new Error("没有找到要更新的文档。");
+      await saveConfig(projectPath, config);
+      return buildAppState(projectPath, String(payload?.selectedChapterId || touched[0] || ""));
+    });
+  });
+
   ipcMain.handle("character:save", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     const characters = await loadCharacters(projectPath);
@@ -7292,7 +7338,7 @@ function registerIpcHandlers() {
       });
       partialAnswer = answer;
       await saveStreamCheckpoint(requestController.signal.aborted ? "interrupted" : "completed").catch(() => null);
-      sendRendererEvent("ai:stream", { requestId, type: "done", phase: requestController.signal.aborted ? "已停止，内容已保留" : "生成完成", streamedChars });
+      sendRendererEvent("ai:stream", { requestId, type: "done", phase: requestController.signal.aborted ? "已停止，内容已保留" : "生成完成", stopped: Boolean(requestController.signal.aborted), streamedChars });
       return {
         answer,
         context: contextFromChunks(search.chunks),
