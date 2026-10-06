@@ -441,9 +441,24 @@ async function main() {
     if (!openedEdgeEditor.result?.value) throw new Error("关系网没有生成可编辑连线。");
     await wait(300);
     const relationScreenshot = await capture(cdp, "ui-relationship-edge-editor.png");
-    const relationAudit = await cdp.call("Runtime.evaluate", { expression: `(() => { const shell = document.querySelector('.relationship-graph-shell'); const editor = document.querySelector('.graph-edge-editor'); return { missing: !shell || !editor, shellWidth: shell?.clientWidth || 0, shellScrollWidth: shell?.scrollWidth || 0, editorWidth: editor?.clientWidth || 0, editorScrollWidth: editor?.scrollWidth || 0 }; })()`, returnByValue: true });
+    const relationAuditExpression = `(() => {
+      const shell = document.querySelector('.relationship-graph-shell');
+      const editor = document.querySelector('.graph-edge-editor');
+      const bounds = editor?.getBoundingClientRect();
+      const controlsOverflow = editor ? [...editor.querySelectorAll('input, select, button')].filter((item) => {
+        const rect = item.getBoundingClientRect();
+        return rect.left < bounds.left - 2 || rect.right > bounds.right + 2 || rect.bottom > bounds.bottom + 2;
+      }).map((item) => item.tagName + ':' + (item.title || item.textContent || item.type)) : [];
+      return { missing: !shell || !editor, shellWidth: shell?.clientWidth || 0, shellScrollWidth: shell?.scrollWidth || 0, editorWidth: editor?.clientWidth || 0, editorScrollWidth: editor?.scrollWidth || 0, controlsOverflow };
+    })()`;
+    const relationAudit = await cdp.call("Runtime.evaluate", { expression: relationAuditExpression, returnByValue: true });
     if (relationAudit.result?.value?.missing) throw new Error("关系边编辑器没有打开。");
-    if (relationAudit.result?.value?.shellScrollWidth > relationAudit.result?.value?.shellWidth + 2 || relationAudit.result?.value?.editorScrollWidth > relationAudit.result?.value?.editorWidth + 2) throw new Error("关系网或关系边编辑器出现横向溢出。");
+    if (relationAudit.result?.value?.shellScrollWidth > relationAudit.result?.value?.shellWidth + 2 || relationAudit.result?.value?.editorScrollWidth > relationAudit.result?.value?.editorWidth + 2 || relationAudit.result?.value?.controlsOverflow.length) throw new Error(`关系网或关系边编辑器出现横向溢出：${JSON.stringify(relationAudit.result?.value)}`);
+    await cdp.call("Runtime.evaluate", { expression: `document.querySelector('.relationship-graph-shell').style.maxWidth = '320px'`, returnByValue: true });
+    const narrowRelationScreenshot = await capture(cdp, "ui-relationship-edge-editor-narrow.png");
+    const narrowRelationAudit = await cdp.call("Runtime.evaluate", { expression: relationAuditExpression, returnByValue: true });
+    if (narrowRelationAudit.result?.value?.shellScrollWidth > narrowRelationAudit.result?.value?.shellWidth + 2 || narrowRelationAudit.result?.value?.editorScrollWidth > narrowRelationAudit.result?.value?.editorWidth + 2 || narrowRelationAudit.result?.value?.controlsOverflow.length) throw new Error(`320px 关系边编辑器出现横向溢出：${JSON.stringify(narrowRelationAudit.result?.value)}`);
+    await cdp.call("Runtime.evaluate", { expression: `document.querySelector('.relationship-graph-shell').style.maxWidth = ''`, returnByValue: true });
 
     await cdp.call("Runtime.evaluate", { expression: `document.querySelector('button[title="模型和项目设置"]')?.click()`, returnByValue: true });
     await wait(350);
@@ -482,7 +497,7 @@ async function main() {
     if (narrowAudit.result?.value?.bodyScrollWidth > narrowAudit.result?.value?.bodyWidth + 2) throw new Error("窄窗口弹窗内容出现横向溢出。");
     if (narrowAudit.result?.value?.rowActionsScrollWidth > narrowAudit.result?.value?.rowActionsWidth + 2) throw new Error("窄窗口事实操作按钮出现裁切。");
     await cdp.call("Emulation.clearDeviceMetricsOverride");
-    const report = { mainScreenshot, aiChatRecoveryScreenshot, inlineReviewScreenshot, advisorScreenshot, knowledgeScreenshot, storyScreenshot, workspaceScreenshot, networkScreenshot, snapshotScreenshot, relationScreenshot, settingsScreenshot, narrowStoryScreenshot, audit: audit.result?.value, inlineReviewAudit: inlineReviewAudit.result?.value, advisorAudit: advisorAudit.result?.value, storyAudit: storyAudit.result?.value, workspaceAudit: workspaceAudit.result?.value, networkAudit: networkAudit.result?.value, snapshotAudit: snapshotAudit.result?.value, relationAudit: relationAudit.result?.value, settingsAudit: settingsAudit.result?.value, narrowAudit: narrowAudit.result?.value };
+    const report = { mainScreenshot, aiChatRecoveryScreenshot, inlineReviewScreenshot, advisorScreenshot, knowledgeScreenshot, storyScreenshot, workspaceScreenshot, networkScreenshot, snapshotScreenshot, relationScreenshot, narrowRelationScreenshot, settingsScreenshot, narrowStoryScreenshot, audit: audit.result?.value, inlineReviewAudit: inlineReviewAudit.result?.value, advisorAudit: advisorAudit.result?.value, storyAudit: storyAudit.result?.value, workspaceAudit: workspaceAudit.result?.value, networkAudit: networkAudit.result?.value, snapshotAudit: snapshotAudit.result?.value, relationAudit: relationAudit.result?.value, narrowRelationAudit: narrowRelationAudit.result?.value, settingsAudit: settingsAudit.result?.value, narrowAudit: narrowAudit.result?.value };
     report.status = "pass";
     report.reportPath = path.join(runDirectory, "visual-report.json");
     await fs.writeFile(report.reportPath, JSON.stringify(report, null, 2));

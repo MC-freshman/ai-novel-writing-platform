@@ -2364,8 +2364,8 @@ body.resizing {
   left: 10px;
   bottom: 10px;
   width: min(620px, calc(100% - 20px));
-  display: grid;
-  grid-template-columns: minmax(80px, 1fr) 34px minmax(92px, 110px) auto 30px;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   padding: 8px;
@@ -2376,7 +2376,8 @@ body.resizing {
 }
 
 .graph-edge-editor strong {
-  grid-column: 1 / -1;
+  flex: 1 0 100%;
+  min-width: 0;
   overflow: hidden;
   font-size: 11px;
   text-overflow: ellipsis;
@@ -2388,6 +2389,16 @@ body.resizing {
 .graph-edge-editor button {
   min-width: 0;
   min-height: 28px;
+  max-width: 100%;
+}
+
+.graph-edge-editor input:not([type="color"]) {
+  flex: 1 1 120px;
+  width: 120px;
+}
+
+.graph-edge-editor select {
+  width: 110px;
 }
 
 .graph-edge-editor button {

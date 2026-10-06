@@ -25,3 +25,5 @@ jobs:
         with:
           name: regression-evidence
           path: .test-runs/
+          include-hidden-files: true
+          if-no-files-found: error
