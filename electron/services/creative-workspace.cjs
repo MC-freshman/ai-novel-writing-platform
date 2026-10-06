@@ -1,5 +1,5 @@
 const path = require("node:path");
-const { ensureDir, readJson, stableId, writeJsonAtomic } = require("./project-storage.cjs");
+const { ensureDir, readJson, stableId, writeJsonAtomic, withProjectTransaction } = require("./project-storage.cjs");
 
 const WORKSPACE_VERSION = 1;
 const COLLECTION_LIMITS = {
@@ -13,7 +13,6 @@ const COLLECTION_LIMITS = {
   agentRuns: 80,
   statisticsHistory: 40,
 };
-const writeQueues = new Map();
 
 function nowIso() {
   return new Date().toISOString();
@@ -189,21 +188,13 @@ async function loadWorkspace(projectPath) {
 }
 
 async function mutate(projectPath, mutator) {
-  const key = path.resolve(projectPath);
-  const previous = writeQueues.get(key) || Promise.resolve();
-  const next = previous.catch(() => null).then(async () => {
+  return withProjectTransaction(projectPath, async () => {
     const state = await loadWorkspace(projectPath);
     const result = await mutator(state);
     state.updatedAt = nowIso();
     await writeJsonAtomic(workspacePath(projectPath), state);
     return result === undefined ? state : result;
   });
-  writeQueues.set(key, next);
-  try {
-    return await next;
-  } finally {
-    if (writeQueues.get(key) === next) writeQueues.delete(key);
-  }
 }
 
 async function upsertItem(projectPath, collection, payload) {
@@ -377,7 +368,7 @@ async function mergeImportedWorkspace(projectPath, imported = {}, chapterIdMap =
   });
 }
 
-module.exports = {
+const projectOperations = {
   COLLECTION_LIMITS,
   WORKSPACE_VERSION,
   deleteItem,
@@ -392,3 +383,8 @@ module.exports = {
   reorderScenes,
   upsertItem,
 };
+
+module.exports = { ...projectOperations };
+for (const name of ["deleteItem","ensureWorkspace","generateArcs","loadWorkspace","mergeImportedWorkspace","rebuildCausality","removeChapterReferences","reorderScenes","upsertItem"]) {
+  module.exports[name] = (projectPath, ...args) => withProjectTransaction(projectPath, () => projectOperations[name](projectPath, ...args));
+}

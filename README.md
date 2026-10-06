@@ -8,7 +8,9 @@
 
 - [AI小说创作平台 Releases](https://github.com/MC-freshman/ai-novel-writing-platform/releases)
 
-下载发布压缩包后解压，双击 `打开AI小说创作平台_新版.bat`，或直接运行 `release/AI小说创作平台 0.3.3.exe`。
+Windows 64 位用户可下载 `AI-Novel-Writing-Platform-Setup-0.3.4-x64.exe` 安装版，按向导安装；也可下载 `AI-Novel-Writing-Platform-Portable-0.3.4-x64.exe` 便携版，直接运行。
+
+本地源码目录的 `打开AI小说创作平台_新版.bat` 指向 `release/` 中的 0.3.4 便携版。完整修复列表见[0.3.4 更新日志](更新日志_0.3.4.md)与[方案 P 表](方案P表.md)。升级时沿用原有小说项目，项目数据保存在独立目录。
 
 > 当前 Windows 可执行文件未做代码签名，首次运行时系统可能出现安全提醒。请只从本仓库 Release 页面下载。
 
@@ -85,7 +87,7 @@ DeepSeek 示例：
 ## 开发运行
 
 ```powershell
-npm install
+npm ci
 npm run start
 ```
 
@@ -101,7 +103,9 @@ npm run dist
 
 ```powershell
 npm run test:regression
+npm run test:ui-plan
 npm run test:ui-visual
+npm run test:save-performance
 npm run test:long-project
 ```
 

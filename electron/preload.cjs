@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld("novelAPI", {
     return () => ipcRenderer.removeListener("app:before-close", handler);
   },
   confirmAppClose: () => ipcRenderer.send("app:confirm-close"),
+  cancelAppClose: () => ipcRenderer.send("app:cancel-close"),
   onMenuAction: (callback) => {
     const handler = (_event, action) => callback(action);
     ipcRenderer.on("menu:action", handler);
@@ -47,7 +48,7 @@ contextBridge.exposeInMainWorld("novelAPI", {
   cancelImport: () => ipcRenderer.invoke("document:cancel-import"),
   exportChapterDocx: (chapterId) => ipcRenderer.invoke("chapter:export-docx", chapterId),
   openOriginalDocument: (chapterId) => ipcRenderer.invoke("chapter:open-original", chapterId),
-  refreshChapterFromOriginal: (chapterId) => ipcRenderer.invoke("chapter:refresh-original", chapterId),
+  refreshChapterFromOriginal: (payload) => ipcRenderer.invoke("chapter:refresh-original", payload),
   saveProjectSettings: (payload) => ipcRenderer.invoke("project:save-settings", payload),
   exportBackup: () => ipcRenderer.invoke("project:export-backup"),
   exportProjectExchange: (payload) => ipcRenderer.invoke("project:export-exchange", payload),

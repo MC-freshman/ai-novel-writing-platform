@@ -16,6 +16,10 @@ export interface ApiConfig {
   sendFullText: boolean;
   credentialStorage?: "windows" | "legacy" | "none";
   credentialError?: string;
+  apiKeyConfigured?: boolean;
+  embeddingApiKeyConfigured?: boolean;
+  clearApiKey?: boolean;
+  clearEmbeddingApiKey?: boolean;
 }
 
 export type RetrievalMode = "auto" | "inventory" | "chapter" | "entity" | "book" | "current" | "normal";
@@ -174,6 +178,7 @@ export interface VectorStats {
   chunks: number;
   updatedAt: string;
   embeddingFallback?: { active: boolean; message: string; at: string };
+  recovery?: { status: "recovered" | "degraded"; message: string; backupPath: string } | null;
 }
 
 export interface AppState {
@@ -190,6 +195,8 @@ export interface AppState {
 
 export interface RecoveryDraft {
   version: number;
+  kind?: "chapter" | "character" | "world";
+  entityId?: string;
   chapterId: string;
   chapterTitle: string;
   volume: string;

@@ -15,6 +15,13 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
-      # test:regression 已包含构建检查、核心回归、Agent 平台回归、导出回归和 UI 按钮审计。
-      # 500 万字性能（test:long-project）与 UI 视觉回归（test:ui-visual）耗时较长，发布前手动执行。
       - run: npm run test:regression
+      - run: npm run lint
+      - run: npm run scan:privacy
+      - run: npm run test:ui-plan
+      - run: npm run test:ui-visual
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: regression-evidence
+          path: .test-runs/

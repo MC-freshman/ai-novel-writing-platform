@@ -1,6 +1,6 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
-const { ensureDir, readJson, safeFileSegment, sha256, stableId, writeJsonAtomic } = require("./project-storage.cjs");
+const { ensureDir, readJson, safeFileSegment, sha256, stableId, writeJsonAtomic, writeFileAtomic, withProjectWriteQueue } = require("./project-storage.cjs");
 
 const MANAGED_ROOTS = ["novel.config.json", "chapters", "characters", "worldbuilding", "materials", "analysis", "assets"];
 
@@ -202,53 +202,117 @@ async function compareSnapshot(projectPath, snapshotId) {
 async function restoreSnapshot(projectPath, snapshotId, options = {}) {
   const manifest = await getSnapshot(projectPath, snapshotId);
   if (!manifest) throw new Error("没有找到这个项目快照。");
-  const safetySnapshot = options.skipSafetySnapshot ? null : await createSnapshot(projectPath, { name: "恢复前自动快照", reason: `恢复 ${manifest.name} 前自动保存` });
+  if (!Array.isArray(manifest.entries)) throw new Error("项目快照清单损坏。");
   const selectedPaths = new Set((options.paths || []).map((item) => String(item).replace(/\\/g, "/")));
   const entries = selectedPaths.size ? manifest.entries.filter((item) => selectedPaths.has(item.path)) : manifest.entries;
+  if (selectedPaths.size && entries.length !== selectedPaths.size) throw new Error("选中的恢复文件不在这个快照中。");
   const projectRoot = path.resolve(projectPath);
-  const resolveManagedPath = (relativePath) => {
-    const targetPath = path.resolve(projectPath, relativePath);
-    const rootForComparison = process.platform === "win32" ? projectRoot.toLowerCase() : projectRoot;
-    const targetForComparison = process.platform === "win32" ? targetPath.toLowerCase() : targetPath;
-    if (targetForComparison !== rootForComparison && !targetForComparison.startsWith(`${rootForComparison}${path.sep}`)) {
-      throw new Error(`快照包含不安全路径：${relativePath}`);
+  const resolveManagedPath = async (relativePath) => {
+    const normalized = String(relativePath || "").replace(/\\/g, "/");
+    const parts = normalized.split("/");
+    const targetPath = path.resolve(projectRoot, normalized);
+    const relative = path.relative(projectRoot, targetPath);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative) ||
+        !MANAGED_ROOTS.includes(parts[0]) || parts.some((part) => !part || part === "." || part === "..") ||
+        (parts[0] === "novel.config.json" && parts.length !== 1) || normalized === "analysis/tasks.json") {
+      throw new Error("快照包含不安全路径：" + relativePath);
+    }
+    let cursor = projectRoot;
+    for (const part of parts) {
+      cursor = path.join(cursor, part);
+      const stat = await fs.lstat(cursor).catch((error) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      });
+      if (stat?.isSymbolicLink()) throw new Error("快照包含不安全路径（符号链接）：" + relativePath);
     }
     return targetPath;
   };
-  for (const entry of entries) resolveManagedPath(entry.path);
 
-  let removed = 0;
-  const removedPaths = [];
-  if (!selectedPaths.size) {
+  const identities = new Set();
+  const planned = [];
+  for (const entry of entries) {
+    const targetPath = await resolveManagedPath(entry.path);
+    const identity = process.platform === "win32" ? targetPath.toLowerCase() : targetPath;
+    if (identities.has(identity) || !/^[a-f0-9]{64}$/.test(entry.hash)) throw new Error("项目快照清单损坏：" + entry.path);
+    identities.add(identity);
+    planned.push({ entry, targetPath });
+  }
+  const snapshotRoot = path.resolve(getSnapshotRoot(projectPath));
+  const stagingRoot = await fs.mkdtemp(path.join(snapshotRoot, "restore-"));
+  let preserveStaging = false;
+  try {
+    // Stage and verify every requested object before touching any live manuscript.
+    for (let index = 0; index < planned.length; index += 1) {
+      const item = planned[index];
+      const objectPath = path.join(getObjectDir(projectPath), item.entry.hash.slice(0, 2), item.entry.hash);
+      const body = await fs.readFile(objectPath);
+      if (sha256(body) !== item.entry.hash) throw new Error("快照对象校验失败：" + item.entry.path);
+      item.stagedPath = path.join(stagingRoot, "next-" + index);
+      await writeFileAtomic(item.stagedPath, body);
+    }
+
     const snapshotPaths = new Set(manifest.entries.map((item) => String(item.path).replace(/\\/g, "/")));
-    const currentFiles = await managedProjectFiles(projectPath);
-    for (const relativePath of currentFiles) {
-      const normalizedPath = String(relativePath).replace(/\\/g, "/");
-      if (snapshotPaths.has(normalizedPath)) continue;
-      await fs.rm(resolveManagedPath(relativePath), { force: true });
-      removed += 1;
-      if (removedPaths.length < 200) removedPaths.push(normalizedPath);
+    const removed = selectedPaths.size ? [] : (await managedProjectFiles(projectPath))
+      .filter((relativePath) => !snapshotPaths.has(relativePath.replace(/\\/g, "/")));
+    const mutations = [...planned];
+    for (const relativePath of removed) mutations.push({ targetPath: await resolveManagedPath(relativePath), relativePath });
+
+    // Keep a before-image for every planned write/delete, including branch switches.
+    for (let index = 0; index < mutations.length; index += 1) {
+      const item = mutations[index];
+      const previous = await fs.readFile(item.targetPath).catch((error) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      });
+      item.previousPath = previous === null ? null : path.join(stagingRoot, "previous-" + index);
+      item.previousHash = previous === null ? null : sha256(previous);
+      if (previous !== null) await writeFileAtomic(item.previousPath, previous);
     }
-  }
-  for (let index = 0; index < entries.length; index += 1) {
-    const entry = entries[index];
-    const objectPath = path.join(getObjectDir(projectPath), entry.hash.slice(0, 2), entry.hash);
-    const body = await fs.readFile(objectPath);
-    if (sha256(body) !== entry.hash) throw new Error(`快照对象校验失败：${entry.path}`);
-    const targetPath = resolveManagedPath(entry.path);
-    await ensureDir(path.dirname(targetPath));
-    const temporary = `${targetPath}.${process.pid}.restore.tmp`;
-    await fs.writeFile(temporary, body);
+    const safetySnapshot = options.skipSafetySnapshot ? null : await createSnapshot(projectPath, { name: "恢复前自动快照", reason: "恢复 " + manifest.name + " 前自动保存" });
+    const changed = [];
     try {
-      await fs.rename(temporary, targetPath);
+      for (let index = 0; index < planned.length; index += 1) {
+        const item = planned[index];
+        changed.push(item);
+        await writeFileAtomic(item.targetPath, await fs.readFile(item.stagedPath));
+        if (typeof options.onProgress === "function") await options.onProgress({ current: index + 1, total: entries.length, detail: item.entry.path });
+      }
+      // Remove post-snapshot files only after all requested writes have succeeded.
+      for (const item of mutations.slice(planned.length)) {
+        changed.push(item);
+        await fs.rm(item.targetPath, { force: true });
+      }
     } catch (error) {
-      if (!["EEXIST", "EPERM"].includes(error?.code)) throw error;
-      await fs.copyFile(temporary, targetPath);
-      await fs.rm(temporary, { force: true });
+      const rollbackErrors = [];
+      for (const item of changed.reverse()) {
+        try {
+          const current = await fs.readFile(item.targetPath).catch((readError) => {
+            if (readError.code === "ENOENT") return null;
+            throw readError;
+          });
+          if (item.previousPath === null) {
+            if (current !== null) await fs.rm(item.targetPath, { force: true });
+          } else if (current === null || sha256(current) !== item.previousHash) {
+            await writeFileAtomic(item.targetPath, await fs.readFile(item.previousPath));
+          }
+        } catch (rollbackError) {
+          rollbackErrors.push(item.targetPath + "：" + rollbackError.message);
+        }
+      }
+      if (rollbackErrors.length) {
+        preserveStaging = true;
+        throw Object.assign(new Error("快照恢复失败，自动回滚未完成。恢复备份保留在 " + stagingRoot + "；" + rollbackErrors.join("；"), { cause: error }), { recoveryPath: stagingRoot, safetySnapshotId: safetySnapshot?.id || "" });
+      }
+      throw Object.assign(new Error("快照恢复失败，已自动回滚：" + error.message, { cause: error }), { rolledBack: true, safetySnapshotId: safetySnapshot?.id || "" });
     }
-    if (typeof options.onProgress === "function") await options.onProgress({ current: index + 1, total: entries.length, detail: entry.path });
+    return { restored: entries.length, removed: removed.length, removedPaths: removed.slice(0, 200), snapshot: manifest, safetySnapshot };
+  } finally {
+    const relative = path.relative(snapshotRoot, stagingRoot);
+    if (!preserveStaging && relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+      await fs.rm(stagingRoot, { recursive: true, force: true }).catch(() => null);
+    }
   }
-  return { restored: entries.length, removed, removedPaths, snapshot: manifest, safetySnapshot };
 }
 
 async function createBranch(projectPath, name, snapshotId = "") {
@@ -296,7 +360,10 @@ async function switchBranch(projectPath, branchId) {
   return { activeBranch: target, branches: data, restored: restored.restored };
 }
 
-module.exports = {
+const serialize = (operation) => (projectPath, ...args) =>
+  withProjectWriteQueue(projectPath, "project-snapshots", () => operation(projectPath, ...args));
+
+module.exports = Object.fromEntries(Object.entries({
   compareSnapshot,
   createBranch,
   createSnapshot,
@@ -308,4 +375,4 @@ module.exports = {
   renameSnapshot,
   restoreSnapshot,
   switchBranch,
-};
+}).map(([name, operation]) => [name, serialize(operation)]));

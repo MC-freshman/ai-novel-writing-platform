@@ -8,6 +8,8 @@ const npmExecutable = process.env.npm_execpath
 const checks = [
   ["构建检查", npmExecutable[0], [...npmExecutable[1], "run", "build"]],
   ["核心数据与 AI 回归", process.execPath, [path.join(__dirname, "test-core-regression.cjs")]],
+  ["方案 P 数据保护与并发回归", process.execPath, ["--test", "--test-concurrency=1", path.join(__dirname, "test-safety-regression.cjs")]],
+  ["完整 P 表保存、交换与安全回归", process.execPath, ["--test", "--test-concurrency=1", path.join(__dirname, "test-plan-regression.cjs")]],
   ["创作 Agent 与数据保护", process.execPath, [path.join(__dirname, "test-agent-platform.cjs")]],
   ["逐篇 Word 导出", process.execPath, [path.join(__dirname, "test-batch-docx-export.cjs")]],
   ["UI 按钮与入口", process.execPath, [path.join(__dirname, "run-ui-button-audit.cjs")]],

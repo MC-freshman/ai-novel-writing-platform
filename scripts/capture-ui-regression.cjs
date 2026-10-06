@@ -1,6 +1,7 @@
 const { spawn } = require("node:child_process");
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const { connectCdp } = require("./lib/cdp-client.cjs");
 
 process.env.NOVEL_PLATFORM_TEST = "1";
 const electronPath = require("electron");
@@ -35,34 +36,7 @@ async function waitForTarget() {
   throw new Error("等待 Electron 调试页面超时。");
 }
 
-function connectCdp(url) {
-  const socket = new WebSocket(url);
-  let nextId = 1;
-  const pending = new Map();
-  socket.onmessage = (event) => {
-    const message = JSON.parse(String(event.data));
-    if (!message.id || !pending.has(message.id)) return;
-    const { resolve, reject } = pending.get(message.id);
-    pending.delete(message.id);
-    if (message.error) reject(new Error(message.error.message));
-    else resolve(message.result || {});
-  };
-  const ready = new Promise((resolve, reject) => {
-    socket.onopen = resolve;
-    socket.onerror = () => reject(new Error("无法连接 Electron 调试页面。"));
-  });
-  return {
-    ready,
-    call(method, params = {}) {
-      const id = nextId++;
-      return new Promise((resolve, reject) => {
-        pending.set(id, { resolve, reject });
-        socket.send(JSON.stringify({ id, method, params }));
-      });
-    },
-    close: () => socket.close(),
-  };
-}
+
 
 async function capture(cdp, name) {
   const result = await cdp.call("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
@@ -184,6 +158,7 @@ async function main() {
     cwd: workspace,
     stdio: "ignore",
     env: childEnv,
+    windowsHide: true,
   });
   try {
     const target = await waitForTarget();
@@ -507,16 +482,21 @@ async function main() {
     if (narrowAudit.result?.value?.bodyScrollWidth > narrowAudit.result?.value?.bodyWidth + 2) throw new Error("窄窗口弹窗内容出现横向溢出。");
     if (narrowAudit.result?.value?.rowActionsScrollWidth > narrowAudit.result?.value?.rowActionsWidth + 2) throw new Error("窄窗口事实操作按钮出现裁切。");
     await cdp.call("Emulation.clearDeviceMetricsOverride");
+    const report = { mainScreenshot, aiChatRecoveryScreenshot, inlineReviewScreenshot, advisorScreenshot, knowledgeScreenshot, storyScreenshot, workspaceScreenshot, networkScreenshot, snapshotScreenshot, relationScreenshot, settingsScreenshot, narrowStoryScreenshot, audit: audit.result?.value, inlineReviewAudit: inlineReviewAudit.result?.value, advisorAudit: advisorAudit.result?.value, storyAudit: storyAudit.result?.value, workspaceAudit: workspaceAudit.result?.value, networkAudit: networkAudit.result?.value, snapshotAudit: snapshotAudit.result?.value, relationAudit: relationAudit.result?.value, settingsAudit: settingsAudit.result?.value, narrowAudit: narrowAudit.result?.value };
+    report.status = "pass";
+    report.reportPath = path.join(runDirectory, "visual-report.json");
+    await fs.writeFile(report.reportPath, JSON.stringify(report, null, 2));
+    console.log(JSON.stringify(report, null, 2));
     await cdp.call("Browser.close").catch(() => null);
-    await wait(500);
     cdp.close();
-    console.log(JSON.stringify({ mainScreenshot, aiChatRecoveryScreenshot, inlineReviewScreenshot, advisorScreenshot, knowledgeScreenshot, storyScreenshot, workspaceScreenshot, networkScreenshot, snapshotScreenshot, relationScreenshot, settingsScreenshot, narrowStoryScreenshot, audit: audit.result?.value, inlineReviewAudit: inlineReviewAudit.result?.value, advisorAudit: advisorAudit.result?.value, storyAudit: storyAudit.result?.value, workspaceAudit: workspaceAudit.result?.value, networkAudit: networkAudit.result?.value, snapshotAudit: snapshotAudit.result?.value, relationAudit: relationAudit.result?.value, settingsAudit: settingsAudit.result?.value, narrowAudit: narrowAudit.result?.value }, null, 2));
   } finally {
     child.kill();
   }
 }
 
-main().catch((error) => {
+main().catch(async (error) => {
+  await fs.mkdir(runDirectory, { recursive: true });
+  await fs.writeFile(path.join(runDirectory, "visual-report.json"), JSON.stringify({ status: "fail", error: error.message, runDirectory }, null, 2));
   console.error(error);
   process.exitCode = 1;
 });

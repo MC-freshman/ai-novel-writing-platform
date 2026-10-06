@@ -49,6 +49,7 @@ declare global {
     novelAPI: {
       onAppCloseRequested: (callback: () => void) => () => void;
       confirmAppClose: () => void;
+      cancelAppClose: () => void;
       onMenuAction: (callback: (action: string) => void) => () => void;
       onImportProgress: (callback: (progress: ProgressState) => void) => () => void;
       onIndexProgress: (callback: (progress: ProgressState) => void) => () => void;
@@ -89,7 +90,7 @@ declare global {
       cancelImport: () => Promise<{ ok: true }>;
       exportChapterDocx: (chapterId: string) => Promise<{ filePath?: string; canceled?: true }>;
       openOriginalDocument: (chapterId: string) => Promise<{ filePath?: string; error?: string }>;
-      refreshChapterFromOriginal: (chapterId: string) => Promise<{
+      refreshChapterFromOriginal: (payload: { chapterId: string; expectedRevision?: string }) => Promise<{
         state: AppState;
         backupPath?: string;
         tableCount: number;
@@ -190,6 +191,9 @@ declare global {
         vectorStats: AppState["vectorStats"];
         revision: string;
         storyStateWarning?: string;
+        committed?: boolean;
+        indexWarning?: string;
+        journalWarning?: string;
       }>;
       deleteChapter: (chapterId: string) => Promise<AppState>;
       reorderChapters: (chapterIds: string[]) => Promise<{ chapters: AppState["chapters"] }>;
@@ -197,7 +201,7 @@ declare global {
       setChapterProgress: (payload: { updates: Array<{ chapterId: string; status: string | null; note?: string; hidden?: boolean }>; selectedChapterId?: string }) => Promise<AppState>;
       listChapterVersions: (chapterId: string) => Promise<{ versions: ChapterVersion[] }>;
       compareChapterVersion: (payload: { chapterId: string; versionId: string }) => Promise<ChapterVersionCompare>;
-      restoreChapterVersion: (payload: { chapterId: string; versionId: string }) => Promise<{ state: AppState; restoredVersion: ChapterVersion }>;
+      restoreChapterVersion: (payload: { chapterId: string; versionId: string; expectedRevision?: string }) => Promise<{ state: AppState; restoredVersion: ChapterVersion }>;
       saveCharacter: (payload: Partial<CharacterCard>) => Promise<AppState>;
       deleteCharacter: (characterId: string) => Promise<AppState>;
       saveWorldDoc: (payload: Partial<WorldDoc>) => Promise<AppState>;

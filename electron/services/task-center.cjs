@@ -2,6 +2,17 @@ const path = require("node:path");
 const { ensureDir, readJson, stableId, writeJsonAtomic } = require("./project-storage.cjs");
 
 const ACTIVE_STATUSES = new Set(["等待中", "运行中", "正在停止", "已暂停"]);
+const MAX_HISTORY_TASKS = 120;
+const MAX_ACTIVE_TASKS = 500;
+
+function retainTasks(tasks) {
+  let historyCount = 0;
+  return tasks.filter((task) => {
+    if (ACTIVE_STATUSES.has(task.status) || task.status === "已中断") return true;
+    historyCount += 1;
+    return historyCount <= MAX_HISTORY_TASKS;
+  });
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -26,14 +37,25 @@ class PersistentTaskCenter {
     this.pausedTasks = new Set();
     this.running = false;
     this.initialized = false;
+    this.initializationPromise = null;
     this.writeQueue = Promise.resolve();
   }
 
   async init() {
     if (this.initialized) return this;
+    if (this.initializationPromise) return this.initializationPromise;
+    this.initializationPromise = this.initialize();
+    try {
+      return await this.initializationPromise;
+    } finally {
+      this.initializationPromise = null;
+    }
+  }
+
+  async initialize() {
     await ensureDir(path.dirname(this.filePath));
     const data = await readJson(this.filePath, { version: 1, tasks: [] });
-    this.tasks = (Array.isArray(data?.tasks) ? data.tasks : []).map((task) => {
+    this.tasks = retainTasks((Array.isArray(data?.tasks) ? data.tasks : []).map((task) => {
       if (!ACTIVE_STATUSES.has(task.status)) return compactTask(task);
       return compactTask({
         ...task,
@@ -42,14 +64,15 @@ class PersistentTaskCenter {
         finishedAt: task.finishedAt || nowIso(),
         canRetry: true,
       });
-    }).slice(0, 120);
-    this.initialized = true;
+    }));
     await this.persist();
+    this.initialized = true;
     return this;
   }
 
   async persist() {
-    const snapshot = { version: 1, updatedAt: nowIso(), tasks: this.tasks.map(compactTask).slice(0, 120) };
+    this.tasks = retainTasks(this.tasks);
+    const snapshot = { version: 1, updatedAt: nowIso(), tasks: this.tasks.map(compactTask) };
     this.writeQueue = this.writeQueue.catch(() => null).then(() => writeJsonAtomic(this.filePath, snapshot));
     return this.writeQueue;
   }
@@ -65,6 +88,9 @@ class PersistentTaskCenter {
 
   async enqueue(payload = {}) {
     await this.init();
+    if (this.tasks.filter((task) => ACTIVE_STATUSES.has(task.status)).length >= MAX_ACTIVE_TASKS) {
+      throw new Error(`后台任务队列已达到 ${MAX_ACTIVE_TASKS} 个活动任务，请先完成或停止部分任务。`);
+    }
     const createdAt = nowIso();
     const task = {
       id: stableId("task", `${createdAt}|${Math.random()}|${payload.type}|${payload.title}`),
@@ -91,7 +117,7 @@ class PersistentTaskCenter {
       canRetry: false,
       retryOf: String(payload.retryOf || ""),
     };
-    this.tasks = [task, ...this.tasks].slice(0, 120);
+    this.tasks = [task, ...this.tasks];
     await this.persist();
     this.emit(task);
     this.schedule();

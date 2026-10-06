@@ -21,9 +21,6 @@ import {
   FileText,
   FilePlus2,
   FolderOpen,
-  Heading1,
-  Heading2,
-  Heading3,
   IndentDecrease,
   IndentIncrease,
   Italic,
@@ -40,7 +37,6 @@ import {
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
-  Pilcrow,
   Plus,
   Quote,
   RefreshCcw,
@@ -112,7 +108,6 @@ import type {
   WorldMapEdge,
   WorldMapNode,
   BackgroundTask,
-  BackgroundTaskType,
   ChapterPreparationBoard,
   ForeshadowItem,
   ForeshadowStatus,
@@ -125,6 +120,10 @@ import type {
   RecoveryDraft,
   OperationJournalItem,
 } from "./types";
+import { CharacterManager } from "./components/CharacterManager";
+import { WorldManager } from "./components/WorldManager";
+import { groupByCategory, normalizeCategoryLabel, type CategoryGroup } from "./lib/categories";
+import type { PageSaveHandle } from "./hooks/useEntityDraft";
 import { CreativeWorkspace, type CreativeWorkspaceTab } from "./components/CreativeWorkspace";
 import { ChapterProgressStrip, ProgressGrid } from "./components/ProgressBoard";
 
@@ -154,7 +153,6 @@ interface EditorScrollAnchor {
   headingIndex?: number;
   quote?: string;
 }
-const DEFAULT_CATEGORY_LABEL = "未分类";
 type AnalysisTab = "progress" | "search" | "timeline" | "relations" | "consistency" | "versions" | "export";
 
 const RETRIEVAL_MODE_OPTIONS: Array<{ value: RetrievalMode; label: string }> = [
@@ -178,63 +176,15 @@ function clampNumber(value: number, min: number, max: number, fallback: number) 
   return Math.min(max, Math.max(min, value));
 }
 
-function normalizeCategoryLabel(value?: string) {
-  return (value || "").replace(/\s+/g, " ").trim().slice(0, 40) || DEFAULT_CATEGORY_LABEL;
-}
 
-type CategoryGroup<T> = {
-  key: string;
-  category: string;
-  items: T[];
-  children: Array<CategoryGroup<T>>;
-  count: number;
-};
 
-function splitCategoryPath(value?: string) {
-  const category = normalizeCategoryLabel(value);
-  const segments = category
-    .split(/[\\/|｜>＞]+/g)
-    .map((item) => item.trim())
-    .filter(Boolean);
-  return segments.length ? segments : [DEFAULT_CATEGORY_LABEL];
-}
 
-function sortCategoryGroups<T extends { name?: string; title?: string }>(groups: Array<CategoryGroup<T>>) {
-  groups.sort((a, b) => {
-    if (a.category === DEFAULT_CATEGORY_LABEL && b.category !== DEFAULT_CATEGORY_LABEL) return 1;
-    if (b.category === DEFAULT_CATEGORY_LABEL && a.category !== DEFAULT_CATEGORY_LABEL) return -1;
-    return a.category.localeCompare(b.category, "zh-CN");
-  });
-  groups.forEach((group) => {
-    group.items.sort((a, b) => (a.name || a.title || "").localeCompare(b.name || b.title || "", "zh-CN"));
-    sortCategoryGroups(group.children);
-    group.count = group.items.length + group.children.reduce((sum, child) => sum + child.count, 0);
-  });
-}
 
-function groupByCategory<T extends { category?: string; name?: string; title?: string }>(items: T[]) {
-  const roots: Array<CategoryGroup<T>> = [];
-  items.forEach((item) => {
-    const segments = splitCategoryPath(item.category);
-    let siblings = roots;
-    let current: CategoryGroup<T> | null = null;
-    const pathParts: string[] = [];
-    for (const segment of segments) {
-      pathParts.push(segment);
-      const key = pathParts.join("/");
-      let group = siblings.find((candidate) => candidate.key === key);
-      if (!group) {
-        group = { key, category: segment, items: [], children: [], count: 0 };
-        siblings.push(group);
-      }
-      current = group;
-      siblings = group.children;
-    }
-    if (current) current.items.push(item);
-  });
-  sortCategoryGroups(roots);
-  return roots;
-}
+
+
+
+
+
 
 function makeMessageId() {
   return `${Date.now().toString(36)}_${Math.random().toString(16).slice(2)}`;
@@ -795,6 +745,11 @@ export default function App() {
   const closingRef = useRef(false);
   const chatMessagesRef = useRef<ChatMessage[]>([]);
   const chapterDraftRef = useRef({ content: "", title: "", volume: "" });
+  const pageSaversRef = useRef(new Map<"character" | "world", PageSaveHandle>());
+  const registerPageSave = useCallback((kind: "character" | "world", handle: PageSaveHandle | null) => {
+    if (handle) pageSaversRef.current.set(kind, handle);
+    else pageSaversRef.current.delete(kind);
+  }, []);
 
   const handleRichEditorReady = useCallback((editor: Editor | null) => {
     richEditorRef.current = editor;
@@ -1056,7 +1011,7 @@ export default function App() {
           }
         }
         const mode = result.indexResult.chunks > 0 ? `索引 ${result.indexResult.chunks} 个片段` : "暂无可索引内容";
-        setStatus(draftUnchanged ? `已保存，${mode}` : "已保存此前版本，当前还有新改动待保存");
+        setStatus([result.indexWarning, result.journalWarning].filter(Boolean).join("；") || (draftUnchanged ? `已保存，${mode}` : "已保存此前版本，当前还有新改动待保存"));
         return stillViewingSameChapter && draftUnchanged;
       } catch (error) {
         setStatus(`保存失败：${error instanceof Error ? error.message : String(error)}`);
@@ -1070,10 +1025,24 @@ export default function App() {
     return operation;
   }, [chapterContent, chapterTitle, chapterVolume, selectedChapter]);
 
-  const saveBeforeLeavingChapter = useCallback(async () => {
+  const saveChapterIfDirty = useCallback(async () => {
     if (!dirty) return true;
     return saveChapter();
   }, [dirty, saveChapter]);
+
+  const saveBeforeLeavingChapter = useCallback(async () => {
+    const kind = view === "characters" ? "character" : view === "world" ? "world" : null;
+    if (kind && !(await pageSaversRef.current.get(kind)?.protect())) return false;
+    return saveChapterIfDirty();
+  }, [saveChapterIfDirty, view]);
+
+  const saveCurrentPage = useCallback(async () => {
+    const kind = view === "characters" ? "character" : view === "world" ? "world" : null;
+    if (kind) return (await pageSaversRef.current.get(kind)?.save()) ?? false;
+    if (view === "chapters") return saveChapter();
+    setStatus("当前页面的操作会即时保存。");
+    return true;
+  }, [saveChapter, view]);
 
   useEffect(() => {
     return window.novelAPI.onAppCloseRequested(() => {
@@ -1090,11 +1059,18 @@ export default function App() {
               content: draft.content,
               baseRevision: chapterRevisionRef.current,
               wordCount: countWords(draft.content),
-            }).catch(() => null);
+            });
           }
-          if (dirty) await saveChapter();
-        } finally {
+          if (dirty && !(await saveChapter())) { window.novelAPI.cancelAppClose(); return; }
+          for (const handle of pageSaversRef.current.values()) {
+            if (!(await handle.save())) { setStatus("当前页面保存失败或仍有新改动，窗口保持打开。"); window.novelAPI.cancelAppClose(); return; }
+          }
           window.novelAPI.confirmAppClose();
+        } catch (error) {
+          setStatus(`关闭前保护失败，窗口保持打开：${getErrorMessage(error)}`);
+          window.novelAPI.cancelAppClose();
+        } finally {
+          closingRef.current = false;
         }
       })();
     });
@@ -1102,7 +1078,7 @@ export default function App() {
 
   async function changeView(nextView: typeof view) {
     if (nextView === view) return true;
-    if (view === "chapters" && !(await saveBeforeLeavingChapter())) return false;
+    if (!(await saveBeforeLeavingChapter())) return false;
     setView(nextView);
     return true;
   }
@@ -1168,6 +1144,11 @@ export default function App() {
   );
 
   function restoreRecoveryDraft(draft: RecoveryDraft) {
+    if (draft.kind === "character" || draft.kind === "world") {
+      void changeView(draft.kind === "character" ? "characters" : "world");
+      setStatus("请在对应表单中查看已恢复的草稿");
+      return;
+    }
     setChapterContent(draft.content);
     setChapterTitle(draft.chapterTitle || chapterTitle);
     setChapterVolume(draft.volume || chapterVolume);
@@ -1186,7 +1167,7 @@ export default function App() {
     const handler = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
-        void saveChapter();
+        void saveCurrentPage();
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
@@ -1195,7 +1176,7 @@ export default function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [saveChapter]);
+  }, [saveCurrentPage]);
 
   const currentWords = useMemo(() => countWords(chapterContent), [chapterContent]);
   const paneWidths = useMemo(() => {
@@ -1514,7 +1495,7 @@ export default function App() {
     setSaving(true);
     setStatus("正在从 Word 原文恢复表格和富文档格式...");
     try {
-      const result = await window.novelAPI.refreshChapterFromOriginal(selectedChapter.id);
+      const result = await window.novelAPI.refreshChapterFromOriginal({ chapterId: selectedChapter.id, expectedRevision: chapterRevisionRef.current });
       applyAppState(result.state);
       setView("chapters");
       setPreview(false);
@@ -1574,7 +1555,6 @@ export default function App() {
     const startX = event.clientX;
     const initialLeft = leftWidth;
     const initialRight = rightWidth;
-    const workspaceWidth = workspaceRef.current?.getBoundingClientRect().width || window.innerWidth;
     const editorBody = (event.currentTarget.parentElement as HTMLElement | null)?.getBoundingClientRect();
     const initialPreview = previewWidth;
 
@@ -1919,27 +1899,31 @@ export default function App() {
   }
 
   async function saveCharacter(card: Partial<CharacterCard>) {
-    if (!(await saveBeforeLeavingChapter())) return;
+    if (!(await saveChapterIfDirty())) return null;
     try {
       const next = await window.novelAPI.saveCharacter(card);
       applyAppState(next);
       setView("characters");
       setStatus(`角色卡片已保存：${card.name || "未命名角色"}`);
+      return next.characters.find((item) => item.id === card.id) || next.characters.find((item) => item.name === (card.name || "未命名角色")) || null;
     } catch (error) {
       setStatus(`保存角色失败：${getErrorMessage(error)}`);
+      return null;
     }
   }
 
   async function deleteCharacter(characterId: string) {
-    if (!window.confirm("确定删除这个角色卡片吗？")) return;
-    if (!(await saveBeforeLeavingChapter())) return;
+    if (!window.confirm("确定删除这个角色卡片吗？")) return false;
+    if (!(await saveBeforeLeavingChapter())) return false;
     try {
       const next = await window.novelAPI.deleteCharacter(characterId);
       applyAppState(next);
       setView("characters");
       setStatus("角色卡片已删除");
+      return true;
     } catch (error) {
       setStatus(`删除角色失败：${getErrorMessage(error)}`);
+      return false;
     }
   }
 
@@ -1958,27 +1942,31 @@ export default function App() {
   }
 
   async function saveWorldDoc(doc: Partial<WorldDoc>) {
-    if (!(await saveBeforeLeavingChapter())) return;
+    if (!(await saveChapterIfDirty())) return null;
     try {
       const next = await window.novelAPI.saveWorldDoc(doc);
       applyAppState(next);
       setView("world");
       setStatus(`世界观条目已保存：${doc.title || "未命名设定"}`);
+      return next.worldDocs.find((item) => item.id === doc.id) || next.worldDocs.find((item) => item.title === (doc.title || "未命名设定")) || null;
     } catch (error) {
       setStatus(`保存世界观失败：${getErrorMessage(error)}`);
+      return null;
     }
   }
 
   async function deleteWorldDoc(docId: string) {
-    if (!window.confirm("确定删除这份世界观设定吗？")) return;
-    if (!(await saveBeforeLeavingChapter())) return;
+    if (!window.confirm("确定删除这份世界观设定吗？")) return false;
+    if (!(await saveBeforeLeavingChapter())) return false;
     try {
       const next = await window.novelAPI.deleteWorldDoc(docId);
       applyAppState(next);
       setView("world");
       setStatus("世界观条目已删除");
+      return true;
     } catch (error) {
       setStatus(`删除世界观失败：${getErrorMessage(error)}`);
+      return false;
     }
   }
 
@@ -1996,23 +1984,7 @@ export default function App() {
     }
   }
 
-  async function extractWorldCardsFromOutline() {
-    if (!window.confirm("将调用 AI 从大纲和正文中提取地点、势力、物品候选，提取后请在“分析 / 导出/提取”中勾选写入。继续吗？")) return;
-    if (!(await saveBeforeLeavingChapter())) return;
-    setStatus("正在从全书提取地点、势力、物品候选...");
-    try {
-      const result = await window.novelAPI.extractWorldCardsFromOutline({ scope: "book" });
-      await window.novelAPI.saveAnalysisState({
-        tab: "export",
-        extractScope: "book",
-        worldCandidates: result.candidates,
-      });
-      setView("analysis");
-      setStatus(`已提取 ${result.candidates.length} 个候选；请在分析页勾选后写入世界观`);
-    } catch (error) {
-      setStatus(`提取候选失败：${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
+
 
   useEffect(() => {
     if (!state) return undefined;
@@ -2023,7 +1995,7 @@ export default function App() {
       if (action === "exportChapterDocx") void exportChapterDocx();
       if (action === "exportBookDocx") void exportBookDocx({ includeOutline: true, includeMaterials: true });
       if (action === "exportBackup") void exportBackup();
-      if (action === "saveChapter") void saveChapter();
+      if (action === "saveChapter") void saveCurrentPage();
       if (action === "rebuildIndex") void rebuildIndex();
       if (action === "showSettings") void openSettings();
       if (action === "toggleFocus") setFocusMode((value) => !value);
@@ -2064,7 +2036,7 @@ export default function App() {
             <BookOpen size={16} />
             导出正文
           </button>
-          <button onClick={saveChapter} title="保存当前章节，快捷键 Ctrl+S">
+          <button onClick={() => void saveCurrentPage()} title="保存当前页面，快捷键 Ctrl+S">
             <Save size={16} />
             保存
           </button>
@@ -2074,6 +2046,7 @@ export default function App() {
               更多
             </summary>
             <div className="top-more-menu">
+              <span className="menu-group-label">项目与知识库</span>
               <button onClick={() => void changeView("knowledge")} title="整理文档在知识库中的归属">
                 <ListTree size={16} />
                 知识库整理
@@ -2090,6 +2063,10 @@ export default function App() {
                 <RefreshCcw size={16} />
                 重建索引
               </button>
+              <span className="menu-group-label">侧栏布局</span>
+              <button onClick={() => { setLeftWidth(240); setRightWidth(360); setAiExpanded(false); setFocusMode(false); setStatus("已切换写作布局"); }}>写作布局</button>
+              <button onClick={() => { setLeftWidth(320); setRightWidth(400); setAiExpanded(false); setFocusMode(false); setStatus("已切换资料布局"); }}>资料布局</button>
+              <button onClick={() => { setLeftWidth(220); setRightWidth(680); setAiExpanded(true); setFocusMode(false); setStatus("已切换对话布局"); }}>对话布局</button>
             </div>
           </details>
         </nav>
@@ -2120,7 +2097,7 @@ export default function App() {
         className={`workspace ${aiExpanded ? "ai-expanded" : ""}`}
         ref={workspaceRef}
         style={{
-          gridTemplateColumns: focusMode ? "minmax(520px, 1fr)" : `${paneWidths.left}px 6px minmax(${paneWidths.centerMinimum}px, 1fr) 6px ${paneWidths.right}px`,
+          gridTemplateColumns: focusMode ? "minmax(0, 1fr)" : `minmax(0, ${paneWidths.left}px) 6px minmax(${paneWidths.centerMinimum}px, 1fr) 6px minmax(0, ${paneWidths.right}px)`,
         }}
       >
         {!focusMode && (
@@ -2270,18 +2247,26 @@ export default function App() {
 
           {view === "characters" && (
             <CharacterManager
+              key={state.projectPath}
+              projectPath={state.projectPath}
+              recoveryEnabled={state.config.ui.recoveryEnabled !== false}
+              onRegisterSave={registerPageSave}
               cards={state.characters}
-              onSave={(card) => void saveCharacter(card)}
-              onDelete={(id) => void deleteCharacter(id)}
+              onSave={saveCharacter}
+              onDelete={deleteCharacter}
               onGenerate={() => void generateCharactersFromOutline()}
             />
           )}
 
           {view === "world" && (
             <WorldManager
+              key={state.projectPath}
+              projectPath={state.projectPath}
+              recoveryEnabled={state.config.ui.recoveryEnabled !== false}
+              onRegisterSave={registerPageSave}
               docs={state.worldDocs}
-              onSave={(doc) => void saveWorldDoc(doc)}
-              onDelete={(id) => void deleteWorldDoc(id)}
+              onSave={saveWorldDoc}
+              onDelete={deleteWorldDoc}
               onGenerate={() => void generateWorldFromOutline()}
             />
           )}
@@ -2339,11 +2324,12 @@ export default function App() {
       </main>
 
       <footer className="statusbar">
-        <span>{saving ? "保存中..." : dirty ? "有未保存修改" : "已保存"}</span>
+        <span>{view === "chapters" ? saving ? "保存中..." : dirty ? "有未保存修改" : "已保存" : view === "characters" ? "角色卡 · 保存状态见当前表单" : view === "world" ? "世界观 · 保存状态见当前表单" : "当前页操作即时保存"}</span>
         <span>当前章节：{currentWords.toLocaleString()} 字</span>
         <span>今日：{state.config.stats.todayWords.toLocaleString()} 字</span>
         <span>总字数：{state.config.stats.totalWords.toLocaleString()} 字</span>
         <span>知识库：{state.vectorStats.chunks} 片段</span>
+        {state.vectorStats.recovery && <span className="index-recovery-note" role="status" title={state.vectorStats.recovery.message}>{state.vectorStats.recovery.status === "degraded" ? "索引需重建" : "索引已恢复"}</span>}
         <span>模型：{state.config.api.chatModel || "未配置"}</span>
         <button className="task-status-button" onClick={() => setShowTaskCenter(true)} title="查看后台任务">
           <ListChecks size={13} />
@@ -2649,7 +2635,7 @@ function StoryCenterModal({
     } finally {
       if (requestId === overviewRequestRef.current) setBusy("");
     }
-  }, [chapterFilter, factStatus, foreshadowStatus, onStatus, query, state.projectPath, volumeFilter]);
+  }, [chapterFilter, factStatus, foreshadowStatus, onStatus, query, volumeFilter]);
 
   const loadBoard = useCallback(async () => {
     if (!selectedChapter?.id) return;
@@ -2661,7 +2647,7 @@ function StoryCenterModal({
     const result = await window.novelAPI.listSnapshots();
     setSnapshots(result.snapshots);
     setBranches(result.branches);
-  }, [state.projectPath]);
+  }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void loadOverview(), 180);
@@ -3517,78 +3503,67 @@ function RichEditorToolbar({ editor }: { editor: Editor | null }) {
         <option value="">章节导航</option>
         {headings.map((item) => <option key={`${item.pos}-${item.label}`} value={item.pos}>{item.label}</option>)}
       </select>
-      <button title="正文" className={headingValue === "paragraph" ? "active" : ""} onMouseDown={run(() => activeEditor.chain().focus().setParagraph().run())}>
-        <Pilcrow size={16} />
-      </button>
-      <button title="标题 1" className={activeEditor.isActive("heading", { level: 1 }) ? "active" : ""} onMouseDown={run(() => activeEditor.chain().focus().toggleHeading({ level: 1 }).run())}>
-        <Heading1 size={17} />
-      </button>
-      <button title="标题 2" className={activeEditor.isActive("heading", { level: 2 }) ? "active" : ""} onMouseDown={run(() => activeEditor.chain().focus().toggleHeading({ level: 2 }).run())}>
-        <Heading2 size={17} />
-      </button>
-      <button title="标题 3" className={activeEditor.isActive("heading", { level: 3 }) ? "active" : ""} onMouseDown={run(() => activeEditor.chain().focus().toggleHeading({ level: 3 }).run())}>
-        <Heading3 size={17} />
-      </button>
-      <span className="toolbar-divider" />
-      <button title="粗体" className={activeEditor.isActive("bold") ? "active" : ""} onMouseDown={run(() => activeEditor.chain().focus().toggleBold().run())}>
+      <button title="粗体" className={activeEditor.isActive("bold") ? "active" : ""} onClick={run(() => activeEditor.chain().focus().toggleBold().run())}>
         <Bold size={17} />
       </button>
-      <button title="斜体" className={activeEditor.isActive("italic") ? "active" : ""} onMouseDown={run(() => activeEditor.chain().focus().toggleItalic().run())}>
+      <button title="斜体" className={activeEditor.isActive("italic") ? "active" : ""} onClick={run(() => activeEditor.chain().focus().toggleItalic().run())}>
         <Italic size={17} />
       </button>
-      <button title="下划线" className={activeEditor.isActive("underline") ? "active" : ""} onMouseDown={run(() => activeEditor.chain().focus().toggleUnderline().run())}>
+      <button title="下划线" className={activeEditor.isActive("underline") ? "active" : ""} onClick={run(() => activeEditor.chain().focus().toggleUnderline().run())}>
         <UnderlineIcon size={17} />
       </button>
-      <button title="引用" className={activeEditor.isActive("blockquote") ? "active" : ""} onMouseDown={run(() => activeEditor.chain().focus().toggleBlockquote().run())}>
+      <details className="rich-toolbar-more"><summary onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); const details = event.currentTarget.parentElement as HTMLDetailsElement; details.open = !details.open; } }}>排版</summary><div aria-label="更多排版工具">
+      <button title="引用" className={activeEditor.isActive("blockquote") ? "active" : ""} onClick={run(() => activeEditor.chain().focus().toggleBlockquote().run())}>
         <Quote size={17} />
       </button>
       <span className="toolbar-divider" />
-      <button title="项目列表" className={activeEditor.isActive("bulletList") ? "active" : ""} onMouseDown={run(() => activeEditor.chain().focus().toggleBulletList().run())}>
+      <button title="项目列表" className={activeEditor.isActive("bulletList") ? "active" : ""} onClick={run(() => activeEditor.chain().focus().toggleBulletList().run())}>
         <List size={17} />
       </button>
-      <button title="编号列表" className={activeEditor.isActive("orderedList") ? "active" : ""} onMouseDown={run(() => activeEditor.chain().focus().toggleOrderedList().run())}>
+      <button title="编号列表" className={activeEditor.isActive("orderedList") ? "active" : ""} onClick={run(() => activeEditor.chain().focus().toggleOrderedList().run())}>
         <ListOrdered size={17} />
       </button>
-      <button title="插入场景分隔线" onMouseDown={run(() => activeEditor.chain().focus().setHorizontalRule().run())}>
+      <button title="插入场景分隔线" onClick={run(() => activeEditor.chain().focus().setHorizontalRule().run())}>
         <Minus size={17} />
       </button>
-      <button title="当前段落上移" onMouseDown={run(() => { moveCurrentTopLevelBlock(activeEditor, -1); })}>
+      <button title="当前段落上移" onClick={run(() => { moveCurrentTopLevelBlock(activeEditor, -1); })}>
         <ArrowUp size={17} />
       </button>
-      <button title="当前段落下移" onMouseDown={run(() => { moveCurrentTopLevelBlock(activeEditor, 1); })}>
+      <button title="当前段落下移" onClick={run(() => { moveCurrentTopLevelBlock(activeEditor, 1); })}>
         <ArrowDown size={17} />
       </button>
-      <button title="左对齐" className={activeEditor.isActive({ textAlign: "left" }) ? "active" : ""} onMouseDown={run(() => activeEditor.chain().focus().setTextAlign("left").run())}>
+      <button title="左对齐" className={activeEditor.isActive({ textAlign: "left" }) ? "active" : ""} onClick={run(() => activeEditor.chain().focus().setTextAlign("left").run())}>
         <AlignLeft size={17} />
       </button>
-      <button title="居中" className={activeEditor.isActive({ textAlign: "center" }) ? "active" : ""} onMouseDown={run(() => activeEditor.chain().focus().setTextAlign("center").run())}>
+      <button title="居中" className={activeEditor.isActive({ textAlign: "center" }) ? "active" : ""} onClick={run(() => activeEditor.chain().focus().setTextAlign("center").run())}>
         <AlignCenter size={17} />
       </button>
-      <button title="右对齐" className={activeEditor.isActive({ textAlign: "right" }) ? "active" : ""} onMouseDown={run(() => activeEditor.chain().focus().setTextAlign("right").run())}>
+      <button title="右对齐" className={activeEditor.isActive({ textAlign: "right" }) ? "active" : ""} onClick={run(() => activeEditor.chain().focus().setTextAlign("right").run())}>
         <AlignRight size={17} />
       </button>
       <span className="toolbar-divider" />
-      <button title="插入表格" onMouseDown={run(() => activeEditor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run())}>
+      <button title="插入表格" onClick={run(() => activeEditor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run())}>
         <Table2 size={17} />
       </button>
       {activeEditor.isActive("table") && (
         <>
-          <button title="增加一行" onMouseDown={run(() => activeEditor.chain().focus().addRowAfter().run())}>
+          <button title="增加一行" onClick={run(() => activeEditor.chain().focus().addRowAfter().run())}>
             行+
           </button>
-          <button title="增加一列" onMouseDown={run(() => activeEditor.chain().focus().addColumnAfter().run())}>
+          <button title="增加一列" onClick={run(() => activeEditor.chain().focus().addColumnAfter().run())}>
             列+
           </button>
-          <button title="删除表格" onMouseDown={run(() => activeEditor.chain().focus().deleteTable().run())}>
+          <button title="删除表格" onClick={run(() => activeEditor.chain().focus().deleteTable().run())}>
             删表
           </button>
         </>
       )}
+      </div></details>
       <span className="toolbar-divider" />
-      <button title="撤销" disabled={!activeEditor.can().chain().focus().undo().run()} onMouseDown={run(() => activeEditor.chain().focus().undo().run())}>
+      <button title="撤销" disabled={!activeEditor.can().chain().focus().undo().run()} onClick={run(() => activeEditor.chain().focus().undo().run())}>
         <Undo2 size={17} />
       </button>
-      <button title="重做" disabled={!activeEditor.can().chain().focus().redo().run()} onMouseDown={run(() => activeEditor.chain().focus().redo().run())}>
+      <button title="重做" disabled={!activeEditor.can().chain().focus().redo().run()} onClick={run(() => activeEditor.chain().focus().redo().run())}>
         <Redo2 size={17} />
       </button>
     </div>
@@ -3663,6 +3638,8 @@ function ChapterTree({
     () => chapters.flatMap((chapter) => buildOutlineTree((chapter.outline || []).slice(1), chapter.id).flatMap((node) => flattenOutlineKeys(node))),
     [chapters],
   );
+  const treeIdsRef = useRef({ chapterIds: allChapterIds, headingKeys: allHeadingKeys });
+  treeIdsRef.current = { chapterIds: allChapterIds, headingKeys: allHeadingKeys };
   const grouped = useMemo(() => {
     const map = new Map<string, Chapter[]>();
     for (const chapter of chapters) {
@@ -3674,6 +3651,7 @@ function ChapterTree({
 
   useEffect(() => {
     setCollapseStateLoaded(false);
+    const { chapterIds, headingKeys } = treeIdsRef.current;
     try {
       const saved = window.localStorage.getItem(collapseStorageKey);
       if (saved) {
@@ -3683,15 +3661,15 @@ function ChapterTree({
         setCollapsedHeadings(new Set(parsed.headings || []));
       } else {
         setCollapsedVolumes(new Set());
-        setCollapsedChapters(new Set(allChapterIds));
-        setCollapsedHeadings(new Set(allHeadingKeys));
+        setCollapsedChapters(new Set(chapterIds));
+        setCollapsedHeadings(new Set(headingKeys));
       }
-      previousChapterIdsRef.current = new Set(allChapterIds);
+      previousChapterIdsRef.current = new Set(chapterIds);
     } catch {
       setCollapsedVolumes(new Set());
-      setCollapsedChapters(new Set(allChapterIds));
-      setCollapsedHeadings(new Set(allHeadingKeys));
-      previousChapterIdsRef.current = new Set(allChapterIds);
+      setCollapsedChapters(new Set(chapterIds));
+      setCollapsedHeadings(new Set(headingKeys));
+      previousChapterIdsRef.current = new Set(chapterIds);
     } finally {
       setCollapseStateLoaded(true);
     }
@@ -4767,7 +4745,7 @@ function KnowledgeOrganizer({
         setMaintenance(diagnostics);
       })
       .catch((error) => onStatus(`读取知识库整理信息失败：${error instanceof Error ? error.message : String(error)}`));
-  }, [state.projectPath]);
+  }, [onStatus, state.projectPath]);
 
   async function checkKnowledge() {
     setChecking(true);
@@ -5328,7 +5306,7 @@ function AnalysisPanel({
     }
   }
 
-  async function loadVersions() {
+  const loadVersions = useCallback(async () => {
     if (!selectedChapterId) return;
     setBusy("versions");
     setVersionCompare(null);
@@ -5343,7 +5321,7 @@ function AnalysisPanel({
     } finally {
       setBusy("");
     }
-  }
+  }, [onStatus, selectedChapterId]);
 
   async function compareVersion() {
     if (!selectedChapterId || !selectedVersionId) return;
@@ -5365,7 +5343,7 @@ function AnalysisPanel({
     if (!window.confirm("恢复后，当前内容会先自动保存为一个历史版本。确认恢复所选版本吗？")) return;
     setBusy("restore-version");
     try {
-      const result = await window.novelAPI.restoreChapterVersion({ chapterId: selectedChapterId, versionId: selectedVersionId });
+      const result = await window.novelAPI.restoreChapterVersion({ chapterId: selectedChapterId, versionId: selectedVersionId, expectedRevision: state.chapterRevision });
       onApplyState(result.state);
       setVersionCompare(null);
       onStatus(`已恢复 ${formatDateTime(result.restoredVersion.createdAt)} 的版本，恢复前内容也已备份`);
@@ -5481,7 +5459,7 @@ function AnalysisPanel({
 
   useEffect(() => {
     if (tab === "versions" && selectedChapterId) void loadVersions();
-  }, [tab, selectedChapterId]);
+  }, [loadVersions, selectedChapterId, tab]);
 
   const graph = useMemo(() => {
     const width = 1240;
@@ -6211,331 +6189,9 @@ function ExperimentalTools({
   );
 }
 
-function CharacterManager({
-  cards,
-  onSave,
-  onDelete,
-  onGenerate,
-}: {
-  cards: CharacterCard[];
-  onSave: (card: Partial<CharacterCard>) => void;
-  onDelete: (id: string) => void;
-  onGenerate: () => void;
-}) {
-  const blankCard = { name: "", category: DEFAULT_CATEGORY_LABEL, appearance: "", personality: "", background: "", relationships: "", notes: "" };
-  const [active, setActive] = useState<Partial<CharacterCard>>(cards[0] || blankCard);
-  const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
-  const [draggingCardId, setDraggingCardId] = useState("");
-  const [dragOverCategory, setDragOverCategory] = useState("");
-  const [dragHint, setDragHint] = useState("");
-  const groupedCards = useMemo(() => groupByCategory(cards), [cards]);
 
-  useEffect(() => {
-    setActive((current) => cards.find((card) => card.id && card.id === current.id) || cards[0] || { ...blankCard, name: "新角色" });
-  }, [cards]);
 
-  function updateField(field: keyof CharacterCard, value: string) {
-    setActive((card) => ({ ...card, [field]: value }));
-  }
 
-  function toggleCategory(categoryKey: string) {
-    setCollapsedCategories((current) => {
-      const next = new Set(current);
-      if (next.has(categoryKey)) next.delete(categoryKey);
-      else next.add(categoryKey);
-      return next;
-    });
-  }
-
-  function moveCardToCategory(category: string) {
-    if (!draggingCardId) return;
-    const card = cards.find((item) => item.id === draggingCardId);
-    if (!card) return;
-    const next = { ...card, category };
-    setActive(next);
-    onSave(next);
-    setDraggingCardId("");
-    setDragOverCategory("");
-    setDragHint("");
-  }
-
-  function renderCategoryGroup(group: CategoryGroup<CharacterCard>, depth = 0) {
-    const collapsed = collapsedCategories.has(group.key);
-    return (
-      <div className="manager-group" key={group.key}>
-        <button
-          className={`manager-group-header ${dragOverCategory === group.key ? "drag-over" : ""}`}
-          style={{ paddingLeft: 8 + depth * 14 }}
-          onClick={() => toggleCategory(group.key)}
-          onDragOver={(event) => {
-            event.preventDefault();
-            event.dataTransfer.dropEffect = "move";
-            setDragOverCategory(group.key);
-            setDragHint(`将移动到「${group.key}」，分类等级 ${splitCategoryPath(group.key).length} 级`);
-          }}
-          onDragLeave={() => {
-            setDragOverCategory((current) => (current === group.key ? "" : current));
-            setDragHint("");
-          }}
-          onDrop={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            moveCardToCategory(group.key);
-          }}
-        >
-          {collapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
-          <span>{group.category}</span>
-          <small>{group.count}</small>
-        </button>
-        {!collapsed && (
-          <>
-            {group.children.map((child) => renderCategoryGroup(child, depth + 1))}
-            {group.items.map((card) => (
-              <button
-                key={card.id}
-                className={`manager-item ${active.id === card.id ? "active" : ""}`}
-                draggable
-                style={{ paddingLeft: 28 + depth * 14 }}
-                onDragStart={(event) => {
-                  event.dataTransfer.effectAllowed = "move";
-                  event.dataTransfer.setData("text/plain", card.id);
-                  setDraggingCardId(card.id);
-                }}
-                onDragEnd={() => {
-                  setDraggingCardId("");
-                  setDragOverCategory("");
-                  setDragHint("");
-                }}
-                onClick={() => setActive(card)}
-              >
-                <UserRound size={15} />
-                <span>{card.name}</span>
-              </button>
-            ))}
-          </>
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <section className="manager-panel">
-      <div className="manager-list">
-        <div className="section-heading">
-          <span>角色卡片</span>
-          <div className="section-heading-actions">
-            <button title="从大纲生成角色卡片" onClick={onGenerate}>
-              <Wand2 size={16} />
-            </button>
-            <button title="新建角色" onClick={() => setActive({ ...blankCard })}>
-              <Plus size={16} />
-            </button>
-          </div>
-        </div>
-        {dragHint && <div className="drag-hint">{dragHint}</div>}
-        {groupedCards.length ? groupedCards.map((group) => renderCategoryGroup(group)) : <div className="manager-empty">暂无角色卡片</div>}
-      </div>
-      <div className="form-panel">
-        <h2 className="form-title">{active.id ? `编辑角色：${active.name || "未命名角色"}` : "新建角色"}</h2>
-        <label>
-          姓名
-          <input value={active.name || ""} onChange={(event) => updateField("name", event.target.value)} />
-        </label>
-        <label>
-          分类
-          <input value={active.category || ""} placeholder="例如：主角团 / 十二英雄 / 反派" onChange={(event) => updateField("category", event.target.value)} />
-        </label>
-        <label>
-          外貌
-          <textarea value={active.appearance || ""} onChange={(event) => updateField("appearance", event.target.value)} />
-        </label>
-        <label>
-          性格
-          <textarea value={active.personality || ""} onChange={(event) => updateField("personality", event.target.value)} />
-        </label>
-        <label>
-          背景
-          <textarea value={active.background || ""} onChange={(event) => updateField("background", event.target.value)} />
-        </label>
-        <label>
-          关系
-          <textarea value={active.relationships || ""} onChange={(event) => updateField("relationships", event.target.value)} />
-        </label>
-        <label>
-          备注
-          <textarea value={active.notes || ""} onChange={(event) => updateField("notes", event.target.value)} />
-        </label>
-        <div className="form-actions">
-          <button onClick={() => onSave(active)}>
-            <Save size={16} />
-            保存并加入知识库
-          </button>
-          {active.id && (
-            <button className="danger" onClick={() => onDelete(active.id!)}>
-              <Trash2 size={16} />
-              删除
-            </button>
-          )}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function WorldManager({
-  docs,
-  onSave,
-  onDelete,
-  onGenerate,
-}: {
-  docs: WorldDoc[];
-  onSave: (doc: Partial<WorldDoc>) => void;
-  onDelete: (id: string) => void;
-  onGenerate: () => void;
-}) {
-  const blankDoc = { title: "", category: DEFAULT_CATEGORY_LABEL, content: "# 新设定\n\n" };
-  const [active, setActive] = useState<Partial<WorldDoc>>(docs[0] || blankDoc);
-  const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
-  const [draggingDocId, setDraggingDocId] = useState("");
-  const [dragOverCategory, setDragOverCategory] = useState("");
-  const [dragHint, setDragHint] = useState("");
-  const groupedDocs = useMemo(() => groupByCategory(docs), [docs]);
-
-  useEffect(() => {
-    setActive((current) => docs.find((doc) => doc.id && doc.id === current.id) || docs[0] || { ...blankDoc, title: "新设定", content: "# 新设定\n\n" });
-  }, [docs]);
-
-  function toggleCategory(categoryKey: string) {
-    setCollapsedCategories((current) => {
-      const next = new Set(current);
-      if (next.has(categoryKey)) next.delete(categoryKey);
-      else next.add(categoryKey);
-      return next;
-    });
-  }
-
-  function moveDocToCategory(category: string) {
-    if (!draggingDocId) return;
-    const doc = docs.find((item) => item.id === draggingDocId);
-    if (!doc) return;
-    const next = { ...doc, category };
-    setActive(next);
-    onSave(next);
-    setDraggingDocId("");
-    setDragOverCategory("");
-    setDragHint("");
-  }
-
-  function renderCategoryGroup(group: CategoryGroup<WorldDoc>, depth = 0) {
-    const collapsed = collapsedCategories.has(group.key);
-    return (
-      <div className="manager-group" key={group.key}>
-        <button
-          className={`manager-group-header ${dragOverCategory === group.key ? "drag-over" : ""}`}
-          style={{ paddingLeft: 8 + depth * 14 }}
-          onClick={() => toggleCategory(group.key)}
-          onDragOver={(event) => {
-            event.preventDefault();
-            event.dataTransfer.dropEffect = "move";
-            setDragOverCategory(group.key);
-            setDragHint(`将移动到「${group.key}」，分类等级 ${splitCategoryPath(group.key).length} 级`);
-          }}
-          onDragLeave={() => {
-            setDragOverCategory((current) => (current === group.key ? "" : current));
-            setDragHint("");
-          }}
-          onDrop={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            moveDocToCategory(group.key);
-          }}
-        >
-          {collapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
-          <span>{group.category}</span>
-          <small>{group.count}</small>
-        </button>
-        {!collapsed && (
-          <>
-            {group.children.map((child) => renderCategoryGroup(child, depth + 1))}
-            {group.items.map((doc) => (
-              <button
-                key={doc.id}
-                className={`manager-item ${active.id === doc.id ? "active" : ""}`}
-                draggable
-                style={{ paddingLeft: 28 + depth * 14 }}
-                onDragStart={(event) => {
-                  event.dataTransfer.effectAllowed = "move";
-                  event.dataTransfer.setData("text/plain", doc.id);
-                  setDraggingDocId(doc.id);
-                }}
-                onDragEnd={() => {
-                  setDraggingDocId("");
-                  setDragOverCategory("");
-                  setDragHint("");
-                }}
-                onClick={() => setActive(doc)}
-              >
-                <Boxes size={15} />
-                <span>{doc.title}</span>
-              </button>
-            ))}
-          </>
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <section className="manager-panel">
-      <div className="manager-list">
-        <div className="section-heading">
-          <span>世界观</span>
-          <div className="section-heading-actions">
-            <button title="从大纲生成世界观条目" onClick={onGenerate}>
-              <Sparkles size={16} />
-            </button>
-            <button title="新建设定" onClick={() => setActive({ ...blankDoc })}>
-              <Plus size={16} />
-            </button>
-          </div>
-        </div>
-        {dragHint && <div className="drag-hint">{dragHint}</div>}
-        {groupedDocs.length ? groupedDocs.map((group) => renderCategoryGroup(group)) : <div className="manager-empty">暂无世界观设定</div>}
-      </div>
-      <div className="form-panel world-editor">
-        <h2 className="form-title">{active.id ? `编辑设定：${active.title || "未命名设定"}` : "新建设定"}</h2>
-        <label>
-          标题
-          <input value={active.title || ""} onChange={(event) => setActive((doc) => ({ ...doc, title: event.target.value }))} />
-        </label>
-        <label>
-          分类
-          <input
-            value={active.category || ""}
-            placeholder="例如：地理 / 势力 / 神明/权柄"
-            onChange={(event) => setActive((doc) => ({ ...doc, category: event.target.value }))}
-          />
-        </label>
-        <label>
-          设定正文
-          <textarea value={active.content || ""} onChange={(event) => setActive((doc) => ({ ...doc, content: event.target.value }))} />
-        </label>
-        <div className="form-actions">
-          <button onClick={() => onSave(active)}>
-            <Save size={16} />
-            保存并加入知识库
-          </button>
-          {active.id && (
-            <button className="danger" onClick={() => onDelete(active.id!)}>
-              <Trash2 size={16} />
-              删除
-            </button>
-          )}
-        </div>
-      </div>
-    </section>
-  );
-}
 
 function SettingsModal({
   state,
@@ -6680,7 +6336,8 @@ function SettingsModal({
           </label>
           <label>
             接口密钥
-            <input type="password" value={draft.api.apiKey} onChange={(event) => updateApi("apiKey", event.target.value)} />
+            <input type="password" autoComplete="off" placeholder={draft.api.apiKeyConfigured ? "已配置；留空保留，输入新值替换" : "输入接口密钥"} value={draft.api.apiKey} onChange={(event) => updateApi("apiKey", event.target.value)} />
+            <span><input type="checkbox" checked={draft.api.clearApiKey === true} onChange={(event) => updateApi("clearApiKey", event.target.checked)} /> 清除已保存的聊天密钥</span>
           </label>
           <label>
             接口地址
@@ -6737,7 +6394,8 @@ function SettingsModal({
           </label>
           <label>
             向量接口密钥
-            <input type="password" value={draft.api.embeddingApiKey} onChange={(event) => updateApi("embeddingApiKey", event.target.value)} />
+            <input type="password" autoComplete="off" placeholder={draft.api.embeddingApiKeyConfigured ? "已配置；留空保留，输入新值替换" : "输入向量接口密钥"} value={draft.api.embeddingApiKey} onChange={(event) => updateApi("embeddingApiKey", event.target.value)} />
+            <span><input type="checkbox" checked={draft.api.clearEmbeddingApiKey === true} onChange={(event) => updateApi("clearEmbeddingApiKey", event.target.checked)} /> 清除已保存的向量密钥</span>
           </label>
           <label>
             向量模型

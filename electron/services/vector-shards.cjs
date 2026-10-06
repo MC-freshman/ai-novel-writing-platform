@@ -1,6 +1,6 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
-const { ensureDir, readJson, sha256, writeJsonAtomic } = require("./project-storage.cjs");
+const { ensureDir, readJson, sha256, writeJsonAtomic, withProjectWriteQueue } = require("./project-storage.cjs");
 
 function nowIso() {
   return new Date().toISOString();
@@ -27,18 +27,38 @@ function shardFileName(sourceId) {
 }
 
 async function loadManifest(projectPath) {
-  const data = await readJson(getManifestPath(projectPath), null);
-  if (!data || data.version !== 3 || !Array.isArray(data.sources)) return null;
-  return data;
+  let raw;
+  try { raw = await fs.readFile(getManifestPath(projectPath), "utf8"); }
+  catch (error) { if (error.code === "ENOENT") return null; throw error; }
+  try {
+    const data = JSON.parse(raw);
+    if (data.version !== 3 || !Array.isArray(data.sources) || data.sources.some((item) => !item.sourceId || !/^[a-f0-9]{32}\.json$/.test(item.fileName))) throw new Error("清单结构异常");
+    return data;
+  } catch {
+    const backup = path.join(getVectorDir(projectPath), `manifest.corrupt-${Date.now()}.json`);
+    await fs.copyFile(getManifestPath(projectPath), backup);
+    const recovered = [];
+    const damaged = [];
+    for (const fileName of await fs.readdir(getShardDir(projectPath)).catch(() => [])) {
+      if (!/^[a-f0-9]{32}\.json$/.test(fileName)) continue;
+      const shard = await readJson(path.join(getShardDir(projectPath), fileName), null);
+      if (!shard?.sourceId || !Array.isArray(shard.vectors) || shard.vectors.some((item) => item.sourceId !== shard.sourceId)) { damaged.push(fileName); continue; }
+      recovered.push({ sourceId: shard.sourceId, fileName, chunkCount: shard.vectors.length, ...Object.fromEntries(["sourceHash", "sourceType", "title", "volume", "category", "knowledgeRole"].map((key) => [key, shard.vectors[0]?.[key] || ""])) });
+    }
+    const recovery = { status: damaged.length ? "degraded" : "recovered", message: `索引清单损坏，已从 ${recovered.length} 个分片恢复${damaged.length ? `，${damaged.length} 个坏分片需要重建` : ""}。坏清单已保留。`, backupPath: backup, damaged, recoveredAt: nowIso() };
+    const manifest = await writeManifest(projectPath, recovered, recovery);
+    return manifest;
+  }
 }
 
-async function writeManifest(projectPath, sources) {
+async function writeManifest(projectPath, sources, recovery = null) {
   const normalized = sources.slice().sort((a, b) => String(a.sourceId).localeCompare(String(b.sourceId)));
   const manifest = {
     version: 3,
     updatedAt: nowIso(),
     totalChunks: normalized.reduce((sum, item) => sum + Number(item.chunkCount || 0), 0),
     sources: normalized,
+    ...(recovery ? { recovery } : {}),
   };
   await writeJsonAtomic(getManifestPath(projectPath), manifest);
   await writeJsonAtomic(getLegacyPath(projectPath), {
@@ -90,7 +110,13 @@ async function saveAll(projectPath, store) {
 async function migrateLegacyIfNeeded(projectPath) {
   const existing = await loadManifest(projectPath);
   if (existing) return existing;
+  const files = await fs.readdir(getShardDir(projectPath)).catch(() => []);
+  if (files.some((file) => /^[a-f0-9]{32}\.json$/.test(file))) {
+    await writeJsonAtomic(getManifestPath(projectPath), { recoveryRequired: true });
+    return loadManifest(projectPath);
+  }
   const legacy = await readJson(getLegacyPath(projectPath), { version: 1, vectors: [] });
+  if (legacy?.sharded && Number(legacy.totalChunks || 0) > 0) throw new Error("索引清单和分片均缺失，需要重建知识库；已保留旧索引状态。");
   return saveAll(projectPath, { vectors: Array.isArray(legacy?.vectors) ? legacy.vectors : [] });
 }
 
@@ -99,6 +125,7 @@ async function loadStore(projectPath, options = {}) {
   const requested = new Set((options.sourceIds || []).map(String));
   const sources = requested.size ? manifest.sources.filter((item) => requested.has(String(item.sourceId))) : manifest.sources;
   const vectors = [];
+  const damaged = [];
   const concurrency = 12;
   let cursor = 0;
   const workers = Array.from({ length: Math.min(concurrency, Math.max(1, sources.length)) }, async () => {
@@ -106,11 +133,20 @@ async function loadStore(projectPath, options = {}) {
       const index = cursor;
       cursor += 1;
       const source = sources[index];
-      const shard = await readJson(path.join(getShardDir(projectPath), source.fileName), { vectors: [] });
-      if (Array.isArray(shard?.vectors)) vectors.push(...shard.vectors);
+      const shardPath = path.join(getShardDir(projectPath), source.fileName);
+      const shard = await readJson(shardPath, null);
+      if (shard?.sourceId === source.sourceId && Array.isArray(shard.vectors) && shard.vectors.every((item) => item.sourceId === source.sourceId)) vectors.push(...shard.vectors);
+      else {
+        damaged.push(source.fileName);
+        await fs.copyFile(shardPath, `${shardPath}.corrupt-${Date.now()}`).catch((error) => { if (error.code !== "ENOENT") throw error; });
+      }
     }
   });
   await Promise.all(workers);
+  if (damaged.length) {
+    manifest.recovery = { status: "degraded", message: `${damaged.length} 个索引分片损坏或缺失，当前检索结果不完整；请重建知识库。`, damaged: [...new Set([...(manifest.recovery?.damaged || []), ...damaged])], recoveredAt: nowIso() };
+    await writeJsonAtomic(getManifestPath(projectPath), manifest);
+  }
   return { version: 3, updatedAt: manifest.updatedAt, vectors, totalChunks: manifest.totalChunks, manifest };
 }
 
@@ -120,7 +156,10 @@ async function upsertSources(projectPath, entriesBySource) {
   for (const [sourceId, vectors] of entriesBySource) {
     sourceMap.set(String(sourceId), await writeSourceShard(projectPath, sourceId, vectors));
   }
-  return writeManifest(projectPath, [...sourceMap.values()]);
+  const repairedFiles = new Set([...entriesBySource.keys()].map(shardFileName));
+  const damaged = (manifest.recovery?.damaged || []).filter((file) => !repairedFiles.has(file));
+  const recovery = damaged.length ? { ...manifest.recovery, damaged } : null;
+  return writeManifest(projectPath, [...sourceMap.values()], recovery);
 }
 
 async function replaceSources(projectPath, entriesBySource) {
@@ -147,7 +186,8 @@ async function updateSourcesMetadata(projectPath, metadataBySource) {
       continue;
     }
     const shardPath = path.join(getShardDir(projectPath), source.fileName);
-    const shard = await readJson(shardPath, { version: 3, sourceId: source.sourceId, vectors: [] });
+    const shard = await readJson(shardPath, null);
+    if (!shard || shard.sourceId !== source.sourceId || !Array.isArray(shard.vectors)) throw new Error("索引分片损坏或缺失，已停止元数据更新；请重建知识库。");
     const vectors = (Array.isArray(shard.vectors) ? shard.vectors : []).map((entry) => ({ ...entry, ...patch, updatedAt: nowIso() }));
     nextSources.push(await writeSourceShard(projectPath, source.sourceId, vectors));
   }
@@ -170,18 +210,14 @@ async function reset(projectPath) {
 
 async function stats(projectPath) {
   const manifest = await migrateLegacyIfNeeded(projectPath);
-  return { chunks: Number(manifest.totalChunks || 0), sources: manifest.sources.length, updatedAt: manifest.updatedAt || "" };
+  return { chunks: Number(manifest.totalChunks || 0), sources: manifest.sources.length, updatedAt: manifest.updatedAt || "", recovery: manifest.recovery || null };
 }
 
-module.exports = {
-  loadManifest,
-  loadStore,
-  migrateLegacyIfNeeded,
-  removeSource,
-  replaceSources,
-  reset,
-  saveAll,
-  stats,
-  updateSourcesMetadata,
-  upsertSources,
-};
+// Internal calls stay within the claimed operation; public calls share one manifest queue.
+const serialize = (operation) => (projectPath, ...args) =>
+  withProjectWriteQueue(projectPath, "vector-shards", () => operation(projectPath, ...args));
+
+module.exports = Object.fromEntries(Object.entries({
+  loadManifest, loadStore, migrateLegacyIfNeeded, removeSource, replaceSources,
+  reset, saveAll, stats, updateSourcesMetadata, upsertSources,
+}).map(([name, operation]) => [name, serialize(operation)]));

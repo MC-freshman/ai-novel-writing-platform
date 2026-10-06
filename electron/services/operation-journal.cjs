@@ -1,10 +1,9 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
-const { ensureDir, readJson, stableId, writeJsonAtomic } = require("./project-storage.cjs");
+const { ensureDir, readJson, stableId, writeJsonAtomic, withProjectTransaction } = require("./project-storage.cjs");
 
 const JOURNAL_VERSION = 1;
 const MAX_OPERATIONS = 3000;
-const writeQueues = new Map();
 
 function nowIso() {
   return new Date().toISOString();
@@ -63,9 +62,7 @@ async function loadJournal(projectPath) {
 }
 
 async function mutate(projectPath, mutator) {
-  const key = path.resolve(projectPath);
-  const previous = writeQueues.get(key) || Promise.resolve();
-  const next = previous.catch(() => null).then(async () => {
+  return withProjectTransaction(projectPath, async () => {
     const journal = await loadJournal(projectPath);
     const result = await mutator(journal);
     journal.updatedAt = nowIso();
@@ -74,12 +71,6 @@ async function mutate(projectPath, mutator) {
     await writeJsonAtomic(journalPath(projectPath), journal);
     return result === undefined ? journal : result;
   });
-  writeQueues.set(key, next);
-  try {
-    return await next;
-  } finally {
-    if (writeQueues.get(key) === next) writeQueues.delete(key);
-  }
 }
 
 async function startSession(projectPath, appVersion = "") {
@@ -159,10 +150,13 @@ async function failOperation(projectPath, operationId, error) {
 }
 
 async function saveDraft(projectPath, payload = {}) {
-  const chapterId = safeId(payload.chapterId);
+  const kind = ["character", "world"].includes(payload.kind) ? payload.kind : "chapter";
+  const chapterId = kind === "chapter" ? safeId(payload.chapterId) : stableId(`draft_${kind}`, String(payload.entityId || "new"));
   if (!chapterId) throw new Error("草稿缺少章节编号。");
   const draft = {
     version: 1,
+    kind,
+    entityId: kind === "chapter" ? "" : String(payload.entityId || ""),
     chapterId,
     chapterTitle: String(payload.chapterTitle || "").slice(0, 160),
     volume: String(payload.volume || "").slice(0, 160),
@@ -225,7 +219,7 @@ async function getRecoveryStatus(projectPath) {
   return { drafts, interruptedOperations, lastSession, windowState };
 }
 
-module.exports = {
+const projectOperations = {
   JOURNAL_VERSION,
   beginOperation,
   clearDraft,
@@ -241,3 +235,8 @@ module.exports = {
   saveWindowState,
   startSession,
 };
+
+module.exports = { ...projectOperations };
+for (const name of ["beginOperation","clearDraft","completeOperation","endSession","ensureJournal","failOperation","getRecoveryStatus","listDrafts","loadJournal","loadWindowState","saveDraft","saveWindowState","startSession"]) {
+  module.exports[name] = (projectPath, ...args) => withProjectTransaction(projectPath, () => projectOperations[name](projectPath, ...args));
+}

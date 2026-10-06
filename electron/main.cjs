@@ -8,9 +8,10 @@ const crypto = require("node:crypto");
 const { fileURLToPath, pathToFileURL } = require("node:url");
 const { toUSVString } = require("node:util");
 const AdmZip = require("adm-zip");
-const mammoth = require("mammoth");
+const mammoth = require("./services/word-import.cjs");
 const { parse: parseHtml } = require("node-html-parser");
-const { writeFileAtomic, writeJsonAtomic } = require("./services/project-storage.cjs");
+const { writeFileAtomic, writeJsonAtomic, withProjectTransaction, writeProjectFiles } = require("./services/project-storage.cjs");
+const { consumeChatStream } = require("./services/chat-stream.cjs");
 const storyState = require("./services/story-state.cjs");
 const { PersistentTaskCenter } = require("./services/task-center.cjs");
 const projectSnapshots = require("./services/project-snapshots.cjs");
@@ -24,6 +25,8 @@ const knowledgeFreshness = require("./services/knowledge-freshness.cjs");
 const creativeStatistics = require("./services/creative-statistics.cjs");
 const windowsCredentials = require("./services/windows-credentials.cjs");
 const exchangeSecurity = require("./services/project-exchange-security.cjs");
+const projectArchives = require("./services/project-archives.cjs");
+const { assertTrustedSender, validateIpcArguments } = require("./services/ipc-security.cjs");
 const docxFidelity = require("./services/docx-fidelity.cjs");
 const releasePrivacy = require("./services/release-privacy.cjs");
 const {
@@ -74,11 +77,9 @@ let importCancelRequested = false;
 let windowCloseApproved = false;
 let windowCloseRequestTimer = null;
 const activeAiRequests = new Map();
-const analysisSaveQueues = new Map();
 const projectTaskCenters = new Map();
 const deepAnalysisTimers = new Map();
 const chapterRevisionCache = new Map();
-const chapterSaveQueues = new Map();
 const pendingExchangeImports = new Map();
 const projectSessions = new Map();
 const credentialSecretsCache = new Map();
@@ -116,7 +117,12 @@ async function withJournalOperation(projectPath, payload, action, summarize = ()
   const operation = await operationJournal.beginOperation(projectPath, payload);
   try {
     const result = await action(operation);
-    await operationJournal.completeOperation(projectPath, operation.id, summarize(result));
+    try {
+      await operationJournal.completeOperation(projectPath, operation.id, summarize(result));
+    } catch (error) {
+      if (!result?.committed) throw error;
+      return { ...result, journalWarning: `正文已保存，操作日志更新失败：${error?.message || error}。` };
+    }
     return result;
   } catch (error) {
     await operationJournal.failOperation(projectPath, operation.id, error).catch(() => null);
@@ -197,8 +203,8 @@ async function loadCredentialSecrets(projectPath, config) {
 
 async function saveCredentialSecrets(projectPath, apiPatch = {}, existingConfig = null) {
   const current = existingConfig?.api || {};
-  const chat = String(apiPatch.apiKey ?? runtimeSecret(current, "chat") ?? "");
-  const embedding = String(apiPatch.embeddingApiKey ?? runtimeSecret(current, "embedding") ?? "");
+  const chat = apiPatch.clearApiKey === true ? "" : String(apiPatch.apiKey || runtimeSecret(current, "chat") || "");
+  const embedding = apiPatch.clearEmbeddingApiKey === true ? "" : String(apiPatch.embeddingApiKey || runtimeSecret(current, "embedding") || "");
   if (process.env.NOVEL_PLATFORM_TEST === "1" || process.platform !== "win32") return { chatRef: encodeSecret(chat), embeddingRef: encodeSecret(embedding), chat, embedding, storage: "legacy" };
   await Promise.all([
     chat ? windowsCredentials.setSecret(projectPath, "chat", chat) : windowsCredentials.deleteSecret(projectPath, "chat"),
@@ -540,7 +546,7 @@ async function ensureExclusiveChapterFile(projectPath, config, chapter, contentO
   if (!String(content || "").trim()) content = `# ${chapter.title || "未命名章节"}\n\n`;
 
   if (options.snapshot !== false) {
-    await snapshotChapterVersion(projectPath, chapter, content, options.reason || "拆分共享章节文件前版本").catch(() => null);
+    await snapshotChapterVersion(projectPath, chapter, content, options.reason || "拆分共享章节文件前版本");
   }
 
   const extension = path.extname(currentFileName).toLowerCase() || (isHtmlContent(content) ? ".html" : ".md");
@@ -550,7 +556,7 @@ async function ensureExclusiveChapterFile(projectPath, config, chapter, contentO
   chapter.wordCount = countWords(content);
   chapter.outline = extractOutline(content);
   chapter.updatedAt = nowIso();
-  await fs.writeFile(getChapterPath(projectPath, chapter), content, "utf8");
+  await writeFileAtomic(getChapterPath(projectPath, chapter), content, "utf8");
   return true;
 }
 
@@ -690,7 +696,7 @@ function buildWorldDocFile(doc) {
 }
 
 async function writeWorldDoc(projectPath, doc) {
-  await fs.writeFile(getWorldDocPath(projectPath, doc), buildWorldDocFile(doc), "utf8");
+  await writeFileAtomic(getWorldDocPath(projectPath, doc), buildWorldDocFile(doc), "utf8");
 }
 
 function getChapterVersionDir(projectPath, chapterId) {
@@ -726,7 +732,7 @@ async function snapshotChapterVersion(projectPath, chapter, content, reason = "�
     reason,
     contentRevision: revision,
   };
-  await fs.writeFile(path.join(versionDir, fileName), content, "utf8");
+  await writeFileAtomic(path.join(versionDir, fileName), content, "utf8");
   await writeJson(path.join(versionDir, `${id}.json`), version);
 
   const versions = await listChapterVersions(projectPath, chapter.id);
@@ -880,10 +886,7 @@ function extractOpenAiCompatibleAnswer(data) {
   return String(data?.choices?.[0]?.message?.content || data?.message?.content || data?.output_text || "").trim();
 }
 
-function extractOpenAiCompatibleDelta(data) {
-  const choice = data?.choices?.[0] || {};
-  return String(choice.delta?.content || choice.message?.content || data?.message?.content || data?.output_text || "");
-}
+
 
 async function fetchOpenAiCompatibleStream(url, payload, headers, label, onToken, options = {}) {
   const body = JSON.stringify({ ...payload, stream: true });
@@ -912,51 +915,14 @@ async function fetchOpenAiCompatibleStream(url, payload, headers, label, onToken
     const contentType = response.headers.get("content-type") || "";
     if (!response.body || contentType.includes("application/json")) {
       const data = await response.json();
+      if (data.error) throw new Error(`提供商错误：${data.error.message || data.error.type || "未知错误"}`);
+      options.onUsage?.(data.usage);
       answer = extractOpenAiCompatibleAnswer(data);
       if (answer) onToken?.(answer);
       return answer || "模型返回了空内容。";
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder("utf8");
-    let buffer = "";
-
-    const consumeLine = (line) => {
-      const trimmed = String(line || "").trim();
-      if (!trimmed || !trimmed.startsWith("data:")) return;
-      const raw = trimmed.replace(/^data:\s*/, "");
-      if (!raw || raw === "[DONE]") return;
-      try {
-        const data = JSON.parse(raw);
-        const token = extractOpenAiCompatibleDelta(data);
-        if (!token) return;
-        answer += token;
-        onToken?.(token);
-      } catch {
-        // Some gateways include keep-alive or non-JSON diagnostic frames in SSE streams.
-      }
-    };
-
-    try {
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split(/\r?\n/);
-        buffer = lines.pop() || "";
-        lines.forEach(consumeLine);
-      }
-      buffer += decoder.decode();
-      buffer.split(/\r?\n/).forEach(consumeLine);
-    } catch (error) {
-      if (answer.trim()) {
-        const reason = externalSignal?.aborted ? "用户已停止生成" : `连接中断：${describeFetchError(error)}`;
-        return `${answer.trim()}\n\n【提示：${reason}，以上内容已保留。】`;
-      }
-      throw error;
-    }
-
-    return answer.trim() || "模型返回了空内容。";
+    return await consumeChatStream(response, onToken, { ...options, signal: externalSignal });
   } catch (error) {
     if (externalSignal?.aborted) return answer.trim() || "【已停止生成，停止前尚未收到模型输出。】";
     if (String(error?.message || "").includes(`${label}请求失败`)) throw error;
@@ -1006,25 +972,12 @@ async function loadAnalysisState(projectPath) {
 }
 
 async function saveAnalysisState(projectPath, patch) {
-  const previousTask = analysisSaveQueues.get(projectPath) || Promise.resolve();
-  const task = previousTask
-    .catch(() => null)
-    .then(async () => {
-      const previous = await loadAnalysisState(projectPath);
-      const next = {
-        ...previous,
-        ...(patch || {}),
-        updatedAt: nowIso(),
-      };
-      await writeJson(getAnalysisStatePath(projectPath), next);
-      return next;
-    });
-  analysisSaveQueues.set(projectPath, task);
-  try {
-    return await task;
-  } finally {
-    if (analysisSaveQueues.get(projectPath) === task) analysisSaveQueues.delete(projectPath);
-  }
+  return withProjectTransaction(projectPath, async () => {
+    const previous = await loadAnalysisState(projectPath);
+    const next = { ...previous, ...(patch || {}), updatedAt: nowIso() };
+    await writeJson(getAnalysisStatePath(projectPath), next);
+    return next;
+  });
 }
 
 function applyIssueStatuses(issues, statuses) {
@@ -1111,7 +1064,7 @@ async function updateVectorKnowledgeMetadata(projectPath, chapters) {
   await vectorShards.updateSourcesMetadata(projectPath, metadata);
 }
 
-async function updateKnowledgeItems(projectPath, items) {
+async function updateKnowledgeItemsUnlocked(projectPath, items) {
   const updates = new Map((Array.isArray(items) ? items : []).map((item) => [String(item.id || item.sourceId || ""), item]));
   const config = await loadConfig(projectPath);
   let changed = false;
@@ -1462,7 +1415,7 @@ async function inspectProjectHealth(projectPath) {
   };
 }
 
-async function repairProjectHealth(projectPath) {
+async function repairProjectHealthUnlocked(projectPath) {
   const config = await loadConfig(projectPath);
   await repairSharedChapterFiles(projectPath, config);
   for (const chapter of config.chapters) {
@@ -1471,7 +1424,7 @@ async function repairProjectHealth(projectPath) {
     const latest = versions[0];
     if (!latest) continue;
     const content = await fs.readFile(getChapterVersionContentPath(projectPath, chapter.id, latest), "utf8").catch(() => "");
-    if (content) await fs.writeFile(getChapterPath(projectPath, chapter), content, "utf8");
+    if (content) await writeFileAtomic(getChapterPath(projectPath, chapter), content, "utf8");
   }
   config.chapters = config.chapters.slice().sort((a, b) => Number(a.order || 0) - Number(b.order || 0)).map((item, index) => ({ ...item, order: index }));
   const chapterIds = new Set(config.chapters.map((item) => item.id));
@@ -1551,7 +1504,7 @@ function defaultConfig(title = DEFAULT_PROJECT_NAME) {
   };
 }
 
-async function ensureProjectStructure(projectPath, title) {
+async function ensureProjectStructureUnlocked(projectPath, title) {
   await ensureDir(projectPath);
   await ensureDir(path.join(projectPath, "chapters"));
   await ensureDir(path.join(projectPath, "characters"));
@@ -1568,9 +1521,8 @@ async function ensureProjectStructure(projectPath, title) {
   const configPath = getConfigPath(projectPath);
   if (!existsSync(configPath)) {
     const config = defaultConfig(title);
-    await writeJson(configPath, config);
     const chapterFile = path.join(projectPath, "chapters", config.chapters[0].fileName);
-    await fs.writeFile(chapterFile, "# 第一章 开篇\n\n从这里开始写下你的故事。\n", "utf8");
+    await writeProjectFiles(projectPath, [{ path: chapterFile, content: "# 第一章 开篇\n\n从这里开始写下你的故事。\n" }, { path: configPath, content: JSON.stringify(config, null, 2) }]);
     await writeJson(getVectorsPath(projectPath), { version: 1, updatedAt: nowIso(), vectors: [] });
     await writeJson(getKnowledgeSummariesPath(projectPath), { version: 2, updatedAt: "", sources: [], volumes: [], book: null });
   }
@@ -1579,7 +1531,7 @@ async function ensureProjectStructure(projectPath, title) {
   });
 }
 
-async function loadConfig(projectPath) {
+async function loadConfigUnlocked(projectPath) {
   const config = await readProjectConfig(projectPath);
   config.chapters = Array.isArray(config.chapters) ? config.chapters : [];
   config.api = { ...defaultConfig().api, ...(config.api || {}) };
@@ -1587,11 +1539,11 @@ async function loadConfig(projectPath) {
   config.agent = { ...defaultConfig().agent, ...(config.agent || {}) };
   config.stats = { ...defaultConfig().stats, ...(config.stats || {}) };
   await loadCredentialSecrets(projectPath, config);
-  await repairSharedChapterFiles(projectPath, config).catch(() => null);
+  await repairSharedChapterFiles(projectPath, config);
   return config;
 }
 
-async function saveConfig(projectPath, config) {
+async function saveConfigUnlocked(projectPath, config) {
   config.updatedAt = nowIso();
   await writeJson(getConfigPath(projectPath), config);
 }
@@ -1601,8 +1553,12 @@ function configForRenderer(config) {
     ...config,
     api: {
       ...config.api,
-      apiKey: runtimeSecret(config.api, "chat"),
-      embeddingApiKey: runtimeSecret(config.api, "embedding"),
+      apiKey: "",
+      embeddingApiKey: "",
+      apiKeyConfigured: Boolean(runtimeSecret(config.api, "chat")),
+      embeddingApiKeyConfigured: Boolean(runtimeSecret(config.api, "embedding")),
+      clearApiKey: false,
+      clearEmbeddingApiKey: false,
       credentialStorage: process.platform === "win32" && process.env.NOVEL_PLATFORM_TEST !== "1" ? "windows" : config.api.apiKey ? "legacy" : "none",
       credentialError: String(config.api.__credentialError || ""),
     },
@@ -1688,16 +1644,14 @@ async function loadChapterContent(projectPath, chapterId) {
   if (requestedChapterId && !chapter) throw new Error("要打开的章节已经不存在，已停止加载，当前章节不会改变。");
   if (!chapter) return { chapter: null, content: "", revision: contentRevision("") };
   const filePath = getChapterPath(projectPath, chapter);
-  let content = "";
-  let revision = contentRevision("");
+  let content;
+  let revision;
   try {
     content = await fs.readFile(filePath, "utf8");
     revision = contentRevision(content);
     if (isHtmlContent(content)) content = promoteMarkdownHeadingsInHtml(content);
-  } catch {
-    content = `# ${chapter.title}\n\n`;
-    await fs.writeFile(filePath, content, "utf8");
-    revision = contentRevision(content);
+  } catch (error) {
+    throw new Error(`章节正文读取失败，已停止打开以保护原稿：${error.message}。可在恢复中心检查历史版本。`, { cause: error });
   }
   return { chapter, content, revision };
 }
@@ -1755,7 +1709,7 @@ async function convertDocumentToRichContent(projectPath, filePath, importId) {
           const imageFile = await uniqueFileName(assetDir, `image_${String(imageIndex).padStart(3, "0")}`, extension);
           const imagePath = path.join(assetDir, imageFile);
           const buffer = image.readAsBuffer ? await image.readAsBuffer() : Buffer.from(await image.read("base64"), "base64");
-          await fs.writeFile(imagePath, buffer);
+          await writeFileAtomic(imagePath, buffer);
           return { src: pathToFileURL(imagePath).href };
         }),
       },
@@ -1803,7 +1757,7 @@ async function convertDocumentToRichContent(projectPath, filePath, importId) {
   throw new Error("暂时只支持导入 .docx、.txt、.md 文件。");
 }
 
-async function importDocumentIntoProject(projectPath, filePath, options = {}) {
+async function importDocumentIntoProjectUnlocked(projectPath, filePath, options = {}) {
   const config = options.config || (await loadConfig(projectPath));
   const importId = makeId("import");
   const converted = await convertDocumentToRichContent(projectPath, filePath, importId);
@@ -1828,8 +1782,17 @@ async function importDocumentIntoProject(projectPath, filePath, options = {}) {
     contentFormat: converted.contentFormat,
     outline: extractOutline(converted.content),
   };
-  await fs.writeFile(getChapterPath(projectPath, chapter), converted.content, "utf8");
+  chapter.contentRevision = contentRevision(converted.content);
+  const previousTotalWords = config.stats.totalWords;
   config.chapters.push(chapter);
+  config.stats.totalWords = config.chapters.reduce((sum, item) => sum + Number(item.wordCount || 0), 0);
+  try {
+    await writeProjectFiles(projectPath, [{ path: getChapterPath(projectPath, chapter), content: converted.content }, { path: getConfigPath(projectPath), content: JSON.stringify(config, null, 2) }]);
+  } catch (error) {
+    config.chapters.splice(config.chapters.indexOf(chapter), 1);
+    config.stats.totalWords = previousTotalWords;
+    throw error;
+  }
   for (const [index, comment] of (converted.comments || []).entries()) {
     await creativeWorkspace.upsertItem(projectPath, "annotations", {
       id: `docx_comment_${chapter.id}_${comment.id || index}`,
@@ -1889,7 +1852,7 @@ async function importDocumentIntoProject(projectPath, filePath, options = {}) {
   return [imported];
 }
 
-async function refreshChapterFromOriginalDocument(projectPath, chapterId) {
+async function refreshChapterFromOriginalDocumentUnlocked(projectPath, chapterId, expectedRevision = "" ) {
   const config = await loadConfig(projectPath);
   const chapter = config.chapters.find((item) => item.id === chapterId);
   if (!chapter) throw new Error("文档不存在，无法恢复 Word 格式。");
@@ -1899,7 +1862,9 @@ async function refreshChapterFromOriginalDocument(projectPath, chapterId) {
     throw new Error("找不到导入时的原始 Word 文档，请重新导入 docx。");
   }
 
-  const existingContent = await fs.readFile(getChapterPath(projectPath, chapter), "utf8").catch(() => "");
+  const existingContent = await fs.readFile(getChapterPath(projectPath, chapter), "utf8");
+  assertExpectedChapterRevision(expectedRevision, existingContent);
+  await snapshotChapterVersion(projectPath, chapter, existingContent, "刷新 Word 原文前版本");
   await ensureExclusiveChapterFile(projectPath, config, chapter, existingContent, {
     reason: "恢复 Word 原文前自动拆分共享章节文件",
   });
@@ -1917,14 +1882,12 @@ async function refreshChapterFromOriginalDocument(projectPath, chapterId) {
 
   const importId = chapter.importId || makeId("import");
   const converted = await convertDocumentToRichContent(projectPath, sourcePath, importId);
-  const chapterDir = path.join(projectPath, "chapters");
   const currentExt = path.extname(chapter.fileName).toLowerCase();
   if (currentExt !== ".html") {
     const baseName = path.basename(chapter.fileName, path.extname(chapter.fileName)) || `document_${String(chapter.order + 1).padStart(3, "0")}_${chapter.title}`;
     chapter.fileName = await uniqueChapterFileName(projectPath, config, baseName, ".html", chapter.id);
   }
 
-  await fs.writeFile(getChapterPath(projectPath, chapter), converted.content, "utf8");
   chapter.wordCount = countWords(converted.content);
   chapter.outline = extractOutline(converted.content);
   chapter.updatedAt = nowIso();
@@ -1934,8 +1897,9 @@ async function refreshChapterFromOriginalDocument(projectPath, chapterId) {
   chapter.originalDocxFile = converted.originalDocxFile || chapter.originalDocxFile;
   chapter.contentFormat = "html";
 
-  await calculateTotalWords(projectPath, config);
-  await saveConfig(projectPath, config);
+  chapter.contentRevision = contentRevision(converted.content);
+  config.stats.totalWords = config.chapters.reduce((sum, item) => sum + Number(item.wordCount || 0), 0);
+  await writeProjectFiles(projectPath, [{ path: getChapterPath(projectPath, chapter), content: converted.content }, { path: getConfigPath(projectPath), content: JSON.stringify(config, null, 2) }]);
 
   const indexResult = await indexSource(projectPath, {
     id: chapter.id,
@@ -1966,27 +1930,27 @@ async function calculateTotalWords(projectPath, config) {
   for (const chapter of config.chapters) {
     const filePath = getChapterPath(projectPath, chapter);
     try {
-      const content = await fs.readFile(filePath, "utf8");
-      chapter.wordCount = countWords(content);
-      chapter.outline = extractOutline(content);
-      chapter.contentRevision = contentRevision(content);
+      const stat = await fs.stat(filePath);
+      const signature = `${stat.size}|${stat.mtimeMs}|${stat.ctimeMs}`;
+      if (chapter.contentSignature !== signature || !chapter.contentRevision) {
+        const content = await fs.readFile(filePath, "utf8");
+        chapter.wordCount = countWords(content);
+        chapter.outline = extractOutline(content);
+        chapter.contentRevision = contentRevision(content);
+        chapter.contentSignature = signature;
+      }
       total += chapter.wordCount;
     } catch {
       chapter.wordCount = chapter.wordCount || 0;
       chapter.outline = chapter.outline || [];
+      total += chapter.wordCount;
     }
   }
   config.stats.totalWords = total;
 }
 
 function enqueueChapterSave(projectPath, action) {
-  const key = path.resolve(projectPath);
-  const previous = chapterSaveQueues.get(key) || Promise.resolve();
-  const queued = previous.catch(() => null).then(action);
-  chapterSaveQueues.set(key, queued);
-  return queued.finally(() => {
-    if (chapterSaveQueues.get(key) === queued) chapterSaveQueues.delete(key);
-  });
+  return withProjectTransaction(projectPath, action);
 }
 
 async function assertNoAccidentalChapterClone(projectPath, config, chapter, previousContent, nextContent) {
@@ -2010,7 +1974,7 @@ async function saveChapterContent(projectPath, payload = {}) {
     const chapter = config.chapters.find((item) => item.id === chapterId);
     if (!chapter) throw new Error("章节不存在，无法保存。");
     let filePath = getChapterPath(projectPath, chapter);
-    const previousContent = await fs.readFile(filePath, "utf8").catch(() => "");
+    const previousContent = await fs.readFile(filePath, "utf8");
     assertExpectedChapterRevision(String(payload?.expectedRevision || ""), previousContent);
     const previousWords = countWords(previousContent);
     const nextContent = String(payload.content ?? "");
@@ -2021,9 +1985,8 @@ async function saveChapterContent(projectPath, payload = {}) {
     });
     if (didSplitSharedFile) filePath = getChapterPath(projectPath, chapter);
     if (previousContent && previousContent !== nextContent) {
-      await snapshotChapterVersion(projectPath, chapter, previousContent).catch(() => null);
+      await snapshotChapterVersion(projectPath, chapter, previousContent);
     }
-    await writeFileAtomic(filePath, nextContent, "utf8");
 
     if (payload.title && payload.title.trim()) chapter.title = payload.title.trim();
     if (payload.volume && payload.volume.trim()) chapter.volume = payload.volume.trim();
@@ -2036,9 +1999,14 @@ async function saveChapterContent(projectPath, payload = {}) {
       config.stats.todayWords = 0;
     }
     config.stats.todayWords += Math.max(0, chapter.wordCount - previousWords);
-    await calculateTotalWords(projectPath, config);
-    await saveConfig(projectPath, config);
+    config.stats.totalWords = config.chapters.reduce((sum, item) => sum + Number(item.wordCount || 0), 0);
+    config.updatedAt = nowIso();
+    await writeProjectFiles(projectPath, [
+      { path: filePath, content: nextContent },
+      { path: getConfigPath(projectPath), content: JSON.stringify(config, null, 2) },
+    ]);
 
+    let indexWarning = "";
     const indexResult = await indexSource(projectPath, {
       id: chapter.id,
       type: "chapter",
@@ -2047,6 +2015,10 @@ async function saveChapterContent(projectPath, payload = {}) {
       category: chapter.volume || "未分卷",
       knowledgeRole: getKnowledgeRole(chapter),
       content: nextContent,
+    }).catch(async (error) => {
+      indexWarning = `正文已保存，知识库更新失败：${error?.message || error}。请在知识库中执行增量修复。`;
+      const previousStats = await vectorShards.stats(projectPath).catch(() => ({ chunks: 0 }));
+      return { chunks: 0, totalChunks: previousStats.chunks, degraded: true };
     });
     let storyStateWarning = "";
     if (config.agent?.autoLocalAnalysis !== false) {
@@ -2067,11 +2039,13 @@ async function saveChapterContent(projectPath, payload = {}) {
       vectorStats: { chunks: indexResult.totalChunks, updatedAt: nowIso(), embeddingFallback: { ...embeddingFallback } },
       revision: contentRevision(nextContent),
       storyStateWarning,
+      committed: true,
+      indexWarning,
     };
   });
 }
 
-async function buildAppState(projectPath, preferredChapterId = "") {
+async function buildAppStateUnlocked(projectPath, preferredChapterId = "") {
   await ensureProjectStructure(projectPath);
   const config = await loadConfig(projectPath);
   await calculateTotalWords(projectPath, config);
@@ -2098,6 +2072,7 @@ async function buildAppState(projectPath, preferredChapterId = "") {
       chunks: vectorStats.chunks,
       updatedAt: vectorStats.updatedAt,
       embeddingFallback: { ...embeddingFallback },
+      recovery: vectorStats.recovery,
     },
   };
 }
@@ -2286,9 +2261,7 @@ async function loadVectorStore(projectPath) {
   return vectorShards.loadStore(projectPath);
 }
 
-async function saveVectorStore(projectPath, store) {
-  await vectorShards.saveAll(projectPath, store);
-}
+
 
 async function loadKnowledgeSummaries(projectPath) {
   const fallback = { version: 2, updatedAt: "", sources: [], volumes: [], book: null };
@@ -2343,7 +2316,7 @@ function rebuildSummaryHierarchy(sources, projectTitle = "") {
   return { volumes, book };
 }
 
-async function updateKnowledgeSummaries(projectPath, sources, options = {}) {
+async function updateKnowledgeSummariesUnlocked(projectPath, sources, options = {}) {
   const config = await loadConfig(projectPath);
   const previous = options.replaceAll ? { sources: [] } : await loadKnowledgeSummaries(projectPath);
   const sourceMap = new Map((previous.sources || []).map((item) => [item.sourceId, item]));
@@ -2369,7 +2342,7 @@ async function updateKnowledgeSummaries(projectPath, sources, options = {}) {
   return next;
 }
 
-async function removeSourceFromKnowledgeSummaries(projectPath, sourceId) {
+async function removeSourceFromKnowledgeSummariesUnlocked(projectPath, sourceId) {
   const config = await loadConfig(projectPath);
   const previous = await loadKnowledgeSummaries(projectPath);
   const sources = previous.sources.filter((item) => item.sourceId !== sourceId);
@@ -2414,7 +2387,7 @@ async function buildIndexEntries(source, config, characterNames, options = {}) {
   });
 }
 
-async function indexSources(projectPath, sources, options = {}) {
+async function indexSourcesUnlocked(projectPath, sources, options = {}) {
   const safeSources = Array.isArray(sources) ? sources.filter(Boolean) : [];
   if (!safeSources.length) {
     const stats = await vectorShards.stats(projectPath);
@@ -2860,11 +2833,7 @@ function buildInventorySummary(config, characters, worldDocs, manifest) {
   ].join("\n");
 }
 
-function countBySourceId(vectors) {
-  const counts = new Map();
-  for (const entry of vectors || []) counts.set(entry.sourceId, (counts.get(entry.sourceId) || 0) + 1);
-  return counts;
-}
+
 
 function appendCoverageChunks(chunks, store, sourceIds, maxChunks, maxChars = Number.POSITIVE_INFINITY) {
   const selected = Array.isArray(chunks) ? chunks.slice() : [];
@@ -3218,7 +3187,7 @@ async function callChatApi(config, systemPrompt, question, history = [], options
     messages: [{ role: "system", content: systemPrompt }, ...safeHistory, { role: "user", content: question }],
   };
   if (options.stream && provider !== "claude") {
-    return fetchOpenAiCompatibleStream(`${baseUrl}/chat/completions`, payload, headers, "聊天 API ", options.onToken, { signal: options.signal });
+    return fetchOpenAiCompatibleStream(`${baseUrl}/chat/completions`, payload, headers, "聊天 API ", options.onToken, { signal: options.signal, onUsage: options.onUsage });
   }
   const { response, bodyBytes } = await fetchJsonWithDiagnostics(`${baseUrl}/chat/completions`, payload, headers, "聊天 API ", { signal: options.signal });
   if (!response.ok) {
@@ -4862,7 +4831,7 @@ function replaceUniqueSelection(content, original, replacement) {
   throw new Error("修订对应的原文已经变化或跨越了复杂格式，无法安全替换。请重新选中文字生成修订。");
 }
 
-async function applySafeRevision(projectPath, revisionId) {
+async function applySafeRevisionUnlocked(projectPath, revisionId) {
   const workspaceState = await creativeWorkspace.loadWorkspace(projectPath);
   const revision = workspaceState.revisions.find((item) => item.id === revisionId);
   if (!revision) throw new Error("没有找到这条修订建议。");
@@ -4870,7 +4839,7 @@ async function applySafeRevision(projectPath, revisionId) {
   const config = await loadConfig(projectPath);
   const chapter = config.chapters.find((item) => item.id === revision.chapterId);
   if (!chapter) throw new Error("修订对应的章节已不存在。");
-  let filePath = getChapterPath(projectPath, chapter);
+  const filePath = getChapterPath(projectPath, chapter);
   const previousContent = await fs.readFile(filePath, "utf8").catch(() => "");
   const currentRevision = contentRevision(previousContent);
   if (revision.sourceRevision && revision.sourceRevision !== currentRevision && countExactOccurrences(previousContent, revision.original) !== 1) {
@@ -4878,22 +4847,12 @@ async function applySafeRevision(projectPath, revisionId) {
     throw new Error("正文已经变化，并且无法唯一定位原文；修订已标记为失效，没有修改章节。");
   }
   const nextContent = replaceUniqueSelection(previousContent, revision.original, revision.replacement);
-  const didSplitSharedFile = await ensureExclusiveChapterFile(projectPath, config, chapter, previousContent, { snapshot: false, reason: "应用安全修订前拆分共享文件" });
-  if (didSplitSharedFile) filePath = getChapterPath(projectPath, chapter);
-  await snapshotChapterVersion(projectPath, chapter, previousContent, `应用安全修订：${revision.action}`);
-  await fs.writeFile(filePath, nextContent, "utf8");
-  chapter.wordCount = countWords(nextContent);
-  chapter.outline = extractOutline(nextContent);
-  chapter.updatedAt = nowIso();
-  await calculateTotalWords(projectPath, config);
-  await saveConfig(projectPath, config);
-  await indexSource(projectPath, { id: chapter.id, type: "chapter", title: chapter.title, volume: chapter.volume || "未分卷", category: chapter.volume || "未分卷", knowledgeRole: getKnowledgeRole(chapter), content: nextContent });
-  if (config.agent?.autoLocalAnalysis !== false) await refreshLocalStoryState(projectPath, chapter.id, nextContent).catch(() => null);
+  await saveChapterContent(projectPath, { chapterId: chapter.id, content: nextContent, expectedRevision: contentRevision(previousContent) });
   await creativeWorkspace.upsertItem(projectPath, "revisions", { ...revision, status: "已采纳", appliedAt: nowIso(), error: "" });
   return { state: await buildAppState(projectPath, chapter.id), revision: { ...revision, status: "已采纳" } };
 }
 
-async function applySafeRevisionPart(projectPath, payload = {}) {
+async function applySafeRevisionPartUnlocked(projectPath, payload = {}) {
   const workspaceState = await creativeWorkspace.loadWorkspace(projectPath);
   const revision = workspaceState.revisions.find((item) => item.id === payload.revisionId);
   if (!revision) throw new Error("没有找到这条修订建议。");
@@ -4907,20 +4866,10 @@ async function applySafeRevisionPart(projectPath, payload = {}) {
   const config = await loadConfig(projectPath);
   const chapter = config.chapters.find((item) => item.id === revision.chapterId);
   if (!chapter) throw new Error("修订对应的章节已不存在。");
-  let filePath = getChapterPath(projectPath, chapter);
+  const filePath = getChapterPath(projectPath, chapter);
   const previousContent = await fs.readFile(filePath, "utf8").catch(() => "");
   const nextContent = replaceUniqueSelection(previousContent, originalPart, replacementPart);
-  const didSplitSharedFile = await ensureExclusiveChapterFile(projectPath, config, chapter, previousContent, { snapshot: false, reason: "局部应用安全修订前拆分共享文件" });
-  if (didSplitSharedFile) filePath = getChapterPath(projectPath, chapter);
-  await snapshotChapterVersion(projectPath, chapter, previousContent, `局部应用安全修订：${revision.action}`);
-  await fs.writeFile(filePath, nextContent, "utf8");
-  chapter.wordCount = countWords(nextContent);
-  chapter.outline = extractOutline(nextContent);
-  chapter.updatedAt = nowIso();
-  await calculateTotalWords(projectPath, config);
-  await saveConfig(projectPath, config);
-  await indexSource(projectPath, { id: chapter.id, type: "chapter", title: chapter.title, volume: chapter.volume || "未分卷", category: chapter.volume || "未分卷", knowledgeRole: getKnowledgeRole(chapter), content: nextContent });
-  if (config.agent?.autoLocalAnalysis !== false) await refreshLocalStoryState(projectPath, chapter.id, nextContent).catch(() => null);
+  await saveChapterContent(projectPath, { chapterId: chapter.id, content: nextContent, expectedRevision: contentRevision(previousContent) });
   const appliedAt = nowIso();
   const updated = await creativeWorkspace.upsertItem(projectPath, "revisions", {
     ...revision,
@@ -4953,7 +4902,7 @@ function importedCopyTitle(title, existingTitles) {
   return candidate;
 }
 
-async function buildProjectExchangeArchive(projectPath, targetFile, options = {}) {
+async function buildProjectExchangeArchiveUnlocked(projectPath, targetFile, options = {}) {
   const config = await loadConfig(projectPath);
   const includeWorkspace = options.includeWorkspace !== false;
   const characters = await loadCharacters(projectPath);
@@ -4967,6 +4916,7 @@ async function buildProjectExchangeArchive(projectPath, targetFile, options = {}
     updatedAt: config.updatedAt,
     chapters: config.chapters.map(({ importedFrom, originalDocxFile, ...chapter }) => ({ ...chapter, importedFrom: undefined, originalDocxFile: undefined })),
   };
+  const resourceWarnings = [];
   const manifest = {
     format: "ai-novel-project-exchange",
     version: 1,
@@ -4975,25 +4925,29 @@ async function buildProjectExchangeArchive(projectPath, targetFile, options = {}
     project: { title: config.title, author: config.author },
     counts: { chapters: config.chapters.length, characters: characters.length, worldDocs: worldDocs.length, materials: materials.length },
     workspaceIncluded: includeWorkspace,
+    resourceWarnings,
     security: { apiSettingsIncluded: false, vectorIndexIncluded: false, backupsIncluded: false, passwordProtected: Boolean(options.password) },
   };
   const zip = new AdmZip();
   zip.addFile("manifest.json", Buffer.from(JSON.stringify(manifest, null, 2), "utf8"));
   zip.addFile("project/novel.config.json", Buffer.from(JSON.stringify(exportConfig, null, 2), "utf8"));
   for (const chapter of config.chapters) {
-    const buffer = await fs.readFile(getChapterPath(projectPath, chapter)).catch(() => Buffer.from("", "utf8"));
+    const content = await fs.readFile(getChapterPath(projectPath, chapter), "utf8");
+    const buffer = Buffer.from(await projectArchives.portableValue(content, projectPath, zip, resourceWarnings, chapter.title));
     zip.addFile(`project/chapters/${normalizeChapterFileName(chapter.fileName)}`, buffer);
   }
-  for (const card of characters) zip.addFile(`project/characters/${path.basename(card.fileName || `${card.id}.json`)}`, Buffer.from(JSON.stringify({ ...card, fileName: undefined }, null, 2), "utf8"));
-  for (const doc of worldDocs) zip.addFile(`project/worldbuilding/${path.basename(doc.fileName || `${doc.id}.md`)}`, Buffer.from(buildWorldDocFile(doc), "utf8"));
-  for (const item of materials) zip.addFile(`project/materials/${item.id}.json`, Buffer.from(JSON.stringify(item, null, 2), "utf8"));
+  for (const card of characters) zip.addFile(`project/characters/${path.basename(card.fileName || `${card.id}.json`)}`, Buffer.from(JSON.stringify(await projectArchives.portableValue({ ...card, fileName: undefined }, projectPath, zip, resourceWarnings, card.name), null, 2), "utf8"));
+  for (const doc of worldDocs) zip.addFile(`project/worldbuilding/${path.basename(doc.fileName || `${doc.id}.md`)}`, Buffer.from(await projectArchives.portableValue(buildWorldDocFile(doc), projectPath, zip, resourceWarnings, doc.title), "utf8"));
+  for (const item of materials) zip.addFile(`project/materials/${item.id}.json`, Buffer.from(JSON.stringify(await projectArchives.portableValue(item, projectPath, zip, resourceWarnings, item.title), null, 2), "utf8"));
   if (includeWorkspace) {
     const workspace = await creativeWorkspace.loadWorkspace(projectPath);
-    zip.addFile("project/analysis/creative-workspace/state.json", Buffer.from(JSON.stringify(workspace, null, 2), "utf8"));
+    zip.addFile("project/analysis/creative-workspace/state.json", Buffer.from(JSON.stringify(await projectArchives.portableValue(workspace, projectPath, zip, resourceWarnings), null, 2), "utf8"));
   }
+  manifest.counts.assets = zip.getEntries().filter((entry) => entry.entryName.startsWith("project/assets/")).length;
+  zip.updateFile("manifest.json", Buffer.from(JSON.stringify(manifest, null, 2)));
   const archive = zip.toBuffer();
   const output = options.password ? await exchangeSecurity.encryptBuffer(archive, options.password) : archive;
-  await fs.writeFile(targetFile, output);
+  await writeFileAtomic(targetFile, output);
   return { filePath: targetFile, manifest, encrypted: Boolean(options.password) };
 }
 
@@ -5030,11 +4984,11 @@ async function previewProjectExchange(projectPath, options = {}) {
     pending = { filePath, projectPath, createdAt: Date.now() };
     pendingExchangeImports.set(token, pending);
   }
+  if ((await fs.stat(filePath)).size > projectArchives.ARCHIVE_LIMITS.compressed) throw new Error("交换包超过 100 MB 上限。");
   const raw = await fs.readFile(filePath);
   const encrypted = exchangeSecurity.isEncrypted(raw);
   if (encrypted && !options.password) return { token, filePath, encrypted: true, requiresPassword: true };
-  const archive = await exchangeSecurity.decryptBuffer(raw, options.password || "");
-  const zip = new AdmZip(archive);
+  const zip = await projectArchives.readExchangeArchive(filePath, options.password || "");
   const manifest = readExchangeJson(zip, "manifest.json", null);
   const importedConfig = readExchangeJson(zip, "project/novel.config.json", null);
   if (manifest?.format !== "ai-novel-project-exchange" || !Array.isArray(importedConfig?.chapters)) throw new Error("这不是有效的 AI 小说项目交换包。");
@@ -5053,15 +5007,15 @@ async function previewProjectExchange(projectPath, options = {}) {
   return { token, filePath, manifest, conflicts, encrypted, requiresPassword: false };
 }
 
-async function importProjectExchange(projectPath, token, options = {}) {
+async function importProjectExchangeUnlocked(projectPath, token, options = {}) {
   const pending = pendingExchangeImports.get(String(token || ""));
   if (!pending || path.resolve(pending.projectPath) !== path.resolve(projectPath)) throw new Error("交换包预览已失效，请重新选择文件。");
-  const raw = await fs.readFile(pending.filePath);
-  const archive = await exchangeSecurity.decryptBuffer(raw, options.password || "");
-  const zip = new AdmZip(archive);
+  const zip = await projectArchives.readExchangeArchive(pending.filePath, options.password || "");
   const importedConfig = readExchangeJson(zip, "project/novel.config.json", null);
   if (!Array.isArray(importedConfig?.chapters)) throw new Error("交换包缺少项目目录信息。");
-  await projectSnapshots.createSnapshot(projectPath, { name: "导入项目交换包前", reason: `导入 ${path.basename(pending.filePath)} 前自动保存` });
+  const safetySnapshot = await projectSnapshots.createSnapshot(projectPath, { name: "导入项目交换包前", reason: `导入 ${path.basename(pending.filePath)} 前自动保存` });
+  try {
+  const assetMap = await projectArchives.importExchangeAssets(projectPath, zip, makeId("exchange"));
   const config = await loadConfig(projectPath);
   const chapterTitles = new Set(config.chapters.map((item) => item.title));
   const chapterIdMap = new Map();
@@ -5074,8 +5028,8 @@ async function importProjectExchange(projectPath, token, options = {}) {
     const extension = [".html", ".md"].includes(path.extname(source.fileName).toLowerCase()) ? path.extname(source.fileName).toLowerCase() : ".md";
     const title = importedCopyTitle(source.title, chapterTitles);
     const fileName = await uniqueChapterFileName(projectPath, config, `${sanitizeFileName(title)}_import`, extension);
-    const content = zip.readAsText(entry);
-    await fs.writeFile(path.join(projectPath, "chapters", fileName), content, "utf8");
+    const content = projectArchives.remapAssetValue(zip.readAsText(entry), assetMap);
+    await writeFileAtomic(path.join(projectPath, "chapters", fileName), content, "utf8");
     config.chapters.push({ ...source, id, title, fileName, order: config.chapters.length, importedFrom: undefined, originalDocxFile: undefined, wordCount: countWords(content), outline: extractOutline(content), createdAt: nowIso(), updatedAt: nowIso() });
     importedChapters += 1;
   }
@@ -5086,7 +5040,7 @@ async function importProjectExchange(projectPath, token, options = {}) {
   const characterNames = new Set(existingCharacters.map((item) => item.name));
   let importedCharacters = 0;
   for (const entry of (options.includeCharacters === false ? [] : zip.getEntries().filter((item) => item.entryName.startsWith("project/characters/") && !item.isDirectory))) {
-    const source = readExchangeJson(zip, entry.entryName, null);
+    const source = projectArchives.remapAssetValue(readExchangeJson(zip, entry.entryName, null), assetMap);
     if (!source) continue;
     const id = makeId("character");
     const card = { ...source, id, name: importedCopyTitle(source.name, characterNames), fileName: `${id}.json`, createdAt: source.createdAt || nowIso(), updatedAt: nowIso() };
@@ -5098,7 +5052,7 @@ async function importProjectExchange(projectPath, token, options = {}) {
   const worldTitles = new Set(existingWorld.map((item) => item.title));
   let importedWorldDocs = 0;
   for (const entry of (options.includeWorld === false ? [] : zip.getEntries().filter((item) => item.entryName.startsWith("project/worldbuilding/") && !item.isDirectory))) {
-    const source = parseWorldDocFile(path.basename(entry.entryName), zip.readAsText(entry));
+    const source = parseWorldDocFile(path.basename(entry.entryName), projectArchives.remapAssetValue(zip.readAsText(entry), assetMap));
     const id = makeId("world");
     const fileName = await uniqueFileNameInDirectory(path.join(projectPath, "worldbuilding"), id, ".md");
     await writeWorldDoc(projectPath, { ...source, id, title: importedCopyTitle(source.title, worldTitles), fileName, updatedAt: nowIso() });
@@ -5107,16 +5061,21 @@ async function importProjectExchange(projectPath, token, options = {}) {
 
   let importedMaterials = 0;
   for (const entry of (options.includeMaterials === false ? [] : zip.getEntries().filter((item) => item.entryName.startsWith("project/materials/") && !item.isDirectory))) {
-    const source = readExchangeJson(zip, entry.entryName, null);
+    const source = projectArchives.remapAssetValue(readExchangeJson(zip, entry.entryName, null), assetMap);
     if (!source) continue;
     await saveMaterial(projectPath, { ...source, id: makeId("material"), title: `${source.title || "导入素材"}${options.renameMaterials === false ? "" : "（导入）"}` });
     importedMaterials += 1;
   }
-  const importedWorkspace = readExchangeJson(zip, "project/analysis/creative-workspace/state.json", null);
+  const importedWorkspace = projectArchives.remapAssetValue(readExchangeJson(zip, "project/analysis/creative-workspace/state.json", null), assetMap);
   if (importedWorkspace && options.includeWorkspace !== false && options.includeChapters !== false) await creativeWorkspace.mergeImportedWorkspace(projectPath, importedWorkspace, chapterIdMap);
   await rebuildIndex(projectPath);
   pendingExchangeImports.delete(String(token || ""));
-  return { state: await buildAppState(projectPath), imported: { chapters: importedChapters, characters: importedCharacters, worldDocs: importedWorldDocs, materials: importedMaterials }, renamedConflicts: true };
+  return { state: await buildAppState(projectPath), imported: { chapters: importedChapters, characters: importedCharacters, worldDocs: importedWorldDocs, materials: importedMaterials }, renamedConflicts: true, resourceWarnings: readExchangeJson(zip, "manifest.json", {})?.resourceWarnings || [] };
+  } catch (error) {
+    try { await projectSnapshots.restoreSnapshot(projectPath, safetySnapshot.id, { skipSafetySnapshot: true }); }
+    catch (rollbackError) { error.message += `；回滚失败，请恢复快照 ${safetySnapshot.id}：${rollbackError.message}`; }
+    throw error;
+  }
 }
 
 async function buildCreativeStatistics(projectPath, label = "", control = null) {
@@ -5415,7 +5374,7 @@ async function compareChapterVersion(projectPath, chapterId, versionId) {
   const version = versions.find((item) => item.id === versionId);
   if (!version) throw new Error("找不到这个历史版本。");
   const oldContent = await fs.readFile(getChapterVersionContentPath(projectPath, chapterId, version), "utf8");
-  const currentContent = await fs.readFile(getChapterPath(projectPath, chapter), "utf8").catch(() => "");
+  const currentContent = await fs.readFile(getChapterPath(projectPath, chapter), "utf8");
   return {
     version,
     currentTitle: chapter.title,
@@ -5424,32 +5383,17 @@ async function compareChapterVersion(projectPath, chapterId, versionId) {
   };
 }
 
-async function restoreChapterVersion(projectPath, chapterId, versionId) {
+async function restoreChapterVersionUnlocked(projectPath, chapterId, versionId, expectedRevision = "" ) {
   const config = await loadConfig(projectPath);
   const chapter = config.chapters.find((item) => item.id === chapterId);
   if (!chapter) throw new Error("章节不存在，无法恢复版本。");
   const versions = await listChapterVersions(projectPath, chapterId);
   const version = versions.find((item) => item.id === versionId);
   if (!version) throw new Error("找不到要恢复的历史版本。");
-  const currentContent = await fs.readFile(getChapterPath(projectPath, chapter), "utf8").catch(() => "");
+  const currentContent = await fs.readFile(getChapterPath(projectPath, chapter), "utf8");
   const restoredContent = await fs.readFile(getChapterVersionContentPath(projectPath, chapterId, version), "utf8");
-  if (currentContent && currentContent !== restoredContent) await snapshotChapterVersion(projectPath, chapter, currentContent, "恢复历史版本前自动备份");
-  await ensureExclusiveChapterFile(projectPath, config, chapter, currentContent, { snapshot: false });
-  await fs.writeFile(getChapterPath(projectPath, chapter), restoredContent, "utf8");
-  chapter.wordCount = countWords(restoredContent);
-  chapter.outline = extractOutline(restoredContent);
-  chapter.updatedAt = nowIso();
-  await calculateTotalWords(projectPath, config);
-  await saveConfig(projectPath, config);
-  await indexSource(projectPath, {
-    id: chapter.id,
-    type: "chapter",
-    title: chapter.title,
-    volume: chapter.volume || "未分卷",
-    category: chapter.volume || "未分卷",
-    knowledgeRole: getKnowledgeRole(chapter),
-    content: restoredContent,
-  });
+  assertExpectedChapterRevision(expectedRevision, currentContent);
+  await saveChapterContent(projectPath, { chapterId, content: restoredContent, expectedRevision: contentRevision(currentContent) });
   return { state: await buildAppState(projectPath, chapter.id), restoredVersion: version };
 }
 
@@ -5880,7 +5824,7 @@ async function exportContentToDocx(title, content, targetFile, description = "�
     ],
   });
   const buffer = await normalizeExportedDocxBuffer(await Packer.toBuffer(doc));
-  await fs.writeFile(targetFile, buffer);
+  await writeFileAtomic(targetFile, buffer);
   return targetFile;
 }
 
@@ -6083,48 +6027,19 @@ async function exportBookToDocx(projectPath, targetFile, options = {}) {
     ],
   });
   const buffer = await Packer.toBuffer(doc);
-  await fs.writeFile(targetFile, buffer);
+  await writeFileAtomic(targetFile, buffer);
   return targetFile;
 }
 
-async function inlineLocalImagesInHtml(html) {
-  let output = String(html || "");
-  const matches = [...output.matchAll(/<img\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/gi)];
-  for (const match of matches) {
-    const src = match[1];
-    if (!src.startsWith("file://")) continue;
-    try {
-      const filePath = fileURLToPath(src);
-      const buffer = await fs.readFile(filePath);
-      const ext = path.extname(filePath).toLowerCase();
-      const contentType =
-        ext === ".jpg" || ext === ".jpeg"
-          ? "image/jpeg"
-          : ext === ".gif"
-            ? "image/gif"
-            : ext === ".webp"
-              ? "image/webp"
-              : "image/png";
-      const dataUri = `data:${contentType};base64,${buffer.toString("base64")}`;
-      output = output.replaceAll(src, dataUri);
-    } catch {
-      // 导出时如果个别图片文件已经丢失，保留原链接并继续导出正文。
-    }
-  }
-  return output;
-}
 
-async function createBackup(projectPath, targetFile = "") {
+
+async function createBackupUnlocked(projectPath, targetFile = "") {
   await ensureDir(path.join(projectPath, "backups"));
   const config = await loadConfig(projectPath);
   const stamp = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
   const filePath = targetFile || path.join(projectPath, "backups", `backup_${stamp}.zip`);
-  const zip = new AdmZip();
-  zip.addLocalFolder(projectPath, sanitizeFileName(config.title || "NovelProject"), (filename) => {
-    const normalized = String(filename || "").replace(/\\/g, "/").replace(/^\.\//, "");
-    return !normalized.startsWith("backups/") && !normalized.includes("/backups/") && !normalized.includes("/node_modules/") && !normalized.startsWith("node_modules/") && !normalized.includes("/release/") && !normalized.startsWith("release/");
-  });
-  zip.writeZip(filePath);
+  const zip = await projectArchives.buildBackupZip(projectPath, config.title);
+  await writeFileAtomic(filePath, zip.toBuffer());
   return filePath;
 }
 
@@ -6238,9 +6153,8 @@ async function createWindow() {
     mainWindow.webContents.send("app:before-close");
     windowCloseRequestTimer = setTimeout(() => {
       windowCloseRequestTimer = null;
-      windowCloseApproved = true;
-      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
-    }, 5000);
+      // Saving can take longer than the IPC handshake. Only the renderer may approve closing.
+    }, 30000);
   });
 
   const devUrl = process.env.VITE_DEV_SERVER_URL;
@@ -6319,42 +6233,56 @@ async function ensureCurrentProject() {
   return currentProjectPath;
 }
 
+function registerIpcHandler(channel, action) {
+  ipcMain.handle(channel, async (event, ...args) => {
+    assertTrustedSender(event, mainWindow);
+    validateIpcArguments(channel, args);
+    return action(event, ...args);
+  });
+}
+
 function registerIpcHandlers() {
-  ipcMain.on("app:confirm-close", () => {
+  ipcMain.on("app:confirm-close", (event) => {
+    try { assertTrustedSender(event, mainWindow); } catch { return; }
     if (windowCloseRequestTimer) clearTimeout(windowCloseRequestTimer);
     windowCloseRequestTimer = null;
     windowCloseApproved = true;
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
   });
-  ipcMain.handle("app:get-state", async () => {
+  ipcMain.on("app:cancel-close", (event) => {
+    try { assertTrustedSender(event, mainWindow); } catch { return; }
+    if (windowCloseRequestTimer) clearTimeout(windowCloseRequestTimer);
+    windowCloseRequestTimer = null;
+  });
+  registerIpcHandler("app:get-state", async () => {
     const projectPath = await ensureCurrentProject();
     return buildAppState(projectPath);
   });
 
-  ipcMain.handle("app:check-update", async () => checkForAppUpdate());
+  registerIpcHandler("app:check-update", async () => checkForAppUpdate());
 
-  ipcMain.handle("app:download-update", async (_event, payload) => downloadAndOpenAppUpdate(String(payload?.url || ""), String(payload?.assetName || "")));
+  registerIpcHandler("app:download-update", async (_event, payload) => downloadAndOpenAppUpdate(String(payload?.url || ""), String(payload?.assetName || "")));
 
-  ipcMain.handle("app:privacy-scan", async () => releasePrivacy.scanReleaseInputs(path.resolve(__dirname, "..")));
+  registerIpcHandler("app:privacy-scan", async () => releasePrivacy.scanReleaseInputs(path.resolve(__dirname, "..")));
 
-  ipcMain.handle("recovery:get", async () => {
+  registerIpcHandler("recovery:get", async () => {
     const projectPath = await ensureCurrentProject();
     return operationJournal.getRecoveryStatus(projectPath);
   });
 
-  ipcMain.handle("recovery:save-draft", async (_event, payload) => {
+  registerIpcHandler("recovery:save-draft", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     const config = await loadConfig(projectPath);
     if (config.ui?.recoveryEnabled === false) return { disabled: true };
     return operationJournal.saveDraft(projectPath, payload || {});
   });
 
-  ipcMain.handle("recovery:clear-draft", async (_event, chapterId) => {
+  registerIpcHandler("recovery:clear-draft", async (_event, chapterId) => {
     const projectPath = await ensureCurrentProject();
     return operationJournal.clearDraft(projectPath, String(chapterId || ""));
   });
 
-  ipcMain.handle("recovery:save-window", async (_event, payload) => {
+  registerIpcHandler("recovery:save-window", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     const current = await operationJournal.loadWindowState(projectPath).catch(() => null);
     const bounds = mainWindow && !mainWindow.isDestroyed() ? mainWindow.getNormalBounds() : current?.bounds;
@@ -6366,13 +6294,13 @@ function registerIpcHandlers() {
     });
   });
 
-  ipcMain.handle("operations:list", async () => {
+  registerIpcHandler("operations:list", async () => {
     const projectPath = await ensureCurrentProject();
     const journal = await operationJournal.loadJournal(projectPath);
     return { operations: journal.operations.slice(0, 200), sessions: journal.sessions.slice(0, 20) };
   });
 
-  ipcMain.handle("project:create", async (_event, payload) => {
+  registerIpcHandler("project:create", async (_event, payload) => {
     const result = await dialog.showOpenDialog(mainWindow, {
       title: "选择新小说项目保存位置",
       properties: ["openDirectory", "createDirectory"],
@@ -6385,7 +6313,7 @@ function registerIpcHandlers() {
     return buildAppState(currentProjectPath);
   });
 
-  ipcMain.handle("project:open", async () => {
+  registerIpcHandler("project:open", async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
       title: "打开小说项目文件夹",
       properties: ["openDirectory"],
@@ -6397,8 +6325,9 @@ function registerIpcHandlers() {
     return buildAppState(currentProjectPath);
   });
 
-  ipcMain.handle("document:import", async (_event, payload) => {
+  registerIpcHandler("document:import", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
+    return withProjectTransaction(projectPath, async () => {
     const targetVolume = String(payload?.volume || "").trim();
     importCancelRequested = false;
     const result = await dialog.showOpenDialog(mainWindow, {
@@ -6485,16 +6414,18 @@ function registerIpcHandlers() {
         canceled: importCancelRequested,
       },
     };
+      });
   });
 
-  ipcMain.handle("document:cancel-import", async () => {
+  registerIpcHandler("document:cancel-import", async () => {
     importCancelRequested = true;
     sendRendererEvent("import:progress", { active: true, phase: "正在取消", current: 0, total: 0, fileName: "当前文档处理完后停止", cancellable: false });
     return { ok: true };
   });
 
-  ipcMain.handle("project:save-settings", async (_event, payload) => {
+  registerIpcHandler("project:save-settings", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
+    return withProjectTransaction(projectPath, async () => {
     const config = await loadConfig(projectPath);
     const secrets = await saveCredentialSecrets(projectPath, payload?.api || {}, config);
     const nextConfig = configFromRenderer(config, payload || {});
@@ -6504,9 +6435,10 @@ function registerIpcHandlers() {
     Object.defineProperty(nextConfig.api, "__embeddingSecret", { value: secrets.embedding, configurable: true, writable: true, enumerable: false });
     await saveConfig(projectPath, nextConfig);
     return buildAppState(projectPath, payload?.selectedChapterId);
+      });
   });
 
-  ipcMain.handle("project:export-backup", async () => {
+  registerIpcHandler("project:export-backup", async () => {
     const projectPath = await ensureCurrentProject();
     const result = await dialog.showSaveDialog(mainWindow, {
       title: "导出小说项目备份",
@@ -6518,24 +6450,24 @@ function registerIpcHandlers() {
     return { filePath };
   });
 
-  ipcMain.handle("project:export-exchange", async (_event, payload) => {
+  registerIpcHandler("project:export-exchange", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     return exportProjectExchange(projectPath, payload || {});
   });
 
-  ipcMain.handle("project:preview-exchange", async (_event, payload) => {
+  registerIpcHandler("project:preview-exchange", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     return previewProjectExchange(projectPath, payload || {});
   });
 
-  ipcMain.handle("project:import-exchange", async (_event, payload) => {
+  registerIpcHandler("project:import-exchange", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     return withJournalOperation(projectPath, { type: "project-exchange-import", title: "导入项目交换包", recoverable: true },
       () => importProjectExchange(projectPath, payload?.token, payload || {}),
       (result) => ({ imported: result.imported }));
   });
 
-  ipcMain.handle("project:export-book-docx", async (_event, payload) => {
+  registerIpcHandler("project:export-book-docx", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     const result = await dialog.showOpenDialog(mainWindow, {
       title: "选择逐篇 Word 文档的保存位置",
@@ -6546,22 +6478,22 @@ function registerIpcHandlers() {
     return exportBookDocumentsToDirectory(projectPath, result.filePaths[0], payload || {});
   });
 
-  ipcMain.handle("global:search", async (_event, payload) => {
+  registerIpcHandler("global:search", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     return globalSearch(projectPath, payload?.query || "");
   });
 
-  ipcMain.handle("analysis:get-state", async () => {
+  registerIpcHandler("analysis:get-state", async () => {
     const projectPath = await ensureCurrentProject();
     return loadAnalysisState(projectPath);
   });
 
-  ipcMain.handle("analysis:save-state", async (_event, payload) => {
+  registerIpcHandler("analysis:save-state", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     return saveAnalysisState(projectPath, payload || {});
   });
 
-  ipcMain.handle("analysis:timeline", async (_event, payload) => {
+  registerIpcHandler("analysis:timeline", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     const snapshot = await loadAnalysisState(projectPath);
     if (payload?.refresh === false && snapshot.timeline?.events) return snapshot.timeline;
@@ -6580,7 +6512,7 @@ function registerIpcHandlers() {
     return result;
   });
 
-  ipcMain.handle("analysis:relationships", async (_event, payload) => {
+  registerIpcHandler("analysis:relationships", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     const snapshot = await loadAnalysisState(projectPath);
     if (payload?.refresh === false && snapshot.relationships?.nodes) return snapshot.relationships;
@@ -6589,7 +6521,7 @@ function registerIpcHandlers() {
     return result;
   });
 
-  ipcMain.handle("analysis:consistency", async (_event, payload) => {
+  registerIpcHandler("analysis:consistency", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     const snapshot = await loadAnalysisState(projectPath);
     if (payload?.refresh === false && snapshot.consistency?.issues) return snapshot.consistency;
@@ -6598,7 +6530,7 @@ function registerIpcHandlers() {
     return result;
   });
 
-  ipcMain.handle("analysis:update-issue-status", async (_event, payload) => {
+  registerIpcHandler("analysis:update-issue-status", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     const issueId = String(payload?.issueId || "");
     const status = String(payload?.status || "待处理");
@@ -6618,52 +6550,52 @@ function registerIpcHandlers() {
     return { issueId, status, updatedAt: statuses[issueId].updatedAt };
   });
 
-  ipcMain.handle("knowledge:list", async () => {
+  registerIpcHandler("knowledge:list", async () => {
     const projectPath = await ensureCurrentProject();
     return { items: await listKnowledgeItems(projectPath) };
   });
 
-  ipcMain.handle("knowledge:update", async (_event, payload) => {
+  registerIpcHandler("knowledge:update", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     return updateKnowledgeItems(projectPath, payload?.items || []);
   });
 
-  ipcMain.handle("knowledge:status", async () => {
+  registerIpcHandler("knowledge:status", async () => {
     const projectPath = await ensureCurrentProject();
     return getKnowledgeSyncStatus(projectPath);
   });
 
-  ipcMain.handle("knowledge:repair", async () => {
+  registerIpcHandler("knowledge:repair", async () => {
     const projectPath = await ensureCurrentProject();
     return repairKnowledgeSync(projectPath);
   });
 
-  ipcMain.handle("maintenance:diagnostics", async () => {
+  registerIpcHandler("maintenance:diagnostics", async () => {
     const projectPath = await ensureCurrentProject();
     return getMaintenanceDiagnostics(projectPath);
   });
 
-  ipcMain.handle("maintenance:repair", async () => {
+  registerIpcHandler("maintenance:repair", async () => {
     const projectPath = await ensureCurrentProject();
     return repairMaintenance(projectPath);
   });
 
-  ipcMain.handle("project:health", async () => {
+  registerIpcHandler("project:health", async () => {
     const projectPath = await ensureCurrentProject();
     return inspectProjectHealth(projectPath);
   });
 
-  ipcMain.handle("project:repair-health", async () => {
+  registerIpcHandler("project:repair-health", async () => {
     const projectPath = await ensureCurrentProject();
     return repairProjectHealth(projectPath);
   });
 
-  ipcMain.handle("story:get-overview", async (_event, payload) => {
+  registerIpcHandler("story:get-overview", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     return getStoryOverviewForProject(projectPath, payload || {});
   });
 
-  ipcMain.handle("story:analyze-local", async (_event, payload) => {
+  registerIpcHandler("story:analyze-local", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     const config = await loadConfig(projectPath);
     const requestedIds = new Set((payload?.chapterIds || []).map(String));
@@ -6672,12 +6604,12 @@ function registerIpcHandlers() {
     return getStoryOverviewForProject(projectPath, payload || {});
   });
 
-  ipcMain.handle("story:update-fact", async (_event, payload) => {
+  registerIpcHandler("story:update-fact", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     return storyState.updateFact(projectPath, String(payload?.factId || ""), payload?.patch || {});
   });
 
-  ipcMain.handle("story:create-fact", async (_event, payload) => {
+  registerIpcHandler("story:create-fact", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     const config = await loadConfig(projectPath);
     const chapter = config.chapters.find((item) => item.id === payload?.chapterId);
@@ -6685,17 +6617,17 @@ function registerIpcHandlers() {
     return storyState.createManualFact(projectPath, { ...payload, chapterTitle: chapter.title, volume: chapter.volume || "未分卷" });
   });
 
-  ipcMain.handle("story:delete-fact", async (_event, factId) => {
+  registerIpcHandler("story:delete-fact", async (_event, factId) => {
     const projectPath = await ensureCurrentProject();
     return storyState.deleteFact(projectPath, String(factId || ""));
   });
 
-  ipcMain.handle("story:update-foreshadow", async (_event, payload) => {
+  registerIpcHandler("story:update-foreshadow", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     return storyState.updateForeshadow(projectPath, String(payload?.foreshadowId || ""), payload?.patch || {});
   });
 
-  ipcMain.handle("story:create-foreshadow", async (_event, payload) => {
+  registerIpcHandler("story:create-foreshadow", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     const config = await loadConfig(projectPath);
     const chapter = config.chapters.find((item) => item.id === payload?.chapterId);
@@ -6703,22 +6635,22 @@ function registerIpcHandlers() {
     return storyState.createManualForeshadow(projectPath, { ...payload, chapterTitle: chapter.title, volume: chapter.volume || "未分卷" });
   });
 
-  ipcMain.handle("story:delete-foreshadow", async (_event, foreshadowId) => {
+  registerIpcHandler("story:delete-foreshadow", async (_event, foreshadowId) => {
     const projectPath = await ensureCurrentProject();
     return storyState.deleteForeshadow(projectPath, String(foreshadowId || ""));
   });
 
-  ipcMain.handle("story:get-board", async (_event, chapterId) => {
+  registerIpcHandler("story:get-board", async (_event, chapterId) => {
     const projectPath = await ensureCurrentProject();
     return { board: await storyState.getBoard(projectPath, String(chapterId || "")) };
   });
 
-  ipcMain.handle("story:list-boards", async () => {
+  registerIpcHandler("story:list-boards", async () => {
     const projectPath = await ensureCurrentProject();
     return { boards: await storyState.listBoards(projectPath) };
   });
 
-  ipcMain.handle("story:generate-board", async (_event, payload) => {
+  registerIpcHandler("story:generate-board", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     const config = await loadConfig(projectPath);
     const ordered = config.chapters.slice().sort((a, b) => a.order - b.order);
@@ -6728,35 +6660,35 @@ function registerIpcHandlers() {
     return { board: await storyState.generateLocalBoard(projectPath, chapter, ordered[index + 1] || null) };
   });
 
-  ipcMain.handle("story:save-board", async (_event, payload) => {
+  registerIpcHandler("story:save-board", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     return { board: await storyState.saveBoard(projectPath, payload?.board || {}) };
   });
 
-  ipcMain.handle("workspace:get", async () => {
+  registerIpcHandler("workspace:get", async () => {
     const projectPath = await ensureCurrentProject();
     return getCreativeWorkspaceView(projectPath);
   });
 
-  ipcMain.handle("workspace:upsert", async (_event, payload) => {
+  registerIpcHandler("workspace:upsert", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     const item = await creativeWorkspace.upsertItem(projectPath, String(payload?.collection || ""), payload?.item || {});
     return { item, workspace: await getCreativeWorkspaceView(projectPath) };
   });
 
-  ipcMain.handle("workspace:delete", async (_event, payload) => {
+  registerIpcHandler("workspace:delete", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     await creativeWorkspace.deleteItem(projectPath, String(payload?.collection || ""), String(payload?.itemId || ""));
     return { workspace: await getCreativeWorkspaceView(projectPath) };
   });
 
-  ipcMain.handle("workspace:reorder-scenes", async (_event, payload) => {
+  registerIpcHandler("workspace:reorder-scenes", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     const scenes = await creativeWorkspace.reorderScenes(projectPath, String(payload?.chapterId || ""), payload?.sceneIds || []);
     return { scenes, workspace: await getCreativeWorkspaceView(projectPath) };
   });
 
-  ipcMain.handle("workspace:rebuild-causality", async () => {
+  registerIpcHandler("workspace:rebuild-causality", async () => {
     const projectPath = await ensureCurrentProject();
     const config = await loadConfig(projectPath);
     const overview = await storyState.getStoryOverview(projectPath, { projectChapters: config.chapters, factLimit: 2000, characterLimit: 500, foreshadowLimit: 1000 });
@@ -6765,7 +6697,7 @@ function registerIpcHandlers() {
     return { ...result, workspace: await getCreativeWorkspaceView(projectPath) };
   });
 
-  ipcMain.handle("workspace:generate-arcs", async () => {
+  registerIpcHandler("workspace:generate-arcs", async () => {
     const projectPath = await ensureCurrentProject();
     const config = await loadConfig(projectPath);
     const overview = await storyState.getStoryOverview(projectPath, { projectChapters: config.chapters, characterLimit: 500 });
@@ -6773,7 +6705,7 @@ function registerIpcHandlers() {
     return { arcs, workspace: await getCreativeWorkspaceView(projectPath) };
   });
 
-  ipcMain.handle("workspace:quality", async () => {
+  registerIpcHandler("workspace:quality", async () => {
     const projectPath = await ensureCurrentProject();
     const config = await loadConfig(projectPath);
     const overview = await storyState.getStoryOverview(projectPath, { projectChapters: config.chapters, factLimit: 2000, characterLimit: 500, foreshadowLimit: 1000 });
@@ -6781,46 +6713,46 @@ function registerIpcHandlers() {
     return { reports: creativeWorkspace.qualityReport(workspace, config.chapters, overview), generatedAt: nowIso() };
   });
 
-  ipcMain.handle("workspace:statistics", async (_event, payload) => {
+  registerIpcHandler("workspace:statistics", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     return buildCreativeStatistics(projectPath, String(payload?.label || ""));
   });
 
-  ipcMain.handle("agent:prepare", async (_event, payload) => {
+  registerIpcHandler("agent:prepare", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     return prepareCreativeAgentRun(projectPath, payload || {});
   });
 
-  ipcMain.handle("agent:execute", async (_event, runId) => {
+  registerIpcHandler("agent:execute", async (_event, runId) => {
     const projectPath = await ensureCurrentProject();
     return queueCreativeAgentRun(projectPath, String(runId || ""));
   });
 
-  ipcMain.handle("agent:retry-tool", async (_event, payload) => {
+  registerIpcHandler("agent:retry-tool", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     return queueCreativeAgentRun(projectPath, String(payload?.runId || ""), String(payload?.tool || ""));
   });
 
-  ipcMain.handle("revision:create", async (_event, payload) => {
+  registerIpcHandler("revision:create", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     return createSafeRevision(projectPath, payload || {});
   });
 
-  ipcMain.handle("revision:apply", async (_event, revisionId) => {
+  registerIpcHandler("revision:apply", async (_event, revisionId) => {
     const projectPath = await ensureCurrentProject();
     return withJournalOperation(projectPath, { type: "safe-revision-apply", title: "应用安全修订", targetIds: [revisionId], recoverable: true },
       () => applySafeRevision(projectPath, String(revisionId || "")),
       (result) => ({ chapterId: result.revision.chapterId, revisionId: result.revision.id }));
   });
 
-  ipcMain.handle("revision:apply-part", async (_event, payload) => {
+  registerIpcHandler("revision:apply-part", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     return withJournalOperation(projectPath, { type: "safe-revision-apply-part", title: "局部应用安全修订", targetIds: [String(payload?.revisionId || "")], recoverable: true },
       () => applySafeRevisionPart(projectPath, payload || {}),
       (result) => ({ chapterId: result.revision.chapterId, revisionId: result.revision.id }));
   });
 
-  ipcMain.handle("revision:update-status", async (_event, payload) => {
+  registerIpcHandler("revision:update-status", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     const workspace = await creativeWorkspace.loadWorkspace(projectPath);
     const revision = workspace.revisions.find((item) => item.id === payload?.revisionId);
@@ -6830,134 +6762,134 @@ function registerIpcHandlers() {
     return { item, workspace: await getCreativeWorkspaceView(projectPath) };
   });
 
-  ipcMain.handle("tasks:list", async () => {
+  registerIpcHandler("tasks:list", async () => {
     const projectPath = await ensureCurrentProject();
     return (await getProjectTaskCenter(projectPath)).list();
   });
 
-  ipcMain.handle("tasks:enqueue", async (_event, payload) => {
+  registerIpcHandler("tasks:enqueue", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     const allowedTypes = new Set(["story-analysis", "creative-board", "consistency-check", "timeline-analysis", "knowledge-rebuild", "snapshot", "creative-statistics"]);
     if (!allowedTypes.has(payload?.type)) throw new Error("不支持的后台任务类型。");
     return { task: await (await getProjectTaskCenter(projectPath)).enqueue(payload || {}) };
   });
 
-  ipcMain.handle("tasks:cancel", async (_event, taskId) => {
+  registerIpcHandler("tasks:cancel", async (_event, taskId) => {
     const projectPath = await ensureCurrentProject();
     return (await getProjectTaskCenter(projectPath)).cancel(String(taskId || ""));
   });
 
-  ipcMain.handle("tasks:pause", async (_event, taskId) => {
+  registerIpcHandler("tasks:pause", async (_event, taskId) => {
     const projectPath = await ensureCurrentProject();
     return (await getProjectTaskCenter(projectPath)).pause(String(taskId || ""));
   });
 
-  ipcMain.handle("tasks:resume", async (_event, taskId) => {
+  registerIpcHandler("tasks:resume", async (_event, taskId) => {
     const projectPath = await ensureCurrentProject();
     return (await getProjectTaskCenter(projectPath)).resume(String(taskId || ""));
   });
 
-  ipcMain.handle("tasks:retry", async (_event, taskId) => {
+  registerIpcHandler("tasks:retry", async (_event, taskId) => {
     const projectPath = await ensureCurrentProject();
     return { task: await (await getProjectTaskCenter(projectPath)).retry(String(taskId || "")) };
   });
 
-  ipcMain.handle("tasks:remove", async (_event, taskId) => {
+  registerIpcHandler("tasks:remove", async (_event, taskId) => {
     const projectPath = await ensureCurrentProject();
     return (await getProjectTaskCenter(projectPath)).remove(String(taskId || ""));
   });
 
-  ipcMain.handle("tasks:clear-history", async () => {
+  registerIpcHandler("tasks:clear-history", async () => {
     const projectPath = await ensureCurrentProject();
     return (await getProjectTaskCenter(projectPath)).clearHistory();
   });
 
-  ipcMain.handle("snapshots:list", async () => {
+  registerIpcHandler("snapshots:list", async () => {
     const projectPath = await ensureCurrentProject();
     return projectSnapshots.listSnapshots(projectPath);
   });
 
-  ipcMain.handle("snapshots:create", async (_event, payload) => {
+  registerIpcHandler("snapshots:create", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     return { snapshot: await projectSnapshots.createSnapshot(projectPath, payload || {}) };
   });
 
-  ipcMain.handle("snapshots:compare", async (_event, snapshotId) => {
+  registerIpcHandler("snapshots:compare", async (_event, snapshotId) => {
     const projectPath = await ensureCurrentProject();
     return projectSnapshots.compareSnapshot(projectPath, String(snapshotId || ""));
   });
 
-  ipcMain.handle("snapshots:restore", async (_event, payload) => {
+  registerIpcHandler("snapshots:restore", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     const result = await projectSnapshots.restoreSnapshot(projectPath, String(payload?.snapshotId || ""), { paths: payload?.paths || [] });
     const task = await queueKnowledgeRebuildAfterRestore(projectPath, `恢复快照：${result.snapshot.name}`);
     return { ...result, task, state: await buildAppState(projectPath) };
   });
 
-  ipcMain.handle("snapshots:rename", async (_event, payload) => {
+  registerIpcHandler("snapshots:rename", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     return { snapshot: await projectSnapshots.renameSnapshot(projectPath, String(payload?.snapshotId || ""), String(payload?.name || "")) };
   });
 
-  ipcMain.handle("snapshots:delete", async (_event, snapshotId) => {
+  registerIpcHandler("snapshots:delete", async (_event, snapshotId) => {
     const projectPath = await ensureCurrentProject();
     const activeSnapshotTask = (await (await getProjectTaskCenter(projectPath)).list()).tasks.some((task) => task.type === "snapshot" && ["等待中", "运行中", "正在停止", "已暂停"].includes(task.status));
     if (activeSnapshotTask) throw new Error("项目快照仍在创建中，请等待任务完成后再删除。");
     return projectSnapshots.deleteSnapshot(projectPath, String(snapshotId || ""));
   });
 
-  ipcMain.handle("snapshots:cleanup", async () => {
+  registerIpcHandler("snapshots:cleanup", async () => {
     const projectPath = await ensureCurrentProject();
     const activeSnapshotTask = (await (await getProjectTaskCenter(projectPath)).list()).tasks.some((task) => task.type === "snapshot" && ["等待中", "运行中", "正在停止", "已暂停"].includes(task.status));
     if (activeSnapshotTask) throw new Error("项目快照仍在创建中，请等待任务完成后再清理。");
     return projectSnapshots.garbageCollectObjects(projectPath);
   });
 
-  ipcMain.handle("snapshots:create-branch", async (_event, payload) => {
+  registerIpcHandler("snapshots:create-branch", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     return projectSnapshots.createBranch(projectPath, String(payload?.name || "实验分支"), String(payload?.snapshotId || ""));
   });
 
-  ipcMain.handle("snapshots:switch-branch", async (_event, branchId) => {
+  registerIpcHandler("snapshots:switch-branch", async (_event, branchId) => {
     const projectPath = await ensureCurrentProject();
     const result = await projectSnapshots.switchBranch(projectPath, String(branchId || ""));
     const task = result.restored ? await queueKnowledgeRebuildAfterRestore(projectPath, `切换分支：${result.activeBranch.name}`) : null;
     return { ...result, task, state: await buildAppState(projectPath) };
   });
 
-  ipcMain.handle("snapshots:delete-branch", async (_event, branchId) => {
+  registerIpcHandler("snapshots:delete-branch", async (_event, branchId) => {
     const projectPath = await ensureCurrentProject();
     return projectSnapshots.deleteBranch(projectPath, String(branchId || ""));
   });
 
-  ipcMain.handle("experiments:appearance-stats", async () => {
+  registerIpcHandler("experiments:appearance-stats", async () => {
     const projectPath = await ensureCurrentProject();
     return buildAppearanceStats(projectPath);
   });
 
-  ipcMain.handle("experiments:world-map", async () => {
+  registerIpcHandler("experiments:world-map", async () => {
     const projectPath = await ensureCurrentProject();
     return buildWorldMap(projectPath);
   });
 
-  ipcMain.handle("materials:list", async () => {
+  registerIpcHandler("materials:list", async () => {
     const projectPath = await ensureCurrentProject();
     return { materials: await loadMaterials(projectPath) };
   });
 
-  ipcMain.handle("materials:save", async (_event, payload) => {
+  registerIpcHandler("materials:save", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     const item = await saveMaterial(projectPath, payload || {});
     return { material: item, materials: await loadMaterials(projectPath) };
   });
 
-  ipcMain.handle("materials:delete", async (_event, materialId) => {
+  registerIpcHandler("materials:delete", async (_event, materialId) => {
     const projectPath = await ensureCurrentProject();
     await deleteMaterial(projectPath, String(materialId || ""));
     return { materials: await loadMaterials(projectPath) };
   });
 
-  ipcMain.handle("ai:creative-advice", async (_event, payload) => {
+  registerIpcHandler("ai:creative-advice", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     const result = await buildCreativeAdvice(projectPath, payload || {});
     await saveAnalysisState(projectPath, {
@@ -6972,8 +6904,9 @@ function registerIpcHandlers() {
     return result;
   });
 
-  ipcMain.handle("chapter:create", async (_event, payload) => {
+  registerIpcHandler("chapter:create", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
+    return withProjectTransaction(projectPath, async () => {
     const config = await loadConfig(projectPath);
     const order = config.chapters.length;
     const title = payload?.title?.trim() || `第${order + 1}章 新章节`;
@@ -6993,17 +6926,17 @@ function registerIpcHandlers() {
       updatedAt: nowIso(),
     };
     config.chapters.push(chapter);
-    await fs.writeFile(getChapterPath(projectPath, chapter), `# ${title}\n\n`, "utf8");
-    await saveConfig(projectPath, config);
+    await writeProjectFiles(projectPath, [{ path: getChapterPath(projectPath, chapter), content: `# ${title}\n\n` }, { path: getConfigPath(projectPath), content: JSON.stringify(config, null, 2) }]);
     return buildAppState(projectPath, chapter.id);
+      });
   });
 
-  ipcMain.handle("chapter:load", async (_event, chapterId) => {
+  registerIpcHandler("chapter:load", async (_event, chapterId) => {
     const projectPath = await ensureCurrentProject();
     return loadChapterContent(projectPath, chapterId);
   });
 
-  ipcMain.handle("chapter:save", async (_event, payload) => {
+  registerIpcHandler("chapter:save", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     return withJournalOperation(projectPath, {
       type: "chapter-save", title: "保存章节", targetIds: [payload?.chapterId], recoverable: true,
@@ -7012,8 +6945,9 @@ function registerIpcHandlers() {
     (result) => ({ chapterId: result.chapter.id, revision: result.revision, chunks: result.indexResult.chunks }));
   });
 
-  ipcMain.handle("chapter:delete", async (_event, chapterId) => {
+  registerIpcHandler("chapter:delete", async (_event, chapterId) => {
     const projectPath = await ensureCurrentProject();
+    return withProjectTransaction(projectPath, async () => {
     const config = await loadConfig(projectPath);
     const chapter = config.chapters.find((item) => item.id === chapterId);
     if (!chapter) throw new Error("章节不存在，无法删除。");
@@ -7026,19 +6960,20 @@ function registerIpcHandlers() {
     const hasOtherChapterUsingFile = config.chapters.some(
       (item) => item.id !== chapterId && normalizeChapterFileName(item.fileName) === normalizeChapterFileName(chapter.fileName),
     );
-    if (!hasOtherChapterUsingFile) {
-      await fs.rm(getChapterPath(projectPath, chapter), { force: true });
-    }
     config.chapters = config.chapters.filter((item) => item.id !== chapterId).map((item, index) => ({ ...item, order: index }));
-    await removeSourceFromIndex(projectPath, chapterId);
+    await calculateTotalWords(projectPath, config);
+    await writeProjectFiles(projectPath, [
+      ...(!hasOtherChapterUsingFile ? [{ path: getChapterPath(projectPath, chapter), content: null }] : []),
+      { path: getConfigPath(projectPath), content: JSON.stringify(config, null, 2) },
+    ]);
+    await removeSourceFromIndex(projectPath, chapterId).catch(() => null);
     await storyState.removeChapterLedger(projectPath, chapterId).catch(() => null);
     await creativeWorkspace.removeChapterReferences(projectPath, chapterId).catch(() => null);
-    await calculateTotalWords(projectPath, config);
-    await saveConfig(projectPath, config);
     return buildAppState(projectPath, config.chapters[0]?.id);
+      });
   });
 
-  ipcMain.handle("chapter:export-docx", async (_event, chapterId) => {
+  registerIpcHandler("chapter:export-docx", async (_event, chapterId) => {
     const projectPath = await ensureCurrentProject();
     const config = await loadConfig(projectPath);
     const chapter = config.chapters.find((item) => item.id === chapterId);
@@ -7053,7 +6988,7 @@ function registerIpcHandlers() {
     return { filePath };
   });
 
-  ipcMain.handle("chapter:open-original", async (_event, chapterId) => {
+  registerIpcHandler("chapter:open-original", async (_event, chapterId) => {
     const projectPath = await ensureCurrentProject();
     const config = await loadConfig(projectPath);
     const chapter = config.chapters.find((item) => item.id === chapterId);
@@ -7065,28 +7000,29 @@ function registerIpcHandlers() {
     return error ? { filePath: originalPath, error } : { filePath: originalPath };
   });
 
-  ipcMain.handle("chapter:refresh-original", async (_event, chapterId) => {
+  registerIpcHandler("chapter:refresh-original", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
-    return refreshChapterFromOriginalDocument(projectPath, chapterId);
+    return refreshChapterFromOriginalDocument(projectPath, typeof payload === "string" ? payload : String(payload?.chapterId || ""), String(payload?.expectedRevision || ""));
   });
 
-  ipcMain.handle("chapter:list-versions", async (_event, chapterId) => {
+  registerIpcHandler("chapter:list-versions", async (_event, chapterId) => {
     const projectPath = await ensureCurrentProject();
     return { versions: await listChapterVersions(projectPath, chapterId) };
   });
 
-  ipcMain.handle("chapter:compare-version", async (_event, payload) => {
+  registerIpcHandler("chapter:compare-version", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     return compareChapterVersion(projectPath, String(payload?.chapterId || ""), String(payload?.versionId || ""));
   });
 
-  ipcMain.handle("chapter:restore-version", async (_event, payload) => {
+  registerIpcHandler("chapter:restore-version", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
-    return restoreChapterVersion(projectPath, String(payload?.chapterId || ""), String(payload?.versionId || ""));
+    return restoreChapterVersion(projectPath, String(payload?.chapterId || ""), String(payload?.versionId || ""), String(payload?.expectedRevision || ""));
   });
 
-  ipcMain.handle("chapter:reorder", async (_event, chapterIds) => {
+  registerIpcHandler("chapter:reorder", async (_event, chapterIds) => {
     const projectPath = await ensureCurrentProject();
+    return withProjectTransaction(projectPath, async () => {
     return withJournalOperation(projectPath, { type: "chapter-reorder", title: "调整目录顺序", targetIds: chapterIds, recoverable: true }, async () => {
     const config = await loadConfig(projectPath);
     const idOrder = new Map(chapterIds.map((id, index) => [id, index]));
@@ -7097,10 +7033,12 @@ function registerIpcHandlers() {
     await saveConfig(projectPath, config);
     return { chapters: config.chapters };
     }, (result) => ({ count: result.chapters.length }));
+      });
   });
 
-  ipcMain.handle("chapter:move-to-volume", async (_event, payload) => {
+  registerIpcHandler("chapter:move-to-volume", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
+    return withProjectTransaction(projectPath, async () => {
     return withJournalOperation(projectPath, { type: "chapter-move", title: "移动目录文档", targetIds: [payload?.chapterId], recoverable: true, metadata: { volume: String(payload?.volume || "") } }, async () => {
     const config = await loadConfig(projectPath);
     const chapterId = String(payload?.chapterId || "");
@@ -7125,10 +7063,12 @@ function registerIpcHandlers() {
     await saveConfig(projectPath, config);
     return buildAppState(projectPath, chapterId);
     }, (result) => ({ chapterId: result.selectedChapter?.id || "" }));
+      });
   });
 
-  ipcMain.handle("chapter:set-progress", async (_event, payload) => {
+  registerIpcHandler("chapter:set-progress", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
+    return withProjectTransaction(projectPath, async () => {
     return withJournalOperation(projectPath, { type: "chapter-progress", title: "更新章节进度", recoverable: false, metadata: { count: Array.isArray(payload?.updates) ? payload.updates.length : 0 } }, async () => {
       const config = await loadConfig(projectPath);
       const allowed = ["计划中", "写作中", "已完成", "暂缓"];
@@ -7156,10 +7096,12 @@ function registerIpcHandlers() {
       await saveConfig(projectPath, config);
       return buildAppState(projectPath, String(payload?.selectedChapterId || touched[0] || ""));
     });
+      });
   });
 
-  ipcMain.handle("character:save", async (_event, payload) => {
+  registerIpcHandler("character:save", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
+    return withProjectTransaction(projectPath, async () => {
     const characters = await loadCharacters(projectPath);
     const previous = payload.id ? characters.find((item) => item.id === payload.id) : null;
     const fileName = await uniqueContentFileName(projectPath, "characters", payload.name || payload.id || "未命名角色", ".json", previous?.fileName || "");
@@ -7176,11 +7118,11 @@ function registerIpcHandlers() {
       updatedAt: nowIso(),
     };
     const nextPath = getCharacterPath(projectPath, card);
-    // 角色改名会改变文件名，保存前清理旧文件，避免同一角色出现重复卡片。
+    await writeJson(nextPath, card);
+    // A rename only removes the old card after its replacement is durable.
     if (previous?.fileName && path.basename(nextPath) !== normalizeManagedFileName(previous.fileName, ".json")) {
       await fs.rm(getCharacterPath(projectPath, previous), { force: true });
     }
-    await writeJson(nextPath, card);
     await indexSource(projectPath, {
       id: card.id,
       type: "character",
@@ -7188,19 +7130,23 @@ function registerIpcHandlers() {
       content: characterToMarkdown(card),
     });
     return buildAppState(projectPath);
+      });
   });
 
-  ipcMain.handle("character:delete", async (_event, characterId) => {
+  registerIpcHandler("character:delete", async (_event, characterId) => {
     const projectPath = await ensureCurrentProject();
+    return withProjectTransaction(projectPath, async () => {
     const characters = await loadCharacters(projectPath);
     const card = characters.find((item) => item.id === characterId);
     if (card) await fs.rm(getCharacterPath(projectPath, card), { force: true });
     await removeSourceFromIndex(projectPath, characterId);
     return buildAppState(projectPath);
+      });
   });
 
-  ipcMain.handle("world:save", async (_event, payload) => {
+  registerIpcHandler("world:save", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
+    return withProjectTransaction(projectPath, async () => {
     const title = payload.title || "未命名设定";
     const worldDocs = await loadWorldDocs(projectPath);
     const previous = payload.id ? worldDocs.find((item) => item.id === payload.id) : null;
@@ -7221,18 +7167,21 @@ function registerIpcHandlers() {
       content: doc.content,
     });
     return buildAppState(projectPath);
+      });
   });
 
-  ipcMain.handle("world:delete", async (_event, docId) => {
+  registerIpcHandler("world:delete", async (_event, docId) => {
     const projectPath = await ensureCurrentProject();
+    return withProjectTransaction(projectPath, async () => {
     const worldDocs = await loadWorldDocs(projectPath);
     const doc = worldDocs.find((item) => item.id === docId);
     if (doc) await fs.rm(getWorldDocPath(projectPath, doc), { force: true });
     await removeSourceFromIndex(projectPath, docId);
     return buildAppState(projectPath);
+      });
   });
 
-  ipcMain.handle("ai:generate-characters", async () => {
+  registerIpcHandler("ai:generate-characters", async () => {
     const projectPath = await ensureCurrentProject();
     const config = await loadConfig(projectPath);
     if (config.agent?.snapshotBeforeBulkChanges !== false) {
@@ -7241,7 +7190,7 @@ function registerIpcHandlers() {
     return generateCharactersFromOutline(projectPath);
   });
 
-  ipcMain.handle("ai:generate-world", async () => {
+  registerIpcHandler("ai:generate-world", async () => {
     const projectPath = await ensureCurrentProject();
     const config = await loadConfig(projectPath);
     if (config.agent?.snapshotBeforeBulkChanges !== false) {
@@ -7250,12 +7199,12 @@ function registerIpcHandlers() {
     return generateWorldDocsFromOutline(projectPath);
   });
 
-  ipcMain.handle("ai:extract-world-cards", async (_event, payload) => {
+  registerIpcHandler("ai:extract-world-cards", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     return prepareWorldCardCandidates(projectPath, payload || {});
   });
 
-  ipcMain.handle("ai:save-world-card-candidates", async (_event, payload) => {
+  registerIpcHandler("ai:save-world-card-candidates", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     const config = await loadConfig(projectPath);
     if (config.agent?.snapshotBeforeBulkChanges !== false && (payload?.candidates || []).length > 1) {
@@ -7264,7 +7213,7 @@ function registerIpcHandlers() {
     return saveWorldCardCandidates(projectPath, payload?.candidates || []);
   });
 
-  ipcMain.handle("ai:edit-selection", async (_event, payload) => {
+  registerIpcHandler("ai:edit-selection", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     const config = await loadConfig(projectPath);
     const action = String(payload?.action || "润色");
@@ -7281,7 +7230,7 @@ function registerIpcHandlers() {
     return { answer };
   });
 
-  ipcMain.handle("ai:ask", async (_event, payload) => {
+  registerIpcHandler("ai:ask", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     const config = await loadConfig(projectPath);
     const question = String(payload.question || "").trim();
@@ -7369,7 +7318,7 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle("ai:cancel", async (_event, requestId) => {
+  registerIpcHandler("ai:cancel", async (_event, requestId) => {
     const id = String(requestId || "");
     const controller = activeAiRequests.get(id);
     if (!controller) return { canceled: false };
@@ -7377,11 +7326,65 @@ function registerIpcHandlers() {
     return { canceled: true };
   });
 
-  ipcMain.handle("index:rebuild", async () => {
+  registerIpcHandler("index:rebuild", async () => {
     const projectPath = await ensureCurrentProject();
     const result = await rebuildIndex(projectPath);
     return { ...result, state: await buildAppState(projectPath) };
   });
+}
+
+
+// Every project read-modify-write operation shares the process and file lock.
+function ensureProjectStructure(projectPath, ...args) {
+  return withProjectTransaction(projectPath, () => ensureProjectStructureUnlocked(projectPath, ...args));
+}
+function loadConfig(projectPath, ...args) {
+  return withProjectTransaction(projectPath, () => loadConfigUnlocked(projectPath, ...args));
+}
+function saveConfig(projectPath, ...args) {
+  return withProjectTransaction(projectPath, () => saveConfigUnlocked(projectPath, ...args));
+}
+function buildAppState(projectPath, ...args) {
+  return withProjectTransaction(projectPath, () => buildAppStateUnlocked(projectPath, ...args));
+}
+function updateKnowledgeItems(projectPath, ...args) {
+  return withProjectTransaction(projectPath, () => updateKnowledgeItemsUnlocked(projectPath, ...args));
+}
+function repairProjectHealth(projectPath, ...args) {
+  return withProjectTransaction(projectPath, () => repairProjectHealthUnlocked(projectPath, ...args));
+}
+function importDocumentIntoProject(projectPath, ...args) {
+  return withProjectTransaction(projectPath, () => importDocumentIntoProjectUnlocked(projectPath, ...args));
+}
+function refreshChapterFromOriginalDocument(projectPath, ...args) {
+  return withProjectTransaction(projectPath, () => refreshChapterFromOriginalDocumentUnlocked(projectPath, ...args));
+}
+function applySafeRevision(projectPath, ...args) {
+  return withProjectTransaction(projectPath, () => applySafeRevisionUnlocked(projectPath, ...args));
+}
+function applySafeRevisionPart(projectPath, ...args) {
+  return withProjectTransaction(projectPath, () => applySafeRevisionPartUnlocked(projectPath, ...args));
+}
+function restoreChapterVersion(projectPath, ...args) {
+  return withProjectTransaction(projectPath, () => restoreChapterVersionUnlocked(projectPath, ...args));
+}
+function importProjectExchange(projectPath, ...args) {
+  return withProjectTransaction(projectPath, () => importProjectExchangeUnlocked(projectPath, ...args));
+}
+function buildProjectExchangeArchive(projectPath, ...args) {
+  return withProjectTransaction(projectPath, () => buildProjectExchangeArchiveUnlocked(projectPath, ...args));
+}
+function createBackup(projectPath, ...args) {
+  return withProjectTransaction(projectPath, () => createBackupUnlocked(projectPath, ...args));
+}
+function indexSources(projectPath, ...args) {
+  return withProjectTransaction(projectPath, () => indexSourcesUnlocked(projectPath, ...args));
+}
+function updateKnowledgeSummaries(projectPath, ...args) {
+  return withProjectTransaction(projectPath, () => updateKnowledgeSummariesUnlocked(projectPath, ...args));
+}
+function removeSourceFromKnowledgeSummaries(projectPath, ...args) {
+  return withProjectTransaction(projectPath, () => removeSourceFromKnowledgeSummariesUnlocked(projectPath, ...args));
 }
 
 if (process.env.NOVEL_PLATFORM_TEST === "1") {

@@ -424,7 +424,7 @@ async function testFrontendSafetyContracts() {
   assert.match(appSource, /requestId !== chapterLoadRequestRef\.current/, "快速切换章节时必须丢弃迟到的加载结果");
   assert.match(appSource, /onAppCloseRequested/, "关闭窗口前必须请求渲染层保存正文或恢复草稿");
   assert.match(mainSource, /app:before-close/, "主进程关闭窗口前必须等待正文保护流程");
-  assert.match(mainSource, /!normalized\.startsWith\("backups\/"\)/, "项目备份必须排除历史 backups 目录");
+  // Backup exclusions and credential redaction are verified by archive behavior in test-plan-regression.
 }
 
 async function main() {

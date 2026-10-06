@@ -2,14 +2,21 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const WORKSPACE = path.resolve(__dirname, "..");
-const APP_PATH = path.join(WORKSPACE, "src", "App.tsx");
+const SOURCE_ROOT = path.join(WORKSPACE, "src");
 const PRELOAD_PATH = path.join(WORKSPACE, "electron", "preload.cjs");
 const MAIN_PATH = path.join(WORKSPACE, "electron", "main.cjs");
 const RUN_ID = new Date().toISOString().replace(/[:.]/g, "-");
 const REPORT_DIR = path.join(WORKSPACE, ".test-runs", `ui_button_audit_${RUN_ID}`);
 const REPORT_PATH = path.join(REPORT_DIR, "UI按钮与功能入口审计报告.md");
 
-const appSource = fs.readFileSync(APP_PATH, "utf8");
+function collectSources(directory) {
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const file = path.join(directory, entry.name);
+    return entry.isDirectory() ? collectSources(file) : /\.tsx?$/.test(entry.name) ? [{ file: path.relative(WORKSPACE, file), source: fs.readFileSync(file, "utf8") }] : [];
+  });
+}
+const sourceFiles = collectSources(SOURCE_ROOT);
+const appSource = sourceFiles.map((item) => item.source).join("\n");
 const preloadSource = fs.readFileSync(PRELOAD_PATH, "utf8");
 const mainSource = fs.readFileSync(MAIN_PATH, "utf8");
 
@@ -111,7 +118,7 @@ function extractSummaryElements(source) {
 }
 
 function auditButtons() {
-  const buttons = extractButtonElements(appSource);
+  const buttons = sourceFiles.flatMap((item) => extractButtonElements(item.source).map((button) => ({ ...button, file: item.file })));
   const missingAction = [];
   const missingAccessibleName = [];
 
@@ -119,18 +126,18 @@ function auditButtons() {
     const hasDirectAction = /\bonClick=|\bonMouseDown=|\bonSubmit=/.test(button.tag);
     const isSubmit = /\btype=["']submit["']/.test(button.tag) || (!/\btype=/.test(button.tag) && button.insideForm);
     if (!hasDirectAction && !isSubmit) {
-      missingAction.push(`第 ${button.line} 行：${button.label || button.tag.slice(0, 120)}`);
+      missingAction.push(`${button.file}:${button.line}：${button.label || button.tag.slice(0, 120)}`);
     }
 
     const hasTitle = /\btitle=|\baria-label=/.test(button.tag);
     const hasTextLabel = button.label.length > 0;
     const hasDynamicLabel = /\{\s*(action|prompt|status|item\.label|mode\.label|group\.category|card\.name|doc\.title)\s*\}/.test(button.body) || /\{\s*saving\s*\?/.test(button.body);
     if (!hasTitle && !hasTextLabel && !hasDynamicLabel) {
-      missingAccessibleName.push(`第 ${button.line} 行：${button.tag.slice(0, 120)}`);
+      missingAccessibleName.push(`${button.file}:${button.line}：${button.tag.slice(0, 120)}`);
     }
   }
 
-  addResult("一、按钮动作", "按钮总数", "PASS", `共发现 ${buttons.length} 个按钮元素。`);
+  addResult("一、按钮动作", "按钮总数", "PASS", `扫描 ${sourceFiles.length} 个 TS/TSX 文件，共发现 ${buttons.length} 个按钮元素。`);
   addResult("一、按钮动作", "无动作按钮", missingAction.length ? "FAIL" : "PASS", missingAction.length ? missingAction.join("\n") : "未发现没有点击动作或提交语义的按钮。");
   addResult(
     "一、按钮动作",
@@ -141,8 +148,8 @@ function auditButtons() {
 }
 
 function auditSummaries() {
-  const summaries = extractSummaryElements(appSource);
-  const empty = summaries.filter((item) => !item.label).map((item) => `第 ${item.line} 行`);
+  const summaries = sourceFiles.flatMap((item) => extractSummaryElements(item.source).map((entry) => ({ ...entry, file: item.file })));
+  const empty = summaries.filter((item) => !item.label).map((item) => `${item.file}:${item.line}`);
   addResult("二、折叠入口", "折叠入口总数", "PASS", `共发现 ${summaries.length} 个 details/summary 折叠入口。`);
   addResult("二、折叠入口", "折叠入口文字", empty.length ? "FAIL" : "PASS", empty.length ? empty.join("\n") : "所有折叠入口都有可见文字。");
 }
@@ -154,7 +161,7 @@ function auditApiBindings() {
     name: match[1],
     channel: match[2],
   }));
-  const handledChannels = new Set([...mainSource.matchAll(/ipcMain\.handle\(["']([^"']+)["']/g)].map((match) => match[1]));
+  const handledChannels = new Set([...mainSource.matchAll(/(?:ipcMain\.handle|registerIpcHandler)\(["']([^"']+)["']/g)].map((match) => match[1]));
 
   const exposedSet = new Set(exposedApiNames);
   const missingPreload = usedApiNames.filter((name) => !exposedSet.has(name));
@@ -209,12 +216,12 @@ function auditFeatureCoverage() {
 }
 
 function auditDuplicateLabels() {
-  const buttons = extractButtonElements(appSource).filter((button) => button.label);
+  const buttons = sourceFiles.flatMap((item) => extractButtonElements(item.source).map((button) => ({ ...button, file: item.file }))).filter((button) => button.label);
   const map = new Map();
   for (const button of buttons) {
     const key = button.label.replace(/\s+/g, "");
     if (!key) continue;
-    map.set(key, [...(map.get(key) || []), button.line]);
+    map.set(key, [...(map.get(key) || []), button.file + ":" + button.line]);
   }
   const allowed = new Set(["关闭", "删除", "取消", "全选", "保存", "编辑", "刷新", "重试", "继续显示（/）", "导出正文", "导出当前DOCX", "备份", "重建索引", "设置", "导入文档", "保存素材", "开始检查", "刷新关系网", "保存并加入知识库"]);
   const duplicates = [...map.entries()]

@@ -1,3 +1,3 @@
 @echo off
 chcp 65001 >nul
-start "" "%~dp0release\AI小说创作平台 0.3.3.exe"
+start "" "%~dp0release\AI-Novel-Writing-Platform-Portable-0.3.4-x64.exe"
