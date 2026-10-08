@@ -17,6 +17,8 @@ const { PersistentTaskCenter } = require("./services/task-center.cjs");
 const projectSnapshots = require("./services/project-snapshots.cjs");
 const vectorShards = require("./services/vector-shards.cjs");
 const creativeWorkspace = require("./services/creative-workspace.cjs");
+const novelNetworkImport = require("./services/novel-network-import.cjs");
+const { normalizeNetwork } = require("./services/novel-network.cjs");
 const operationJournal = require("./services/operation-journal.cjs");
 const projectMigrations = require("./services/project-migrations.cjs");
 const retrievalPlanner = require("./services/retrieval-planner.cjs");
@@ -81,6 +83,7 @@ const projectTaskCenters = new Map();
 const deepAnalysisTimers = new Map();
 const chapterRevisionCache = new Map();
 const pendingExchangeImports = new Map();
+const pendingNovelNetworkImports = new Map();
 const projectSessions = new Map();
 const credentialSecretsCache = new Map();
 let gracefulShutdownStarted = false;
@@ -6668,6 +6671,73 @@ function registerIpcHandlers() {
   registerIpcHandler("workspace:get", async () => {
     const projectPath = await ensureCurrentProject();
     return getCreativeWorkspaceView(projectPath);
+  });
+
+  registerIpcHandler("novel-network:preview-import", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    const folder = payload?.mode === "folder";
+    const selected = await dialog.showOpenDialog(mainWindow, {
+      title: folder ? "选择小说网资料目录" : "选择小说网资料（可多选分册）",
+      properties: folder ? ["openDirectory"] : ["openFile", "multiSelections"],
+      filters: folder ? undefined : [{ name: "小说统筹资料", extensions: ["md", "markdown", "docx", "json"] }],
+    });
+    if (selected.canceled || !selected.filePaths.length) return { canceled: true };
+    const files = folder ? (await fs.readdir(selected.filePaths[0], { withFileTypes: true }))
+      .filter((entry) => entry.isFile() && /\.(md|markdown|docx|json)$/i.test(entry.name)).map((entry) => path.join(selected.filePaths[0], entry.name)).sort((a, b) => a.localeCompare(b, "zh-CN", { numeric: true })) : selected.filePaths;
+    const preview = await novelNetworkImport.readImportFiles(files);
+    const token = crypto.randomUUID();
+    pendingNovelNetworkImports.clear();
+    pendingNovelNetworkImports.set(token, { projectPath, network: preview.network, expiresAt: Date.now() + 10 * 60 * 1000 });
+    return { ...preview, token };
+  });
+
+  registerIpcHandler("novel-network:import", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    const preview = pendingNovelNetworkImports.get(String(payload?.token || ""));
+    if (!preview || preview.projectPath !== projectPath || preview.expiresAt < Date.now()) throw new Error("小说网导入预览已失效，请重新选择资料。");
+    const result = await withProjectTransaction(projectPath, async () => {
+      let network = preview.network;
+      let duplicates = 0;
+      if (payload?.targetId) {
+        const workspace = await creativeWorkspace.loadWorkspace(projectPath);
+        const current = workspace.novelNetworks.find((item) => item.id === payload.targetId);
+        if (!current || current.revision !== payload.expectedRevision) throw new Error("当前小说网版本已变化，请重新读取后追加。");
+        const merged = novelNetworkImport.mergeNetworks(current, network);
+        network = merged.network;
+        duplicates = merged.duplicates;
+      } else network = { ...network, title: String(payload?.title || network.title) };
+      const item = await creativeWorkspace.upsertItem(projectPath, "novelNetworks", network);
+      return { network: item, duplicates, workspace: await getCreativeWorkspaceView(projectPath) };
+    });
+    pendingNovelNetworkImports.delete(String(payload.token));
+    return result;
+  });
+
+  registerIpcHandler("novel-network:save", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    const network = await creativeWorkspace.upsertItem(projectPath, "novelNetworks", payload?.network || {});
+    return { network, workspace: await getCreativeWorkspaceView(projectPath) };
+  });
+
+  registerIpcHandler("novel-network:delete", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return withProjectTransaction(projectPath, async () => {
+      const workspace = await creativeWorkspace.loadWorkspace(projectPath);
+      const network = workspace.novelNetworks.find((item) => item.id === payload?.id);
+      if (!network || network.revision !== payload?.expectedRevision) throw new Error("小说网版本已变化，请重新读取后删除。");
+      await creativeWorkspace.deleteItem(projectPath, "novelNetworks", network.id);
+      return { workspace: await getCreativeWorkspaceView(projectPath) };
+    });
+  });
+
+  registerIpcHandler("novel-network:export", async (_event, payload) => {
+    await ensureCurrentProject();
+    const network = normalizeNetwork(payload?.network);
+    const exportName = network.title.replace(/[\\/:*?"<>|]/g, "_").trim().slice(0, 100) || "未命名";
+    const selected = await dialog.showSaveDialog(mainWindow, { title: "导出小说网", defaultPath: `小说网_${exportName}.json`, filters: [{ name: "小说网JSON", extensions: ["json"] }] });
+    if (selected.canceled || !selected.filePath) return { canceled: true };
+    await writeFileAtomic(selected.filePath, JSON.stringify({ schema: "novel-network/v1", network }, null, 2));
+    return { filePath: selected.filePath };
   });
 
   registerIpcHandler("workspace:upsert", async (_event, payload) => {

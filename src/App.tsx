@@ -123,9 +123,10 @@ import type {
 import { CharacterManager } from "./components/CharacterManager";
 import { WorldManager } from "./components/WorldManager";
 import { groupByCategory, normalizeCategoryLabel, type CategoryGroup } from "./lib/categories";
-import type { PageSaveHandle } from "./hooks/useEntityDraft";
+import type { PageSaveHandle, PageSaveKind } from "./hooks/useEntityDraft";
 import { CreativeWorkspace, type CreativeWorkspaceTab } from "./components/CreativeWorkspace";
-import { ChapterProgressStrip, ProgressGrid } from "./components/ProgressBoard";
+import { ChapterProgressStrip } from "./components/ProgressBoard";
+import { ProgressWorkspace } from "./components/ProgressWorkspace";
 
 const PROVIDER_DEFAULTS: Record<Provider, { baseUrl: string; model: string; label: string }> = {
   deepseek: { label: "DeepSeek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat" },
@@ -701,6 +702,7 @@ export default function App() {
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState("正在打开项目...");
   const [view, setView] = useState<"chapters" | "characters" | "world" | "knowledge" | "analysis">("chapters");
+  const [networkOpenRequest, setNetworkOpenRequest] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const [showQuickPanel, setShowQuickPanel] = useState(false);
   const [showStoryCenter, setShowStoryCenter] = useState(false);
@@ -745,8 +747,8 @@ export default function App() {
   const closingRef = useRef(false);
   const chatMessagesRef = useRef<ChatMessage[]>([]);
   const chapterDraftRef = useRef({ content: "", title: "", volume: "" });
-  const pageSaversRef = useRef(new Map<"character" | "world", PageSaveHandle>());
-  const registerPageSave = useCallback((kind: "character" | "world", handle: PageSaveHandle | null) => {
+  const pageSaversRef = useRef(new Map<PageSaveKind, PageSaveHandle>());
+  const registerPageSave = useCallback((kind: PageSaveKind, handle: PageSaveHandle | null) => {
     if (handle) pageSaversRef.current.set(kind, handle);
     else pageSaversRef.current.delete(kind);
   }, []);
@@ -1031,12 +1033,16 @@ export default function App() {
   }, [dirty, saveChapter]);
 
   const saveBeforeLeavingChapter = useCallback(async () => {
+    const networkSaver = pageSaversRef.current.get("novel-network");
+    if (networkSaver && !(await networkSaver.protect())) return false;
     const kind = view === "characters" ? "character" : view === "world" ? "world" : null;
     if (kind && !(await pageSaversRef.current.get(kind)?.protect())) return false;
     return saveChapterIfDirty();
   }, [saveChapterIfDirty, view]);
 
   const saveCurrentPage = useCallback(async () => {
+    const networkSaver = pageSaversRef.current.get("novel-network");
+    if (networkSaver) return networkSaver.save();
     const kind = view === "characters" ? "character" : view === "world" ? "world" : null;
     if (kind) return (await pageSaversRef.current.get(kind)?.save()) ?? false;
     if (view === "chapters") return saveChapter();
@@ -1144,6 +1150,11 @@ export default function App() {
   );
 
   function restoreRecoveryDraft(draft: RecoveryDraft) {
+    if (draft.kind === "novel-network") {
+      void changeView("analysis").then((changed) => { if (changed) setNetworkOpenRequest((value) => value + 1); });
+      setStatus("请在进度 → 小说统筹网中查看已恢复的草稿");
+      return;
+    }
     if (draft.kind === "character" || draft.kind === "world") {
       void changeView(draft.kind === "character" ? "characters" : "world");
       setStatus("请在对应表单中查看已恢复的草稿");
@@ -2275,7 +2286,10 @@ export default function App() {
 
           {view === "analysis" && (
             <AnalysisPanel
+              key={state.projectPath}
               state={state}
+              onRegisterSave={registerPageSave}
+              networkOpenRequest={networkOpenRequest}
               selectedChapterId={selectedChapter?.id || ""}
               onSelectChapter={(chapterId) => void selectChapter(chapterId)}
               onOpenSource={(result) => {
@@ -2324,7 +2338,7 @@ export default function App() {
       </main>
 
       <footer className="statusbar">
-        <span>{view === "chapters" ? saving ? "保存中..." : dirty ? "有未保存修改" : "已保存" : view === "characters" ? "角色卡 · 保存状态见当前表单" : view === "world" ? "世界观 · 保存状态见当前表单" : "当前页操作即时保存"}</span>
+        <span>{view === "chapters" ? saving ? "保存中..." : dirty ? "有未保存修改" : "已保存" : view === "characters" ? "角色卡 · 保存状态见当前表单" : view === "world" ? "世界观 · 保存状态见当前表单" : view === "analysis" ? "保存状态见当前面板" : "当前页操作即时保存"}</span>
         <span>当前章节：{currentWords.toLocaleString()} 字</span>
         <span>今日：{state.config.stats.todayWords.toLocaleString()} 字</span>
         <span>总字数：{state.config.stats.totalWords.toLocaleString()} 字</span>
@@ -4945,6 +4959,8 @@ function KnowledgeOrganizer({
 
 function AnalysisPanel({
   state,
+  onRegisterSave,
+  networkOpenRequest,
   selectedChapterId,
   onSelectChapter,
   onOpenSource,
@@ -4954,6 +4970,8 @@ function AnalysisPanel({
   onStatus,
 }: {
   state: AppState;
+  onRegisterSave: (kind: PageSaveKind, handle: PageSaveHandle | null) => void;
+  networkOpenRequest: number;
   selectedChapterId: string;
   onSelectChapter: (chapterId: string) => void;
   onOpenSource: (result: GlobalSearchResult) => void;
@@ -4967,7 +4985,19 @@ function AnalysisPanel({
   onApplyState: (state: AppState) => void;
   onStatus: (message: string) => void;
 }) {
-  const [tab, setTab] = useState<AnalysisTab>("search");
+  const [tab, setTab] = useState<AnalysisTab>(networkOpenRequest ? "progress" : "search");
+  const userSelectedTab = useRef(false);
+  const networkSaver = useRef<PageSaveHandle | null>(null);
+  const registerNetworkSave = useCallback((kind: PageSaveKind, handle: PageSaveHandle | null) => {
+    networkSaver.current = handle; onRegisterSave(kind, handle);
+  }, [onRegisterSave]);
+  useEffect(() => { if (networkOpenRequest) setTab("progress"); }, [networkOpenRequest]);
+  async function changeAnalysisTab(next: AnalysisTab) {
+    if (next === tab) return;
+    if (networkSaver.current && !(await networkSaver.current.protect())) { onStatus("小说网草稿保护失败，请先保存后再切换。"); return; }
+    userSelectedTab.current = true;
+    setTab(next);
+  }
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<GlobalSearchResult[]>([]);
   const [timelineEvents, setTimelineEvents] = useState<TimelineEvent[]>([]);
@@ -5054,7 +5084,7 @@ function AnalysisPanel({
   }
 
   function restoreAnalysisSnapshot(snapshot: AnalysisSnapshot) {
-    if (snapshot.tab && ["search", "timeline", "relations", "consistency", "versions", "export"].includes(snapshot.tab)) {
+    if (!userSelectedTab.current && !networkOpenRequest && snapshot.tab && ["progress", "search", "timeline", "relations", "consistency", "versions", "export"].includes(snapshot.tab)) {
       setTab(snapshot.tab as AnalysisTab);
     }
     if (typeof snapshot.query === "string") setQuery(snapshot.query);
@@ -5667,39 +5697,41 @@ function AnalysisPanel({
   return (
     <section className="analysis-panel">
       <div className="analysis-tabs">
-        <button className={tab === "progress" ? "active" : ""} onClick={() => setTab("progress")}>
+        <button className={tab === "progress" ? "active" : ""} onClick={() => void changeAnalysisTab("progress")}>
           <LayoutGrid size={16} />
           进度
         </button>
-        <button className={tab === "search" ? "active" : ""} onClick={() => setTab("search")}>
+        <button className={tab === "search" ? "active" : ""} onClick={() => void changeAnalysisTab("search")}>
           <Search size={16} />
           全局搜索
         </button>
-        <button className={tab === "timeline" ? "active" : ""} onClick={() => setTab("timeline")}>
+        <button className={tab === "timeline" ? "active" : ""} onClick={() => void changeAnalysisTab("timeline")}>
           <ListTree size={16} />
           时间线
         </button>
-        <button className={tab === "relations" ? "active" : ""} onClick={() => setTab("relations")}>
+        <button className={tab === "relations" ? "active" : ""} onClick={() => void changeAnalysisTab("relations")}>
           <UserRound size={16} />
           关系网
         </button>
-        <button className={tab === "consistency" ? "active" : ""} onClick={() => setTab("consistency")}>
+        <button className={tab === "consistency" ? "active" : ""} onClick={() => void changeAnalysisTab("consistency")}>
           <RefreshCcw size={16} />
           一致性
         </button>
-        <button className={tab === "versions" ? "active" : ""} onClick={() => setTab("versions")}>
+        <button className={tab === "versions" ? "active" : ""} onClick={() => void changeAnalysisTab("versions")}>
           <FileText size={16} />
           版本对比
         </button>
-        <button className={tab === "export" ? "active" : ""} onClick={() => setTab("export")}>
+        <button className={tab === "export" ? "active" : ""} onClick={() => void changeAnalysisTab("export")}>
           <FileDown size={16} />
           导出/提取
         </button>
       </div>
 
       {tab === "progress" && (
-        <ProgressGrid
+        <ProgressWorkspace
           state={state}
+          onRegisterSave={registerNetworkSave}
+          networkOpenRequest={networkOpenRequest}
           selectedChapterId={selectedChapter?.id || ""}
           onSelectChapter={onSelectChapter}
           onApplyState={onApplyState}

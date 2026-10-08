@@ -4,6 +4,7 @@ export interface PageSaveHandle {
   save: () => Promise<boolean>;
   protect: () => Promise<boolean>;
 }
+export type PageSaveKind = "character" | "world" | "novel-network";
 
 type Entity = { id?: string; name?: string; title?: string; category?: string };
 const entityKey = (value: Entity) => value.id || "new";
@@ -11,10 +12,10 @@ export interface EntityDraftProps<T> {
   projectPath: string;
   recoveryEnabled: boolean;
   onSave: (value: T) => Promise<T | null>;
-  onRegisterSave: (kind: "character" | "world", handle: PageSaveHandle | null) => void;
+  onRegisterSave: (kind: PageSaveKind, handle: PageSaveHandle | null) => void;
 }
 
-export function useEntityDraft<T extends Entity>(kind: "character" | "world", items: T[], blank: T, props: EntityDraftProps<T>) {
+export function useEntityDraft<T extends Entity>(kind: PageSaveKind, items: T[], blank: T, props: EntityDraftProps<T>) {
   const { onRegisterSave, projectPath, recoveryEnabled } = props;
   const [active, setActive] = useState<T>(items[0] || blank);
   const [dirty, setDirty] = useState(false);
@@ -55,18 +56,23 @@ export function useEntityDraft<T extends Entity>(kind: "character" | "world", it
         if (options.current.recoveryEnabled && !(await persist())) return false;
         const saved = await options.current.onSave(snapshot.value);
         if (!saved) { setFeedback("保存失败，草稿仍保留"); return false; }
+        if (kind === "novel-network") {
+          const metadata = saved as T & { revision?: string; createdAt?: string; updatedAt?: string };
+          current.current.value = { ...current.current.value, id: saved.id, revision: metadata.revision, createdAt: metadata.createdAt, updatedAt: metadata.updatedAt };
+          setActive(current.current.value);
+        }
         if (snapshot.version !== current.current.version) {
           if (!snapshot.value.id && saved.id) {
             current.current.value = { ...current.current.value, id: saved.id };
             setActive(current.current.value);
           }
-          setFeedback("此前版本已保存，当前还有新改动");
           if (options.current.recoveryEnabled) await persist();
           if (!snapshot.value.id && saved.id) {
             const oldDraft = drafts.current.get("new");
             if (oldDraft?.draftId) await window.novelAPI.clearRecoveryDraft(oldDraft.draftId);
             drafts.current.delete("new");
           }
+          setFeedback("此前版本已保存，当前还有新改动");
           return false;
         }
         const draft = drafts.current.get(entityKey(snapshot.value));
@@ -84,19 +90,21 @@ export function useEntityDraft<T extends Entity>(kind: "character" | "world", it
         }
         drafts.current.delete(entityKey(snapshot.value));
         current.current = { value: saved, dirty: false, version: snapshot.version + 1 };
-        setActive(saved); setDirty(false); setFeedback("已保存并加入知识库");
+        setActive(saved); setDirty(false); setFeedback(kind === "novel-network" ? "小说网已保存" : "已保存并加入知识库");
         return true;
       } catch (error) { setFeedback(`保存失败：${error instanceof Error ? error.message : String(error)}`); return false; }
       finally { setSaving(false); savingPromise.current = null; }
     })();
     savingPromise.current = operation;
     return operation;
-  }, [persist]);
+  }, [kind, persist]);
 
   const protect = useCallback(async () => {
     if (savingPromise.current && !(await savingPromise.current)) return false;
-    return options.current.recoveryEnabled ? persist() : save();
-  }, [persist, save]);
+    const version = current.current.version;
+    const protectedDraft = options.current.recoveryEnabled ? await persist() : await save();
+    return protectedDraft && !(kind === "novel-network" && current.current.dirty && version !== current.current.version);
+  }, [kind, persist, save]);
 
   function update(value: T | ((value: T) => T)) {
     const next = typeof value === "function" ? value(current.current.value) : value;
@@ -165,5 +173,5 @@ export function useEntityDraft<T extends Entity>(kind: "character" | "world", it
     return () => window.clearTimeout(timer);
   }, [active, dirty, persist, recoveryEnabled]);
 
-  return { active, update, select, save, protect, discard, dirty, saving, feedback };
+  return { active, update, select, save, protect, discard, dirty, saving, feedback, getCurrent: () => current.current.value };
 }

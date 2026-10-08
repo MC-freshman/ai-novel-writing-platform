@@ -1,5 +1,6 @@
 const path = require("node:path");
-const { ensureDir, readJson, stableId, writeJsonAtomic, withProjectTransaction } = require("./project-storage.cjs");
+const { ensureDir, readJson, stableId, sha256, writeJsonAtomic, withProjectTransaction } = require("./project-storage.cjs");
+const { normalizeNetwork } = require("./novel-network.cjs");
 
 const WORKSPACE_VERSION = 1;
 const COLLECTION_LIMITS = {
@@ -12,6 +13,7 @@ const COLLECTION_LIMITS = {
   revisions: 500,
   agentRuns: 80,
   statisticsHistory: 40,
+  novelNetworks: 20,
 };
 
 function nowIso() {
@@ -35,6 +37,7 @@ function emptyState() {
     revisions: [],
     agentRuns: [],
     statisticsHistory: [],
+    novelNetworks: [],
   };
 }
 
@@ -62,6 +65,11 @@ function normalizeItem(collection, payload = {}, index = 0) {
     createdAt: cleanText(payload.createdAt, 40) || updatedAt,
     updatedAt,
   };
+  if (collection === "novelNetworks") {
+    const network = normalizeNetwork(base);
+    network.revision = sha256(JSON.stringify({ ...network, revision: undefined, createdAt: undefined, updatedAt: undefined }));
+    return network;
+  }
   if (collection === "scenes") return {
     ...base,
     chapterId: cleanText(payload.chapterId, 100), chapterTitle: cleanText(payload.chapterTitle, 120),
@@ -202,6 +210,10 @@ async function upsertItem(projectPath, collection, payload) {
   return mutate(projectPath, (state) => {
     const items = state[collection];
     const existingIndex = payload?.id ? items.findIndex((item) => item.id === payload.id) : -1;
+    if (collection === "novelNetworks") {
+      if (existingIndex >= 0 && payload.revision !== items[existingIndex].revision) throw new Error("小说网版本已被其他窗口修改，当前草稿仍保留；请重新读取后合并。 ");
+      if (existingIndex < 0 && items.length >= COLLECTION_LIMITS.novelNetworks) throw new Error("小说网已达到20套上限，请先导出并整理旧网络。 ");
+    }
     const normalized = normalizeItem(collection, existingIndex >= 0 ? { ...items[existingIndex], ...payload } : payload, existingIndex >= 0 ? existingIndex : items.length);
     if (existingIndex >= 0) items[existingIndex] = normalized;
     else items.unshift(normalized);
@@ -354,11 +366,15 @@ async function mergeImportedWorkspace(projectPath, imported = {}, chapterIdMap =
   return mutate(projectPath, (state) => {
     for (const collection of Object.keys(COLLECTION_LIMITS)) {
       if (!Array.isArray(imported[collection])) continue;
+      if (collection === "novelNetworks" && imported[collection].length + state[collection].length > COLLECTION_LIMITS.novelNetworks) {
+        throw new Error("小说网容量为20个，请先导出并整理已有小说网再交换导入。");
+      }
       const existingIds = new Set(state[collection].map((item) => item.id));
       const nextItems = imported[collection].map((item, index) => {
         const remapped = { ...item };
         if (remapped.chapterId && chapterIdMap.has(remapped.chapterId)) remapped.chapterId = chapterIdMap.get(remapped.chapterId);
         if (remapped.scope === "章节" && chapterIdMap.has(remapped.scopeId)) remapped.scopeId = chapterIdMap.get(remapped.scopeId);
+        if (collection === "novelNetworks") remapped.tables = (remapped.tables || []).map((table) => ({ ...table, rows: table.rows.map((row) => ({ ...row, chapterId: chapterIdMap.get(row.chapterId) || row.chapterId })) }));
         if (existingIds.has(remapped.id)) remapped.id = stableId(`${collection}-import`, `${remapped.id}|${nowIso()}|${index}`);
         return normalizeItem(collection, remapped, index);
       });

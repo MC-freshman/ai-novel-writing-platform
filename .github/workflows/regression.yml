@@ -19,6 +19,7 @@ jobs:
       - run: npm run lint
       - run: npm run scan:privacy
       - run: npm run test:ui-plan
+      - run: npm run test:ui-novel-network
       - run: npm run test:ui-visual
       - uses: actions/upload-artifact@v4
         if: always()

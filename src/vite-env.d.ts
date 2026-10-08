@@ -35,6 +35,8 @@ import type {
   StoryFact,
   StoryOverview,
   CreativeWorkspaceState,
+  NovelNetwork,
+  NovelNetworkImportPreview,
   CreativeAgentRun,
   ChapterQualityReport,
   ProjectExchangePreview,
@@ -145,6 +147,11 @@ declare global {
       generateChapterBoard: (payload: { chapterId: string }) => Promise<{ board: ChapterPreparationBoard }>;
       saveChapterBoard: (payload: { board: ChapterPreparationBoard }) => Promise<{ board: ChapterPreparationBoard }>;
       getCreativeWorkspace: () => Promise<CreativeWorkspaceState>;
+      previewNovelNetworkImport: (payload?: { mode?: "files" | "folder" }) => Promise<NovelNetworkImportPreview | { canceled: true }>;
+      importNovelNetwork: (payload: { token: string; title?: string; targetId?: string; expectedRevision?: string }) => Promise<{ network: NovelNetwork; workspace: CreativeWorkspaceState; duplicates: number }>;
+      saveNovelNetwork: (payload: { network: NovelNetwork }) => Promise<{ network: NovelNetwork; workspace: CreativeWorkspaceState }>;
+      deleteNovelNetwork: (payload: { id: string; expectedRevision: string }) => Promise<{ workspace: CreativeWorkspaceState }>;
+      exportNovelNetwork: (payload: { network: NovelNetwork }) => Promise<{ filePath?: string; canceled?: true }>;
       upsertCreativeWorkspaceItem: (payload: { collection: keyof Pick<CreativeWorkspaceState, "scenes" | "causalNodes" | "causalEdges" | "arcs" | "annotations" | "memories" | "revisions">; item: Record<string, unknown> }) => Promise<{ item: unknown; workspace: CreativeWorkspaceState }>;
       deleteCreativeWorkspaceItem: (payload: { collection: keyof Pick<CreativeWorkspaceState, "scenes" | "causalNodes" | "causalEdges" | "arcs" | "annotations" | "memories" | "revisions">; itemId: string }) => Promise<{ workspace: CreativeWorkspaceState }>;
       reorderScenes: (payload: { chapterId: string; sceneIds: string[] }) => Promise<{ scenes: CreativeWorkspaceState["scenes"]; workspace: CreativeWorkspaceState }>;

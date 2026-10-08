@@ -150,7 +150,7 @@ async function failOperation(projectPath, operationId, error) {
 }
 
 async function saveDraft(projectPath, payload = {}) {
-  const kind = ["character", "world"].includes(payload.kind) ? payload.kind : "chapter";
+  const kind = ["character", "world", "novel-network"].includes(payload.kind) ? payload.kind : "chapter";
   const chapterId = kind === "chapter" ? safeId(payload.chapterId) : stableId(`draft_${kind}`, String(payload.entityId || "new"));
   if (!chapterId) throw new Error("草稿缺少章节编号。");
   const draft = {
