@@ -74,12 +74,14 @@ test("preload.cjs 与契约逐项一致（方法/通道/类型）", () => {
 test("生成的 preload.cjs 与契约重新渲染结果一致（未被手改）", () => {
   const { renderPreload } = require("../../../scripts/gen-preload.cjs");
   const current = readWorkspace("electron/preload.cjs");
-  assert.equal(current, renderPreload(), "preload.cjs 与契约渲染结果不一致——请运行 npm run gen:preload");
+  // git autocrlf 会在切分支时把工作副本物化成 CRLF，只比内容不比行尾。
+  const normalize = (text) => text.replace(/\r\n/g, "\n");
+  assert.equal(normalize(current), normalize(renderPreload()), "preload.cjs 与契约渲染结果不一致——请运行 npm run gen:preload");
 });
 
 test("vite-env.d.ts 方法集与契约一致（渲染端类型契约无漂移）", () => {
   const dtsText = readWorkspace("src/vite-env.d.ts");
-  const declared = new Set([...dtsText.matchAll(/^      (\w+):/gm)].map((m) => m[1]));
+  const declared = new Set([...dtsText.matchAll(/^ {6}(\w+):/gm)].map((m) => m[1]));
   const contractMethods = new Set(contract.channels.map((item) => item.method));
   const missingInDts = [...contractMethods].filter((m) => !declared.has(m));
   const staleInDts = [...declared].filter((m) => !contractMethods.has(m));

@@ -17,7 +17,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ["electron/**/*.cjs", "scripts/**/*.cjs"],
+    files: ["electron/**/*.cjs", "scripts/**/*.cjs", "shared/**/*.cjs"],
     languageOptions: { globals: globals.node },
     rules: {
       // 这些文件就是 CommonJS，require 是正常写法。
