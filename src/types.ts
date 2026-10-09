@@ -1026,3 +1026,11 @@ export interface AnalysisSnapshot {
     updatedAt: string;
   };
 }
+
+// P3 refactor: UI-local types previously defined in src/App.tsx.
+export interface EditorScrollAnchor {
+  key: number;
+  headingIndex?: number;
+  quote?: string;
+}
+export type AnalysisTab = "progress" | "search" | "timeline" | "relations" | "consistency" | "versions" | "export";

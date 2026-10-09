@@ -417,14 +417,23 @@ async function testFrontendSafetyContracts() {
     // P2 split: IPC handler bodies (incl. AI stream recovery) moved to electron/ipc/handlers.cjs.
     fs.readFile(path.join(workspace, "electron", "ipc", "handlers.cjs"), "utf8"),
   ]);
+  // P3 refactor: frontend code moved into src/{components,lib,hooks}; guard
+  // assertions below match the union so the intent survives file moves.
+  const frontendExtra = [];
+  for (const dir of ["components", "lib", "hooks"]) {
+    for (const entry of await fs.readdir(path.join(workspace, "src", dir))) {
+      if (/\.tsx?$/.test(entry)) frontendExtra.push(await fs.readFile(path.join(workspace, "src", dir, entry), "utf8"));
+    }
+  }
+  const frontendSource = [appSource, ...frontendExtra].join("\n");
   assert.match(preloadSource, /cancelAI:\s*\(requestId\)/, "渲染层必须能够停止正在生成的 AI 请求");
   assert.match(ipcHandlersSource, /aiStreamRecovery/, "主进程必须保存 AI 流式回答恢复点");
-  assert.match(appSource, /remainingChars\s*=\s*600000/, "会话持久化总容量不得意外降级");
-  assert.match(appSource, /expectedRevision:\s*chapterRevisionRef\.current/, "章节保存必须携带已读取版本");
-  assert.match(appSource, /key=\{selectedChapter\?\.id \|\| "empty-document"\}/, "不同章节必须重建编辑器并隔离撤销历史");
-  assert.match(appSource, /selectedChapterIdRef\.current !== documentId/, "富文档更新必须校验事件所属章节");
-  assert.match(appSource, /requestId !== chapterLoadRequestRef\.current/, "快速切换章节时必须丢弃迟到的加载结果");
-  assert.match(appSource, /onAppCloseRequested/, "关闭窗口前必须请求渲染层保存正文或恢复草稿");
+  assert.match(frontendSource, /remainingChars\s*=\s*600000/, "会话持久化总容量不得意外降级");
+  assert.match(frontendSource, /expectedRevision:\s*chapterRevisionRef\.current/, "章节保存必须携带已读取版本");
+  assert.match(frontendSource, /key=\{selectedChapter\?\.id \|\| "empty-document"\}/, "不同章节必须重建编辑器并隔离撤销历史");
+  assert.match(frontendSource, /selectedChapterIdRef\.current !== documentId/, "富文档更新必须校验事件所属章节");
+  assert.match(frontendSource, /requestId !== chapterLoadRequestRef\.current/, "快速切换章节时必须丢弃迟到的加载结果");
+  assert.match(frontendSource, /onAppCloseRequested/, "关闭窗口前必须请求渲染层保存正文或恢复草稿");
   assert.match(mainSource, /app:before-close/, "主进程关闭窗口前必须等待正文保护流程");
   // Backup exclusions and credential redaction are verified by archive behavior in test-plan-regression.
 }
