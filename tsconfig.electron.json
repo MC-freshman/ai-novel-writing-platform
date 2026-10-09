@@ -11,5 +11,5 @@
     "skipLibCheck": true,
     "strict": false
   },
-  "include": ["electron/services/**/*.cjs"]
+  "include": ["electron/services/**/*.cjs", "electron/ipc/**/*.cjs"]
 }

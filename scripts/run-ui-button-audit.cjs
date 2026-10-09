@@ -18,7 +18,11 @@ function collectSources(directory) {
 const sourceFiles = collectSources(SOURCE_ROOT);
 const appSource = sourceFiles.map((item) => item.source).join("\n");
 const preloadSource = fs.readFileSync(PRELOAD_PATH, "utf8");
-const mainSource = fs.readFileSync(MAIN_PATH, "utf8");
+// P2 split: IPC handler registrations live in electron/ipc/handlers.cjs now,
+// but scan main.cjs too in case a handler ever registers there directly.
+const mainSource = ["main.cjs", path.join("ipc", "handlers.cjs")]
+  .map((relative) => fs.readFileSync(path.join(WORKSPACE, "electron", relative), "utf8"))
+  .join("\n");
 
 const results = [];
 

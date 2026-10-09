@@ -410,13 +410,15 @@ async function testReleasePrivacyScanner() {
 }
 
 async function testFrontendSafetyContracts() {
-  const [appSource, preloadSource, mainSource] = await Promise.all([
+  const [appSource, preloadSource, mainSource, ipcHandlersSource] = await Promise.all([
     fs.readFile(path.join(workspace, "src", "App.tsx"), "utf8"),
     fs.readFile(path.join(workspace, "electron", "preload.cjs"), "utf8"),
     fs.readFile(path.join(workspace, "electron", "main.cjs"), "utf8"),
+    // P2 split: IPC handler bodies (incl. AI stream recovery) moved to electron/ipc/handlers.cjs.
+    fs.readFile(path.join(workspace, "electron", "ipc", "handlers.cjs"), "utf8"),
   ]);
   assert.match(preloadSource, /cancelAI:\s*\(requestId\)/, "渲染层必须能够停止正在生成的 AI 请求");
-  assert.match(mainSource, /aiStreamRecovery/, "主进程必须保存 AI 流式回答恢复点");
+  assert.match(ipcHandlersSource, /aiStreamRecovery/, "主进程必须保存 AI 流式回答恢复点");
   assert.match(appSource, /remainingChars\s*=\s*600000/, "会话持久化总容量不得意外降级");
   assert.match(appSource, /expectedRevision:\s*chapterRevisionRef\.current/, "章节保存必须携带已读取版本");
   assert.match(appSource, /key=\{selectedChapter\?\.id \|\| "empty-document"\}/, "不同章节必须重建编辑器并隔离撤销历史");

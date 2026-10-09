@@ -12,7 +12,28 @@ const { pathToFileURL } = require("node:url");
 const storage = require("../electron/services/project-storage.cjs");
 const vectors = require("../electron/services/vector-shards.cjs");
 process.env.NOVEL_PLATFORM_TEST = "1";
+
+// P2 split: main-process code now spans main.cjs + electron/ipc/handlers.cjs +
+// many domain services, and ALL of them are require-cached before ipcHarness
+// runs. Seed a stable electron mock into the require cache BEFORE loading the
+// platform, so every module binds to the same mock instead of the real electron
+// package (which in plain node only exports the binary path string).
+const harnessState = { dialogImpl: async () => ({ canceled: true }) };
+const harnessRegistry = new Map(); // ipcMain.handle registry shared with ipcHarness
+const electronMockModule = new Module("electron-test-mock", null);
+electronMockModule.exports = {
+  app: { getVersion: () => "0.3.3", whenReady: () => Promise.resolve(), getPath: () => os.tmpdir(), setName() {}, on() {} },
+  dialog: { showOpenDialog: async (...args) => harnessState.dialogImpl(...args) },
+  ipcMain: { handle: (name, action) => { harnessRegistry.set(name, action); }, on() {} },
+  BrowserWindow: class BrowserWindowMock {},
+  Menu: { setApplicationMenu() {}, buildFromTemplate: () => [] },
+  shell: { openExternal: async () => {} },
+};
+require.cache[require.resolve("electron")] = electronMockModule;
+
 const platform = require("../electron/main.cjs");
+const { state } = require("../electron/services/runtime-state.cjs");
+const { registerIpcHandlers } = require("../electron/ipc/handlers.cjs");
 
 async function fixture(t) {
   const parent = path.resolve(os.tmpdir());
@@ -30,20 +51,15 @@ async function fixture(t) {
 }
 
 async function ipcHarness(root, importFile = "") {
-  const handlers = new Map();
-  const sourcePath = path.resolve(__dirname, "../electron/main.cjs");
-  const original = Module._load;
   const webContents = { getURL: () => "file:///synthetic/dist/index.html", isDestroyed: () => false, send() {} };
-  const mock = { app: { getVersion: () => "0.3.3" }, dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [importFile] }) }, ipcMain: { on() {}, handle: (name, action) => handlers.set(name, action) } };
-  const loaded = new Module(sourcePath, module);
-  loaded.filename = sourcePath;
-  loaded.paths = Module._nodeModulePaths(path.dirname(sourcePath));
-  Module._load = function (request, ...args) { return request === "electron" ? mock : original.call(this, request, ...args); };
-  try {
-    loaded._compile(await fs.readFile(sourcePath, "utf8") + "\nmodule.exports.initializeTestIpc = (root, webContents) => { currentProjectPath = root; mainWindow = { webContents, isDestroyed: () => false }; registerIpcHandlers(); };", sourcePath);
-    loaded.exports.initializeTestIpc(root, webContents);
-  } finally { Module._load = original; }
-  return { handlers, invoke: (name, value) => handlers.get(name)({ sender: webContents, senderFrame: { url: webContents.getURL(), parent: null } }, value) };
+  harnessState.dialogImpl = async () => ({ canceled: false, filePaths: [importFile] });
+  harnessRegistry.clear();
+  // The electron mock is seeded in the require cache at file top; just point the
+  // shared runtime state at this fixture and (re)register the handlers directly.
+  state.currentProjectPath = root;
+  state.mainWindow = { webContents, isDestroyed: () => false };
+  registerIpcHandlers();
+  return { handlers: harnessRegistry, invoke: (name, value) => harnessRegistry.get(name)({ sender: webContents, senderFrame: { url: webContents.getURL(), parent: null } }, value) };
 }
 
 test("P02 八个并发新建保留全部章节和文件，混合设置移动不丢目录", async (t) => {

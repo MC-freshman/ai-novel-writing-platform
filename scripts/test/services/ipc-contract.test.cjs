@@ -42,9 +42,11 @@ test("契约自检函数：一致通过 / 缺失与未登记分别报告", () =>
   assert.throws(() => verifyIpcContract({ registered: [], contractChannels: ["x"], testMode: true }), /IPC 契约不一致/);
 });
 
-test("main.cjs 注册通道与契约精确一致（双向差集为零）", () => {
-  const mainText = readWorkspace("electron/main.cjs");
-  const registered = extractRegisteredChannels(mainText);
+test("main/handlers 注册通道与契约精确一致（双向差集为零）", () => {
+  const registered = new Set([
+    ...[...extractRegisteredChannels(readWorkspace("electron/ipc/handlers.cjs"))],
+    ...[...extractRegisteredChannels(readWorkspace("electron/main.cjs"))],
+  ]);
   const required = new Set(contract.channelsRequiringHandler());
   const missing = [...required].filter((c) => !registered.has(c));
   const unregistered = [...registered].filter((c) => !required.has(c));
