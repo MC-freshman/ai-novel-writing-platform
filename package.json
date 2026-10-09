@@ -23,11 +23,13 @@
     "test:save-performance": "node scripts/test-save-performance.cjs",
     "test:export": "node scripts/test-batch-docx-export.cjs",
     "test:regression": "node scripts/run-regression-suite.cjs",
+    "test:services": "node --test --test-concurrency=1 scripts/test/services/*.test.cjs",
     "test:ui-visual": "node scripts/capture-ui-regression.cjs",
     "scan:privacy": "node scripts/scan-release-privacy.cjs",
     "preview": "vite preview --host 127.0.0.1",
     "dist": "npm run build && npm run scan:privacy && electron-builder --win nsis portable",
     "lint": "eslint .",
+    "typecheck:electron": "tsc --noEmit -p tsconfig.electron.json",
     "test:novel-network": "node --test --test-concurrency=1 scripts/test-novel-network.cjs",
     "test:ui-novel-network": "node scripts/test-ui-novel-network.cjs"
   },
