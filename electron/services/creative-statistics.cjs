@@ -131,7 +131,7 @@ function buildArcAlerts(chapters, characterStates, arcs) {
   return alerts.slice(0, 2000);
 }
 
-function analyzeProjectStatistics({ chapters = [], contents = {}, characters = [], workspace = {}, storyOverview = {}, label = "" } = {}) {
+function analyzeProjectStatistics(/** @type {{ chapters?: any[], contents?: Record<string, string>, characters?: any[], workspace?: { scenes?: any[], arcs?: any[] }, storyOverview?: { foreshadows?: any[], characterStates?: any[] }, label?: string }} */ { chapters = [], contents = {}, characters = [], workspace = {}, storyOverview = {}, label = "" } = {}) {
   const metrics = chapters
     .slice()
     .sort((a, b) => Number(a.order || 0) - Number(b.order || 0))

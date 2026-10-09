@@ -230,6 +230,7 @@ async function restoreSnapshot(projectPath, snapshotId, options = {}) {
   };
 
   const identities = new Set();
+  /** @type {{ entry: any, targetPath: string, relativePath?: string, stagedPath?: string, previousPath?: string | null, previousHash?: string | null }[]} */
   const planned = [];
   for (const entry of entries) {
     const targetPath = await resolveManagedPath(entry.path);
@@ -256,7 +257,7 @@ async function restoreSnapshot(projectPath, snapshotId, options = {}) {
     const removed = selectedPaths.size ? [] : (await managedProjectFiles(projectPath))
       .filter((relativePath) => !snapshotPaths.has(relativePath.replace(/\\/g, "/")));
     const mutations = [...planned];
-    for (const relativePath of removed) mutations.push({ targetPath: await resolveManagedPath(relativePath), relativePath });
+    for (const relativePath of removed) mutations.push(/** @type {{ entry: any, targetPath: string, relativePath: string }} */ ({ targetPath: await resolveManagedPath(relativePath), relativePath }));
 
     // Keep a before-image for every planned write/delete, including branch switches.
     for (let index = 0; index < mutations.length; index += 1) {

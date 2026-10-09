@@ -8,11 +8,12 @@ const { makeId, normalizeNetwork, parseDocuments } = require("./novel-network.cj
 function htmlToPlanningText(html) {
   const root = parse(html);
   const lines = [];
-  for (const node of root.childNodes) {
+  const childNodes = /** @type {import("node-html-parser").HTMLElement[]} */ (root.childNodes);
+  for (const node of childNodes) {
     const heading = node.tagName?.match(/^H([1-6])$/);
     if (heading) lines.push(`${"#".repeat(Number(heading[1]))} ${node.textContent.trim()}`, "");
     else if (node.tagName === "TABLE") {
-      const rows = node.querySelectorAll("tr").map((row) => row.childNodes.filter((cell) => ["TD", "TH"].includes(cell.tagName)).map((cell) => cell.textContent.trim().replaceAll("|", "\\|").replace(/\r?\n/g, " / ")));
+      const rows = node.querySelectorAll("tr").map((row) => (/** @type {import("node-html-parser").HTMLElement[]} */ (row.childNodes)).filter((cell) => ["TD", "TH"].includes(cell.tagName)).map((cell) => cell.textContent.trim().replaceAll("|", "\\|").replace(/\r?\n/g, " / ")));
       rows.forEach((cells, index) => { lines.push(`| ${cells.join(" | ")} |`); if (index === 0) lines.push(`| ${cells.map(() => "---").join(" | ")} |`); });
       lines.push("");
     } else if (["UL", "OL"].includes(node.tagName)) {

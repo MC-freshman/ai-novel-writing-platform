@@ -126,7 +126,7 @@ function buildStoryBoosts(workspace, storyContext, subQueries = []) {
   return scores;
 }
 
-function scoreSubQueries(item, subQueries = [], lexicalScore = () => 0) {
+function scoreSubQueries(item, subQueries = [], lexicalScore = (_item, _query) => 0) {
   let best = 0;
   let matched = "";
   for (const query of subQueries) {
@@ -221,7 +221,7 @@ function cachePath(projectPath) {
   return path.join(projectPath, "analysis", "retrieval", "volume-cache.json");
 }
 
-async function ensureVolumeCache(projectPath, { manifest = {}, summaries = {}, config = {} } = {}) {
+async function ensureVolumeCache(projectPath, /** @type {{ manifest?: any, summaries?: any, config?: any }} */ { manifest = {}, summaries = {}, config = {} } = {}) {
   const fingerprint = sha256(JSON.stringify({ manifestUpdatedAt: manifest.updatedAt || "", summaryUpdatedAt: summaries.updatedAt || "", chapterCount: (config.chapters || []).length }));
   const previous = await readJson(cachePath(projectPath), null);
   if (previous?.version === CACHE_VERSION && previous.fingerprint === fingerprint) return { ...previous, reused: true };
@@ -242,7 +242,7 @@ async function ensureVolumeCache(projectPath, { manifest = {}, summaries = {}, c
   return cache;
 }
 
-function rankVolumeCache(cache, subQueries = [], mode = "normal", lexicalScore = () => 0) {
+function rankVolumeCache(cache, subQueries = [], mode = "normal", lexicalScore = (_item, _query) => 0) {
   const groups = (cache?.groups || []).map((item) => {
     const candidate = { title: item.title, volume: item.title, text: item.summary, category: item.title };
     const scores = subQueries.map((query) => lexicalScore(candidate, query.query));
@@ -253,7 +253,7 @@ function rankVolumeCache(cache, subQueries = [], mode = "normal", lexicalScore =
   return relevant.length ? relevant : groups.slice(0, 6);
 }
 
-function buildEvidenceTargets({ subQueries = [], signals = {}, routedVolumes = [], requiredSourceIds = [], mode = "normal" } = {}) {
+function buildEvidenceTargets(/** @type {{ subQueries?: any[], signals?: any, routedVolumes?: any[], requiredSourceIds?: any[], mode?: string }} */ { subQueries = [], signals = {}, routedVolumes = [], requiredSourceIds = [], mode = "normal" } = {}) {
   const targets = [];
   const add = (kind, label, value, required = true) => {
     const normalized = String(value || "").trim();
@@ -275,7 +275,7 @@ function buildEvidenceTargets({ subQueries = [], signals = {}, routedVolumes = [
   }).slice(0, 120);
 }
 
-function targetMatchScore(chunk, target, lexicalScore = () => 0) {
+function targetMatchScore(chunk, target, lexicalScore = (_item, _query) => 0) {
   if (!chunk || !target) return 0;
   const metadata = chunk.metadata || {};
   const haystack = compact(`${chunk.title || ""} ${chunk.volume || ""} ${chunk.category || ""} ${chunk.text || ""}`);
@@ -295,7 +295,7 @@ function targetMatchScore(chunk, target, lexicalScore = () => 0) {
   return wanted && haystack.includes(wanted) ? 0.6 : 0;
 }
 
-function auditEvidenceCoverage(chunks = [], targets = [], lexicalScore = () => 0) {
+function auditEvidenceCoverage(chunks = [], targets = [], lexicalScore = (_item, _query) => 0) {
   const targetResults = targets.map((target) => {
     let best = null;
     let bestScore = 0;
@@ -333,7 +333,7 @@ function auditEvidenceCoverage(chunks = [], targets = [], lexicalScore = () => 0
   };
 }
 
-function addCoverageSecondPass({ firstPass = [], candidates = [], targets = [], maxChunks = 100, maxChars = 130000, lexicalScore = () => 0 } = {}) {
+function addCoverageSecondPass(/** @type {{ firstPass?: any[], candidates?: any[], targets?: any[], maxChunks?: number, maxChars?: number, lexicalScore?: (item: any, query: string) => number }} */ { firstPass = [], candidates = [], targets = [], maxChunks = 100, maxChars = 130000, lexicalScore = (_item, _query) => 0 } = {}) {
   const selected = firstPass.map((item) => ({ ...item, retrievalPass: Number(item.retrievalPass || 1) }));
   const selectedIds = new Set(selected.map((item) => String(item.id)));
   let totalChars = selected.reduce((sum, item) => sum + String(item.text || "").length, 0);
@@ -377,7 +377,7 @@ function addCoverageSecondPass({ firstPass = [], candidates = [], targets = [], 
   };
 }
 
-async function inspectVolumeCache(projectPath, { manifest = {}, summaries = {}, config = {} } = {}) {
+async function inspectVolumeCache(projectPath, /** @type {{ manifest?: any, summaries?: any, config?: any }} */ { manifest = {}, summaries = {}, config = {} } = {}) {
   const expectedFingerprint = sha256(JSON.stringify({ manifestUpdatedAt: manifest.updatedAt || "", summaryUpdatedAt: summaries.updatedAt || "", chapterCount: (config.chapters || []).length }));
   const cache = await readJson(cachePath(projectPath), null);
   return {

@@ -17,6 +17,7 @@ async function readJson(filePath, fallback) {
   }
 }
 
+/** @param {string} filePath @param {string | Buffer | Uint8Array} value @param {BufferEncoding} [encoding="utf8"] */
 async function writeFileAtomic(filePath, value, encoding = "utf8") {
   await ensureDir(path.dirname(filePath));
   const temporaryPath = `${filePath}.${process.pid}.${crypto.randomBytes(5).toString("hex")}.tmp`;
