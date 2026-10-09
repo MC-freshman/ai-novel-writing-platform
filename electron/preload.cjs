@@ -1,15 +1,22 @@
+// 本文件由 scripts/gen-preload.cjs 依据 shared/contracts/ipc-channels.cjs 生成。
+// 请勿手工编辑：修改通道请改契约文件后运行 npm run gen:preload。
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("novelAPI", {
+  // ---- 事件推送：主进程 → 渲染监听 ----
   onAppCloseRequested: (callback) => {
     const handler = () => callback();
     ipcRenderer.on("app:before-close", handler);
     return () => ipcRenderer.removeListener("app:before-close", handler);
   },
+
+  // ---- 渲染单向发送 ----
   confirmAppClose: () => ipcRenderer.send("app:confirm-close"),
   cancelAppClose: () => ipcRenderer.send("app:cancel-close"),
+
+  // ---- 事件推送：主进程 → 渲染监听 ----
   onMenuAction: (callback) => {
-    const handler = (_event, action) => callback(action);
+    const handler = () => callback();
     ipcRenderer.on("menu:action", handler);
     return () => ipcRenderer.removeListener("menu:action", handler);
   },
@@ -33,6 +40,8 @@ contextBridge.exposeInMainWorld("novelAPI", {
     ipcRenderer.on("task:progress", handler);
     return () => ipcRenderer.removeListener("task:progress", handler);
   },
+
+  // ---- 渲染调用 ----
   getAppState: () => ipcRenderer.invoke("app:get-state"),
   checkForUpdate: () => ipcRenderer.invoke("app:check-update"),
   downloadUpdate: (payload) => ipcRenderer.invoke("app:download-update", payload),
@@ -125,7 +134,6 @@ contextBridge.exposeInMainWorld("novelAPI", {
   listMaterials: () => ipcRenderer.invoke("materials:list"),
   saveMaterial: (payload) => ipcRenderer.invoke("materials:save", payload),
   deleteMaterial: (materialId) => ipcRenderer.invoke("materials:delete", materialId),
-
   createChapter: (payload) => ipcRenderer.invoke("chapter:create", payload),
   loadChapter: (chapterId) => ipcRenderer.invoke("chapter:load", chapterId),
   saveChapter: (payload) => ipcRenderer.invoke("chapter:save", payload),
@@ -136,13 +144,10 @@ contextBridge.exposeInMainWorld("novelAPI", {
   listChapterVersions: (chapterId) => ipcRenderer.invoke("chapter:list-versions", chapterId),
   compareChapterVersion: (payload) => ipcRenderer.invoke("chapter:compare-version", payload),
   restoreChapterVersion: (payload) => ipcRenderer.invoke("chapter:restore-version", payload),
-
   saveCharacter: (payload) => ipcRenderer.invoke("character:save", payload),
   deleteCharacter: (characterId) => ipcRenderer.invoke("character:delete", characterId),
-
   saveWorldDoc: (payload) => ipcRenderer.invoke("world:save", payload),
   deleteWorldDoc: (docId) => ipcRenderer.invoke("world:delete", docId),
-
   getCreativeAdvice: (payload) => ipcRenderer.invoke("ai:creative-advice", payload),
   askAI: (payload) => ipcRenderer.invoke("ai:ask", payload),
   cancelAI: (requestId) => ipcRenderer.invoke("ai:cancel", requestId),

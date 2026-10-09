@@ -30,6 +30,7 @@
     "dist": "npm run build && npm run scan:privacy && electron-builder --win nsis portable",
     "lint": "eslint .",
     "typecheck:electron": "tsc --noEmit -p tsconfig.electron.json",
+    "gen:preload": "node scripts/gen-preload.cjs",
     "test:novel-network": "node --test --test-concurrency=1 scripts/test-novel-network.cjs",
     "test:ui-novel-network": "node scripts/test-ui-novel-network.cjs"
   },
@@ -85,6 +86,7 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "shared/**/*",
       "package.json"
     ],
     "win": {
