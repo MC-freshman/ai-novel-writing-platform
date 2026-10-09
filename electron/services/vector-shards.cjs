@@ -217,7 +217,131 @@ async function stats(projectPath) {
 const serialize = (operation) => (projectPath, ...args) =>
   withProjectWriteQueue(projectPath, "vector-shards", () => operation(projectPath, ...args));
 
+// ---------------------------------------------------------------------------
+// P4: resident vector index (Float32Array) — disk format unchanged (v3 shards).
+// 读路径专用：把分片里的 number[] 向量转成常驻 Float32Array + 预计算范数，
+// 元数据对象与向量分离存放（meta 不含 embedding）。缓存键取自清单
+// （任何写操作都会刷新 updatedAt → 键变化 → 重建），保证与磁盘一致。
+// ---------------------------------------------------------------------------
+const indexCache = new Map(); // projectPath -> { key, manifest, shards: Map<fileName, shardIndex>, lastAccess }
+const INDEX_CACHE_MAX_PROJECTS = 4;
+
+function indexKeyFromManifest(manifest) {
+  return `${manifest.updatedAt || ""}:${manifest.totalChunks || 0}:${manifest.sources.length}`;
+}
+
+async function loadShardIndex(projectPath, source) {
+  const shardPath = path.join(getShardDir(projectPath), source.fileName);
+  const shard = await readJson(shardPath, null);
+  const vectors = shard?.sourceId === source.sourceId && Array.isArray(shard.vectors) ? shard.vectors : null;
+  if (!vectors || vectors.some((item) => item.sourceId !== source.sourceId || !Array.isArray(item.embedding))) return null;
+  const count = vectors.length;
+  const dim = count ? vectors[0].embedding.length : 0;
+  if (vectors.some((item) => item.embedding.length !== dim)) return null;
+  const flat = new Float32Array(count * dim);
+  const norms = new Float32Array(count);
+  const meta = new Array(count);
+  for (let i = 0; i < count; i += 1) {
+    flat.set(vectors[i].embedding, i * dim);
+    let sum = 0;
+    for (let j = 0; j < dim; j += 1) {
+      const value = flat[i * dim + j];
+      sum += value * value;
+    }
+    norms[i] = Math.sqrt(sum);
+    const entry = { ...vectors[i] };
+    delete entry.embedding;
+    meta[i] = entry;
+  }
+  return { sourceId: source.sourceId, fileName: source.fileName, count, dim, flat, norms, meta };
+}
+
+async function loadVectorIndex(projectPath, options = {}) {
+  const manifest = await migrateLegacyIfNeeded(projectPath);
+  const key = indexKeyFromManifest(manifest);
+  let entry = indexCache.get(projectPath);
+  if (!entry || entry.key !== key) {
+    entry = { key, manifest, shards: new Map(), lastAccess: Date.now() };
+    indexCache.set(projectPath, entry);
+    while (indexCache.size > INDEX_CACHE_MAX_PROJECTS) {
+      const oldest = [...indexCache.entries()].sort((a, b) => a[1].lastAccess - b[1].lastAccess)[0];
+      if (!oldest || oldest[0] === projectPath) break;
+      indexCache.delete(oldest[0]);
+    }
+  }
+  entry.lastAccess = Date.now();
+  entry.manifest = manifest;
+  const requested = (options.sourceIds || []).map(String);
+  const wanted = requested.length ? manifest.sources.filter((item) => requested.includes(String(item.sourceId))) : manifest.sources;
+  const shards = [];
+  const damaged = [];
+  for (const source of wanted) {
+    let shard = entry.shards.get(source.fileName);
+    if (!shard) {
+      shard = await loadShardIndex(projectPath, source);
+      if (shard) {
+        entry.shards.set(source.fileName, shard);
+      } else {
+        // 与 loadStore 的坏分片处理保持一致：备份坏文件并记录 degraded。
+        const shardPath = path.join(getShardDir(projectPath), source.fileName);
+        await fs.copyFile(shardPath, `${shardPath}.corrupt-${Date.now()}`).catch((error) => { if (error.code !== "ENOENT") throw error; });
+        damaged.push(source.fileName);
+        shard = { sourceId: source.sourceId, fileName: source.fileName, count: 0, dim: 0, flat: new Float32Array(0), norms: new Float32Array(0), meta: [] };
+        // 缓存哨兵空分片：同一清单键下不再重复读盘/备份；修复写入会刷新
+        // updatedAt → 键变化 → 全量重建。
+        entry.shards.set(source.fileName, shard);
+      }
+    }
+    shards.push(shard);
+  }
+  if (damaged.length) {
+    const merged = [...new Set([...(manifest.recovery?.damaged || []), ...damaged])];
+    manifest.recovery = { status: "degraded", message: `${merged.length} 个索引分片损坏或缺失，当前检索结果不完整；请重建知识库。`, damaged: merged, recoveredAt: nowIso() };
+    await writeJsonAtomic(getManifestPath(projectPath), manifest);
+    // 恢复信息已并入清单；缓存键以 updatedAt 为准，下一次自然重建。
+  }
+  const itemCount = shards.reduce((sum, shard) => sum + shard.count, 0);
+  return {
+    key,
+    updatedAt: manifest.updatedAt,
+    totalChunks: Number(manifest.totalChunks || 0),
+    shards,
+    itemCount,
+    manifest,
+    // _store 兼容视图：元数据齐全、无 embedding，供 forceInclude/coverage 使用
+    storeView: { version: 3, updatedAt: manifest.updatedAt, vectors: shards.flatMap((shard) => shard.meta), totalChunks: Number(manifest.totalChunks || 0), manifest },
+  };
+}
+
+// 与 knowledge-index.cjs 的 cosineSimilarity/compatibleVectorScore 语义逐位对齐
+//（零范数返回 0；长度不等返回 0；identity 不匹配返回 0），仅换成缓存的
+// Float32Array 行 + 预计算范数，省去每查询重复开方与对象属性访问。
+function typedCosineAligned(queryVector, flat, offset, cachedNormB) {
+  const length = queryVector.length;
+  let dot = 0;
+  let normA = 0;
+  for (let j = 0; j < length; j += 1) {
+    const value = queryVector[j];
+    dot += value * flat[offset + j];
+    normA += value * value;
+  }
+  if (!normA || !cachedNormB) return 0;
+  return dot / (Math.sqrt(normA) * cachedNormB);
+}
+
+function indexVectorScore(queryEmbedding, localQueryVector, shard, row) {
+  const meta = shard.meta[row];
+  const itemSource = meta.embeddingSource === "api" ? "api" : "local";
+  const dim = shard.dim;
+  if (itemSource === "local") {
+    return dim === localQueryVector.length ? typedCosineAligned(localQueryVector, shard.flat, row * dim, shard.norms[row]) : 0;
+  }
+  if (queryEmbedding.source !== "api" || dim !== queryEmbedding.vector.length) return 0;
+  if (meta.embeddingIdentity && meta.embeddingIdentity !== queryEmbedding.identity) return 0;
+  return typedCosineAligned(queryEmbedding.vector, shard.flat, row * dim, shard.norms[row]);
+}
+
 module.exports = Object.fromEntries(Object.entries({
-  loadManifest, loadStore, migrateLegacyIfNeeded, removeSource, replaceSources,
+  indexVectorScore, loadManifest, loadStore, loadVectorIndex, migrateLegacyIfNeeded, removeSource, replaceSources,
   reset, saveAll, stats, updateSourcesMetadata, upsertSources,
-}).map(([name, operation]) => [name, serialize(operation)]));
+}).map(([name, operation]) => [name, name === "indexVectorScore" ? operation : serialize(operation)]));

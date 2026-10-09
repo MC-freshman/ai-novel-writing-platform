@@ -876,13 +876,17 @@ async function searchRelevantChunks(projectPath, question, topK, options = {}) {
     signal: options.signal,
   }));
   const loadSourceIds = [...new Set([...sourceIds, ...candidateSourceIds, ...(Array.isArray(options.additionalLoadSourceIds) ? options.additionalLoadSourceIds : [])].map(String).filter(Boolean))];
-  const store = await vectorShards.loadStore(projectPath, loadSourceIds.length ? { sourceIds: loadSourceIds } : {});
+  // P4: 常驻 Float32Array 索引 —— 首次检索加载分片并驻留，后续检索零 IO；
+  // 任何索引写操作都会刷新清单 updatedAt 使缓存键失效并重建。
+  const index = await vectorShards.loadVectorIndex(projectPath, loadSourceIds.length ? { sourceIds: loadSourceIds } : {});
   const embedding = await getEmbedding(question, config.api);
   const localQueryVector = embedding.source === "local" ? embedding.vector : localEmbedding(question);
   const boostSourceIds = new Set((Array.isArray(options.boostSourceIds) ? options.boostSourceIds : []).map((id) => String(id || "")).filter(Boolean));
-  const candidates = store.vectors
-    .map((item) => {
-      const vectorScore = compatibleVectorScore(embedding, localQueryVector, item);
+  const scored = [];
+  for (const shard of index.shards) {
+    for (let row = 0; row < shard.count; row += 1) {
+      const item = shard.meta[row];
+      const vectorScore = vectorShards.indexVectorScore(embedding, localQueryVector, shard, row);
       const keywordScore = lexicalRelevanceScore(item, question);
       const hierarchyBoost = boostSourceIds.has(item.sourceId) ? 0.2 : 0;
       const hybrid = retrievalPlanner.scoreCandidate(item, {
@@ -892,15 +896,17 @@ async function searchRelevantChunks(projectPath, question, topK, options = {}) {
         subQueries: options.retrievalContext?.subQueries,
         lexicalScore: lexicalRelevanceScore,
       });
-      return {
+      scored.push({
         ...item,
         score: vectorScore + keywordScore + hierarchyBoost + hybrid.entityScore + hybrid.adjacencyScore + hybrid.storyScore + hybrid.subQueryScore,
         vectorScore,
         keywordScore,
         hierarchyBoost,
         ...hybrid,
-      };
-    })
+      });
+    }
+  }
+  const candidates = scored
     .filter((item) => !excludedSourceIds.has(String(item.sourceId)) && (!sourceIds.size || sourceIds.has(item.sourceId)))
     .sort((a, b) => b.score - a.score)
     .slice(0, safeScanLimit);
@@ -929,13 +935,13 @@ async function searchRelevantChunks(projectPath, question, topK, options = {}) {
   return {
     chunks: secondPass.chunks,
     candidateCount: candidates.length,
-    scannedCount: store.vectors.length,
-    totalIndexedCount: Number(store.totalChunks || store.vectors.length),
+    scannedCount: index.itemCount,
+    totalIndexedCount: Number(index.totalChunks || index.itemCount),
     embeddingSource: embedding.source,
     embeddingWarning: embedding.warning,
     coveragePass: secondPass.audit,
     freshness,
-    _store: store,
+    _store: index.storeView,
   };
 }
 
