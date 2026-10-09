@@ -31,6 +31,7 @@ const projectArchives = require("./services/project-archives.cjs");
 const { assertTrustedSender, validateIpcArguments } = require("./services/ipc-security.cjs");
 const docxFidelity = require("./services/docx-fidelity.cjs");
 const releasePrivacy = require("./services/release-privacy.cjs");
+const { initLogger, log } = require("./services/logger.cjs");
 const {
   AlignmentType,
   CommentRangeEnd,
@@ -49,6 +50,13 @@ const {
   TextRun,
   WidthType,
 } = require("docx");
+
+process.on("uncaughtException", (error) => {
+  log("process", "error", "uncaughtException", { error });
+});
+process.on("unhandledRejection", (reason) => {
+  log("process", "error", "unhandledRejection", { error: reason });
+});
 
 const VECTOR_DIMENSIONS = 384;
 const CHUNK_SIZE = 500;
@@ -6129,6 +6137,13 @@ async function createWindow() {
     },
   });
 
+  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+    log("renderer", "error", "render-process-gone", { details });
+  });
+  mainWindow.webContents.on("preload-error", (_event, preloadPath, error) => {
+    log("renderer", "error", "preload-error", { extra: { preloadPath, error } });
+  });
+
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
     return { action: "deny" };
@@ -6240,20 +6255,30 @@ function registerIpcHandler(channel, action) {
   ipcMain.handle(channel, async (event, ...args) => {
     assertTrustedSender(event, mainWindow);
     validateIpcArguments(channel, args);
-    return action(event, ...args);
+    const started = Date.now();
+    try {
+      const result = await action(event, ...args);
+      const durationMs = Date.now() - started;
+      // 成功调用只在慢请求时记录，避免正常路径刷屏；失败一律落盘。
+      if (durationMs >= 1000) log("ipc", "info", channel, { durationMs, slow: true });
+      return result;
+    } catch (error) {
+      log("ipc", "error", channel, { durationMs: Date.now() - started, error });
+      throw error;
+    }
   });
 }
 
 function registerIpcHandlers() {
   ipcMain.on("app:confirm-close", (event) => {
-    try { assertTrustedSender(event, mainWindow); } catch { return; }
+    try { assertTrustedSender(event, mainWindow); } catch (error) { log("ipc", "warn", "app:confirm-close", { error }); return; }
     if (windowCloseRequestTimer) clearTimeout(windowCloseRequestTimer);
     windowCloseRequestTimer = null;
     windowCloseApproved = true;
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
   });
   ipcMain.on("app:cancel-close", (event) => {
-    try { assertTrustedSender(event, mainWindow); } catch { return; }
+    try { assertTrustedSender(event, mainWindow); } catch (error) { log("ipc", "warn", "app:cancel-close", { error }); return; }
     if (windowCloseRequestTimer) clearTimeout(windowCloseRequestTimer);
     windowCloseRequestTimer = null;
   });
@@ -7525,6 +7550,8 @@ if (process.env.NOVEL_PLATFORM_TEST === "1") {
 } else {
   app.whenReady().then(async () => {
     app.setName("AI小说创作平台");
+    initLogger(path.join(app.getPath("userData"), "logs"), { minLevel: "info", retentionDays: 14 });
+    log("app", "info", "startup", { version: app.getVersion(), electron: process.versions.electron, node: process.versions.node, platform: process.platform });
     setChineseApplicationMenu();
     registerIpcHandlers();
     currentProjectPath = await getDefaultProjectPath();
