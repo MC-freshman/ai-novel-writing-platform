@@ -1,4 +1,5 @@
 const { spawnSync } = require("node:child_process");
+const fs = require("node:fs");
 const path = require("node:path");
 
 const workspace = path.resolve(__dirname, "..");
@@ -7,6 +8,7 @@ const npmExecutable = process.env.npm_execpath
   : [process.platform === "win32" ? "npm.cmd" : "npm", []];
 const checks = [
   ["构建检查", npmExecutable[0], [...npmExecutable[1], "run", "build"]],
+  ["services 单测与 IPC 契约一致性", process.execPath, ["--test", "--test-concurrency=1", ...fs.readdirSync(path.join(__dirname, "test", "services")).filter((name) => name.endsWith(".test.cjs")).map((name) => path.join(__dirname, "test", "services", name))]],
   ["核心数据与 AI 回归", process.execPath, [path.join(__dirname, "test-core-regression.cjs")]],
   ["方案 P 数据保护与并发回归", process.execPath, ["--test", "--test-concurrency=1", path.join(__dirname, "test-safety-regression.cjs")]],
   ["完整 P 表保存、交换与安全回归", process.execPath, ["--test", "--test-concurrency=1", path.join(__dirname, "test-plan-regression.cjs")]],

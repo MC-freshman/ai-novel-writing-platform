@@ -32,6 +32,8 @@ const { assertTrustedSender, validateIpcArguments } = require("./services/ipc-se
 const docxFidelity = require("./services/docx-fidelity.cjs");
 const releasePrivacy = require("./services/release-privacy.cjs");
 const { initLogger, log } = require("./services/logger.cjs");
+const { verifyIpcContract } = require("./services/ipc-contract.cjs");
+const { channelsRequiringHandler } = require("../shared/contracts/ipc-channels.cjs");
 const {
   AlignmentType,
   CommentRangeEnd,
@@ -6251,7 +6253,10 @@ async function ensureCurrentProject() {
   return currentProjectPath;
 }
 
+const registeredIpcChannels = new Set();
+
 function registerIpcHandler(channel, action) {
+  registeredIpcChannels.add(channel);
   ipcMain.handle(channel, async (event, ...args) => {
     assertTrustedSender(event, mainWindow);
     validateIpcArguments(channel, args);
@@ -6270,6 +6275,7 @@ function registerIpcHandler(channel, action) {
 }
 
 function registerIpcHandlers() {
+  registeredIpcChannels.add("app:confirm-close");
   ipcMain.on("app:confirm-close", (event) => {
     try { assertTrustedSender(event, mainWindow); } catch (error) { log("ipc", "warn", "app:confirm-close", { error }); return; }
     if (windowCloseRequestTimer) clearTimeout(windowCloseRequestTimer);
@@ -6277,6 +6283,7 @@ function registerIpcHandlers() {
     windowCloseApproved = true;
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
   });
+  registeredIpcChannels.add("app:cancel-close");
   ipcMain.on("app:cancel-close", (event) => {
     try { assertTrustedSender(event, mainWindow); } catch (error) { log("ipc", "warn", "app:cancel-close", { error }); return; }
     if (windowCloseRequestTimer) clearTimeout(windowCloseRequestTimer);
@@ -7425,6 +7432,13 @@ function registerIpcHandlers() {
     const projectPath = await ensureCurrentProject();
     const result = await rebuildIndex(projectPath);
     return { ...result, state: await buildAppState(projectPath) };
+  });
+
+  // 启动期契约自检：实际注册通道 vs shared/contracts/ipc-channels.cjs。
+  verifyIpcContract({
+    registered: registeredIpcChannels,
+    contractChannels: channelsRequiringHandler(),
+    testMode: process.env.NOVEL_PLATFORM_TEST === "1",
   });
 }
 
