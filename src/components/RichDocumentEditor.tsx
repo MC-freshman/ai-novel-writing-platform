@@ -65,6 +65,9 @@ export function RichDocumentEditor({
         attributes: {
           class: "rich-document-page",
           spellcheck: "false",
+          role: "textbox",
+          "aria-label": "章节正文",
+          "aria-multiline": "true",
         },
         handleDOMEvents: {
           mouseup() {

@@ -1,6 +1,6 @@
 {
   "name": "ai-novel-writing-platform",
-  "version": "0.3.5",
+  "version": "0.3.7",
   "private": true,
   "description": "本地 AI 小说创作平台，支持 Markdown 写作、本地知识库和 RAG 对话。",
   "engines": {
@@ -25,6 +25,7 @@
     "test:regression": "node scripts/run-regression-suite.cjs",
     "test:services": "node --test --test-concurrency=1 scripts/test/services/*.test.cjs",
     "test:ui-visual": "node scripts/capture-ui-regression.cjs",
+    "test:ui-serene": "node scripts/test-serene-ui.cjs",
     "scan:privacy": "node scripts/scan-release-privacy.cjs",
     "preview": "vite preview --host 127.0.0.1",
     "dist": "npm run build && npm run scan:privacy && electron-builder --win nsis portable",

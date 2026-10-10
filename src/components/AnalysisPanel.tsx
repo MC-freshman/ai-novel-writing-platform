@@ -747,7 +747,7 @@ export function AnalysisPanel({
   }
 
   return (
-    <section className="analysis-panel">
+    <section className={`analysis-panel ${tab === "progress" ? "progress-active" : ""}`}>
       <div className="analysis-tabs">
         <button className={tab === "progress" ? "active" : ""} onClick={() => void changeAnalysisTab("progress")}>
           <LayoutGrid size={16} />

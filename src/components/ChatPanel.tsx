@@ -1,6 +1,6 @@
 // Extracted from src/App.tsx by the P3 refactor (cut-paste, no logic changes).
 import { useEffect, useRef, useState } from "react";
-import { Activity, Bot, Copy, Maximize2, Minimize2, MessageSquarePlus, Send, Sparkles, Square, Trash2, TriangleAlert } from "lucide-react";
+import { Activity, Bot, Copy, Leaf, Maximize2, Minimize2, MessageSquarePlus, Send, Sparkles, Square, Trash2, TriangleAlert } from "lucide-react";
 import type { AppState, ChatMessage, ChatSession, RetrievalMode, RetrievalDiagnostics } from "../types";
 import { sourceLabel, formatDateTime, getErrorMessage } from "../lib/text-utils";
 import { QUICK_PROMPTS, RETRIEVAL_MODE_OPTIONS } from "../lib/chat-utils";
@@ -62,6 +62,7 @@ export function ChatPanel({
   const [assistantTab, setAssistantTab] = useState<"chat" | "advisor">("chat");
   const [supplementSourceByMessage, setSupplementSourceByMessage] = useState<Record<string, string>>({});
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -230,8 +231,11 @@ export function ChatPanel({
           <div className="messages" ref={scrollRef}>
             {messages.length === 0 && (
               <div className="empty-chat">
-                <Sparkles size={22} />
-                <p>提问时会先检索当前小说知识库，再把相关片段交给模型接口。</p>
+                <span className="assistant-empty-mark" aria-hidden="true"><Leaf size={26} /></span>
+                <h3>给灵感一点空间</h3>
+                <p>卡在某个情节时，可以在这里聊聊。助手会先查阅这本小说的相关资料。</p>
+                <button className="empty-chat-example" onClick={() => { setInput("帮我梳理当前章节里尚未解决的伏笔"); inputRef.current?.focus(); }}>试试：梳理当前章节的伏笔</button>
+                {!state.config.api.chatModel && <small>使用 AI 前，请在顶部设置中配置模型接口。</small>}
               </div>
             )}
             {messages.map((message) => (
@@ -354,9 +358,12 @@ export function ChatPanel({
           </div>
 
           <div className="chat-input">
+            <label htmlFor="novel-ai-question">聊聊你的故事 <span>Ctrl + Enter 发送</span></label>
             <textarea
+              id="novel-ai-question"
+              ref={inputRef}
               value={input}
-              placeholder="问 AI..."
+              placeholder="一个情节、一个人物，或一段还没想好的故事…"
               onChange={(event) => setInput(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) submit();

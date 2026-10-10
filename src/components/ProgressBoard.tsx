@@ -238,6 +238,7 @@ export function ProgressGrid({
   return (
     <div className="analysis-section progress-board">
       <div className="progress-toolbar">
+        <div className="progress-toolbar-actions">
         <button className={batchMode ? "active" : ""} onClick={() => (setBatchMode((value) => !value), setSelectedIds([]))}>
           <CheckSquare size={15} />
           批量标记
@@ -283,7 +284,8 @@ export function ProgressGrid({
           <RefreshCcw size={15} />
           刷新
         </button>
-        <span className="progress-toolbar-hint">点状态标签循环切换；双击格子写备注；无手动标记时按场景和字数自动推导。</span>
+        </div>
+        <p className="progress-toolbar-help">点状态标签切换进度，双击格子写备注。未手动标记时，按场景和字数自动推导。</p>
       </div>
 
       {!loaded && <div className="analysis-empty">正在读取创作工作台的场景规划...</div>}
@@ -321,6 +323,7 @@ export function ProgressGrid({
           return (
             <div className="progress-volume" key={volume}>
               <div className="progress-volume-head">
+                <div className="progress-volume-info">
                 {batchMode && (
                   <button
                     onClick={() =>
@@ -333,13 +336,17 @@ export function ProgressGrid({
                     {allSelected ? <CheckSquare size={15} /> : <Square size={15} />}
                   </button>
                 )}
-                <strong>{volume}</strong>
+                <div className="progress-volume-copy">
+                <strong title={volume}>{volume}</strong>
                 <span className="progress-volume-sum">
                   {visible.length} 章 · 已完成 {counts["已完成"]} · 写作中 {counts["写作中"]} · 计划中 {counts["计划中"]}
                   {counts["暂缓"] ? ` · 暂缓 ${counts["暂缓"]}` : ""}
                   {summaryScope && <span className="progress-volume-filtered"> {summaryScope}</span>}
                 </span>
-                <span className="progress-volume-bar">
+                </div>
+                </div>
+                <div className="progress-volume-controls">
+                <span className="progress-volume-bar" role="progressbar" aria-label={`${volume}完成进度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={visible.length ? Math.round((counts["已完成"] / visible.length) * 100) : 0}>
                   <span style={{ width: `${visible.length ? Math.round((counts["已完成"] / visible.length) * 100) : 0}%` }} />
                 </span>
                 <button className="progress-volume-action" onClick={() => toggleVolumeHidden(volume)} title={hiddenVolumes.includes(volume) ? "在进度表显示本卷" : "整个卷暂时隐藏（不删除文件）"}>
@@ -348,6 +355,7 @@ export function ProgressGrid({
                 <button className="progress-volume-action" onClick={() => void addChapterToVolume(volume)} title={`在「${volume}」新建章节`}>
                   <Plus size={14} />
                 </button>
+                </div>
               </div>
               <div className="progress-cells">
                 {visible.map((chapter) => {
@@ -434,7 +442,7 @@ export function ChapterProgressStrip({
   onApplyState: (state: AppState) => void;
   onStatus: (message: string) => void;
 }) {
-  const [open, setOpen] = useState(() => localStorage.getItem("progressStripOpen") !== "0");
+  const [open, setOpen] = useState(() => localStorage.getItem("progressStripOpen") === "1");
   const [scenes, setScenes] = useState<ScenePlan[]>([]);
   const [board, setBoard] = useState<ChapterPreparationBoard | null>(null);
 
@@ -523,7 +531,7 @@ export function ChapterProgressStrip({
   return (
     <div className={`progress-strip ${open ? "open" : ""}`}>
       <div className="progress-strip-head">
-        <button className="progress-strip-toggle" onClick={toggleOpen} title={open ? "收起" : "展开本章任务清单"}>
+        <button className="progress-strip-toggle" aria-expanded={open} onClick={toggleOpen} title={open ? "收起" : "展开本章任务清单"}>
           {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
           <ProgressPill status={derived.status} />
           <strong title={chapter.title}>{chapter.title}</strong>

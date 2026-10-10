@@ -28,6 +28,7 @@ import {
   ListOrdered,
   ListTree,
   ListChecks,
+  Leaf,
   Lock,
   LayoutGrid,
   Maximize2,
@@ -188,8 +189,8 @@ export default function App() {
   const [showFindReplace, setShowFindReplace] = useState(false);
   const [findText, setFindText] = useState("");
   const [replaceText, setReplaceText] = useState("");
-  const [leftWidth, setLeftWidth] = useState(280);
-  const [rightWidth, setRightWidth] = useState(520);
+  const [leftWidth, setLeftWidth] = useState(256);
+  const [rightWidth, setRightWidth] = useState(360);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const [aiExpanded, setAiExpanded] = useState(false);
   const [aiChatOpenRequest, setAiChatOpenRequest] = useState(0);
@@ -253,8 +254,8 @@ export default function App() {
       setRecoveryDrafts(recovery.drafts);
       if (recovery.windowState) {
         setView(recovery.windowState.view || "chapters");
-        setLeftWidth(Math.min(520, Math.max(210, recovery.windowState.leftWidth || 280)));
-        setRightWidth(Math.min(900, Math.max(360, recovery.windowState.rightWidth || 520)));
+        setLeftWidth(Math.min(520, Math.max(210, recovery.windowState.leftWidth || 256)));
+        setRightWidth(Math.min(900, Math.max(300, recovery.windowState.rightWidth || 360)));
         setPreviewWidth(Math.min(68, Math.max(28, recovery.windowState.previewWidth || 46)));
       }
       if (recovery.drafts.length || recovery.interruptedOperations.length) {
@@ -634,6 +635,16 @@ export default function App() {
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      const dialogOpen = showSettings || showQuickPanel || showStoryCenter || showTaskCenter || Boolean(contextMenu);
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "f" && view === "chapters" && !dialogOpen) {
+        event.preventDefault();
+        setFocusMode((value) => !value);
+      }
+      if (event.key === "Escape" && focusMode && !dialogOpen) {
+        event.preventDefault();
+        setFocusMode(false);
+      }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
         void saveCurrentPage();
@@ -645,13 +656,22 @@ export default function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [saveCurrentPage]);
+  }, [contextMenu, focusMode, saveCurrentPage, showQuickPanel, showSettings, showStoryCenter, showTaskCenter, view]);
+
+  useEffect(() => {
+    if (!focusMode || view !== "chapters") return;
+    const frame = window.requestAnimationFrame(() => {
+      if (preview) editorRef.current?.focus();
+      else richEditorRef.current?.view.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [focusMode, preview, view]);
 
   const currentWords = useMemo(() => countWords(chapterContent), [chapterContent]);
   const paneWidths = useMemo(() => {
     const centerMinimum = aiExpanded ? 240 : 380;
-    const rightMinimum = aiExpanded ? 520 : 360;
-    const sideBudget = Math.max(570, viewportWidth - centerMinimum - 12);
+    const rightMinimum = aiExpanded ? 520 : 300;
+    const sideBudget = Math.max(510, viewportWidth - centerMinimum - 12);
     const left = Math.min(leftWidth, Math.max(210, sideBudget - rightMinimum));
     const desiredRight = aiExpanded ? Math.max(rightWidth, 680) : rightWidth;
     const right = Math.min(desiredRight, Math.max(rightMinimum, sideBudget - left));
@@ -1033,7 +1053,7 @@ export default function App() {
         setLeftWidth(Math.min(460, Math.max(210, initialLeft + delta)));
       }
       if (kind === "right") {
-        setRightWidth(Math.min(860, Math.max(360, initialRight - delta)));
+        setRightWidth(Math.min(860, Math.max(300, initialRight - delta)));
       }
       if (kind === "preview" && editorBody) {
         const next = initialPreview - (delta / editorBody.width) * 100;
@@ -1485,8 +1505,8 @@ export default function App() {
     <div className={`app-shell ${focusMode ? "focus" : ""}`} onClick={() => setContextMenu(null)}>
       <header className="topbar">
         <div className="brand">
-          <BookOpen size={20} />
-          <span>{state.config.title}</span>
+          <span className="brand-mark" aria-hidden="true"><Leaf size={21} /></span>
+          <div className="brand-copy"><span>{state.config.title}</span><small>{focusMode ? "专注写作 · Esc 返回" : "让故事慢慢生长"}</small></div>
         </div>
         <nav className="menu">
           <button onClick={createProject} title="新建小说项目">
@@ -1505,7 +1525,7 @@ export default function App() {
             <BookOpen size={16} />
             导出正文
           </button>
-          <button onClick={() => void saveCurrentPage()} title="保存当前页面，快捷键 Ctrl+S">
+          <button className="save-action" onClick={() => void saveCurrentPage()} title="保存当前页面，快捷键 Ctrl+S">
             <Save size={16} />
             保存
           </button>
@@ -1556,8 +1576,9 @@ export default function App() {
           >
             {state.config.ui.theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
           </button>
-          <button onClick={() => setFocusMode((value) => !value)} title="专注模式">
+          <button className="focus-toggle" aria-label={focusMode ? "退出专注模式" : "进入专注模式"} aria-pressed={focusMode} onClick={() => setFocusMode((value) => !value)} title="专注模式">
             {focusMode ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+            <span>{focusMode ? "退出专注" : "专注写作"}</span>
           </button>
         </div>
       </header>
@@ -1572,19 +1593,19 @@ export default function App() {
         {!focusMode && (
           <aside className="left-pane">
             <div className="pane-tabs">
-              <button className={view === "chapters" ? "active" : ""} onClick={() => void changeView("chapters")} title="章节">
+              <button aria-current={view === "chapters" ? "page" : undefined} className={view === "chapters" ? "active" : ""} onClick={() => void changeView("chapters")} title="章节">
                 <BookOpen size={16} /> 章节
               </button>
-              <button className={view === "characters" ? "active" : ""} onClick={() => void changeView("characters")} title="角色">
+              <button aria-current={view === "characters" ? "page" : undefined} className={view === "characters" ? "active" : ""} onClick={() => void changeView("characters")} title="角色">
                 <UserRound size={16} /> 角色
               </button>
-              <button className={view === "world" ? "active" : ""} onClick={() => void changeView("world")} title="世界">
+              <button aria-current={view === "world" ? "page" : undefined} className={view === "world" ? "active" : ""} onClick={() => void changeView("world")} title="世界">
                 <Boxes size={16} /> 世界
               </button>
-              <button className={view === "knowledge" ? "active" : ""} onClick={() => void changeView("knowledge")} title="知识库">
+              <button aria-current={view === "knowledge" ? "page" : undefined} className={view === "knowledge" ? "active" : ""} onClick={() => void changeView("knowledge")} title="知识库">
                 <ListTree size={16} /> 知识库
               </button>
-              <button className={view === "analysis" ? "active" : ""} onClick={() => void changeView("analysis")} title="分析">
+              <button aria-current={view === "analysis" ? "page" : undefined} className={view === "analysis" ? "active" : ""} onClick={() => void changeView("analysis")} title="分析">
                 <Search size={16} /> 分析
               </button>
             </div>
@@ -1616,6 +1637,7 @@ export default function App() {
               <div className="editor-header">
                 <input
                   className="title-input"
+                  aria-label="章节标题"
                   value={chapterTitle}
                   onChange={(event) => {
                     setChapterTitle(event.target.value);
@@ -1624,6 +1646,7 @@ export default function App() {
                 />
                 <input
                   className="volume-input"
+                  aria-label="所属分卷"
                   value={chapterVolume}
                   onChange={(event) => {
                     setChapterVolume(event.target.value);
@@ -1796,7 +1819,7 @@ export default function App() {
       </main>
 
       <footer className="statusbar">
-        <span>{view === "chapters" ? saving ? "保存中..." : dirty ? "有未保存修改" : "已保存" : view === "characters" ? "角色卡 · 保存状态见当前表单" : view === "world" ? "世界观 · 保存状态见当前表单" : view === "analysis" ? "保存状态见当前面板" : "当前页操作即时保存"}</span>
+        <span className={`save-state ${dirty ? "is-dirty" : ""}`} role="status">{view === "chapters" ? saving ? "保存中..." : dirty ? "有未保存修改" : "已保存" : view === "characters" ? "角色卡 · 保存状态见当前表单" : view === "world" ? "世界观 · 保存状态见当前表单" : view === "analysis" ? "保存状态见当前面板" : "当前页操作即时保存"}</span>
         <span>当前章节：{currentWords.toLocaleString()} 字</span>
         <span>今日：{state.config.stats.todayWords.toLocaleString()} 字</span>
         <span>总字数：{state.config.stats.totalWords.toLocaleString()} 字</span>
