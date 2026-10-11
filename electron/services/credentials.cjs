@@ -1,9 +1,9 @@
-// 本文件由 P2 重构自 electron/main.cjs 机械搬迁（scripts/refactor-split.cjs），逻辑未改动。
+// 本文件源自P2主进程拆分；后续维护与行为修复见Git历史。
 "use strict";
 
 const windowsCredentials = require("./windows-credentials.cjs");
 const { CREDENTIAL_CHAT_REF, CREDENTIAL_EMBEDDING_REF } = require("./constants.cjs");
-const { state, sendRendererEvent } = require("./runtime-state.cjs");
+const { state } = require("./runtime-state.cjs");
 const __dep0 = require("./project-files.cjs");
 const path = require("node:path");
 

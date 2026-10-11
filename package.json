@@ -1,6 +1,6 @@
 {
   "name": "ai-novel-writing-platform",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "private": true,
   "description": "本地 AI 小说创作平台，支持 Markdown 写作、本地知识库和 RAG 对话。",
   "engines": {
@@ -33,7 +33,13 @@
     "typecheck:electron": "tsc --noEmit -p tsconfig.electron.json",
     "gen:preload": "node scripts/gen-preload.cjs",
     "test:novel-network": "node --test --test-concurrency=1 scripts/test-novel-network.cjs",
-    "test:ui-novel-network": "node scripts/test-ui-novel-network.cjs"
+    "test:ui-novel-network": "node scripts/test-ui-novel-network.cjs",
+    "check:quality": "node scripts/check-quality.cjs",
+    "release:checksums": "node scripts/release-checksums.cjs",
+    "bench:capacity": "node scripts/bench-retrieval-capacity.cjs",
+    "test:services:coverage": "node --test --experimental-test-coverage --test-coverage-include=electron/services/** --test-concurrency=1 scripts/test/services/*.test.cjs",
+    "check:services": "node scripts/check-service-map.cjs",
+    "test:ui-stores": "node scripts/test-store-ui.cjs"
   },
   "dependencies": {
     "@tiptap/extension-image": "^3.31.3",
@@ -53,7 +59,8 @@
     "marked": "^15.0.3",
     "node-html-parser": "^9.0.4",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "zustand": "^5.0.15"
   },
   "overrides": {
     "@xmldom/xmldom": "^0.9.12",

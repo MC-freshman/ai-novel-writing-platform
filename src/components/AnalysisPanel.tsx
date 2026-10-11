@@ -135,8 +135,14 @@ export function AnalysisPanel({
     void window.novelAPI.saveAnalysisState(patch).catch(() => null);
   }
 
-  function restoreAnalysisSnapshot(snapshot: AnalysisSnapshot) {
-    if (!userSelectedTab.current && !networkOpenRequest && snapshot.tab && ["progress", "search", "timeline", "relations", "consistency", "versions", "export"].includes(snapshot.tab)) {
+
+
+  const networkOpenRequestRef = useRef(networkOpenRequest);
+  networkOpenRequestRef.current = networkOpenRequest;
+  useEffect(() => {
+    let cancelled = false;
+    function restoreAnalysisSnapshot(snapshot: AnalysisSnapshot) {
+    if (!userSelectedTab.current && !networkOpenRequestRef.current && snapshot.tab && ["progress", "search", "timeline", "relations", "consistency", "versions", "export"].includes(snapshot.tab)) {
       setTab(snapshot.tab as AnalysisTab);
     }
     if (typeof snapshot.query === "string") setQuery(snapshot.query);
@@ -171,14 +177,13 @@ export function AnalysisPanel({
     if (Array.isArray(snapshot.materials)) setMaterials(snapshot.materials);
     if (snapshot.materialDraft) setMaterialDraft(snapshot.materialDraft);
   }
-
-  useEffect(() => {
     setAnalysisLoaded(false);
     window.novelAPI
       .getAnalysisState()
-      .then((snapshot) => restoreAnalysisSnapshot(snapshot || {}))
+      .then((snapshot) => { if (!cancelled) restoreAnalysisSnapshot(snapshot || {}); })
       .catch(() => null)
-      .finally(() => setAnalysisLoaded(true));
+      .finally(() => { if (!cancelled) setAnalysisLoaded(true); });
+    return () => { cancelled = true; };
   }, [state.projectPath]);
 
   useEffect(() => {

@@ -1,4 +1,4 @@
-// 本文件由 P2 重构自 electron/main.cjs 机械搬迁（scripts/refactor-split.cjs），逻辑未改动。
+// 本文件源自P2主进程拆分；后续维护与行为修复见Git历史。
 "use strict";
 
 const { consumeChatStream } = require("./chat-stream.cjs");
@@ -98,7 +98,7 @@ async function fetchJsonWithDiagnostics(url, payload, headers, label, options = 
   } catch (error) {
     const timeoutHint = error?.name === "AbortError" && timeoutMs > 0 ? `请求超过 ${Math.round(timeoutMs / 1000)} 秒未完成，已自动中断。` : "";
     const sizeHint = bodyBytes > 1024 * 1024 ? "请求体超过 1MB，可能被本地代理、网关或安全软件中断。" : "如果问题很长，可减少引用片段上限或拆成几次提问。";
-    throw new Error(`${label}本地连接失败：${describeFetchError(error)}\n请求地址：${safeEndpointLabel(url)}\n请求体大小：${formatBytes(bodyBytes)}。${timeoutHint}${sizeHint}`);
+    throw new Error(`${label}本地连接失败：${describeFetchError(error)}\n请求地址：${safeEndpointLabel(url)}\n请求体大小：${formatBytes(bodyBytes)}。${timeoutHint}${sizeHint}`, { cause: error });
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -151,7 +151,7 @@ async function fetchOpenAiCompatibleStream(url, payload, headers, label, onToken
     if (externalSignal?.aborted) return answer.trim() || "【已停止生成，停止前尚未收到模型输出。】";
     if (String(error?.message || "").includes(`${label}请求失败`)) throw error;
     const timeoutHint = error?.name === "AbortError" && timeoutMs > 0 ? `请求超过 ${Math.round(timeoutMs / 1000)} 秒未完成，已自动中断。` : "";
-    throw new Error(`${label}本地连接失败：${describeFetchError(error)}\n请求地址：${safeEndpointLabel(url)}\n请求体大小：${formatBytes(bodyBytes)}。${timeoutHint}如果网络中断，但模型已经开始输出，软件会保留已经收到的内容。`);
+    throw new Error(`${label}本地连接失败：${describeFetchError(error)}\n请求地址：${safeEndpointLabel(url)}\n请求体大小：${formatBytes(bodyBytes)}。${timeoutHint}如果网络中断，但模型已经开始输出，软件会保留已经收到的内容。`, { cause: error });
   } finally {
     if (timer) clearTimeout(timer);
     externalSignal?.removeEventListener("abort", abortFromExternal);
@@ -589,7 +589,7 @@ async function buildChatRetrievalPackage(projectPath, config, payload, question)
   let searchQuestion = question;
   let minKeep = Math.min(CHAT_CONTEXT_MIN_CHUNKS, sendLimit);
   let maxChars = CHAT_CONTEXT_CHAR_BUDGET;
-  let catalogUsed = true;
+  const catalogUsed = true;
   let inventoryUsed = false;
   const additionalSourceIds = [...new Set((Array.isArray(payload?.additionalSourceIds) ? payload.additionalSourceIds : []).map((item) => String(item || "")).filter(Boolean))];
   const subQueries = retrievalPlanner.decomposeQuery(question, mode);

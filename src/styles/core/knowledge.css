@@ -1,0 +1,361 @@
+/* Knowledge organizer */
+.knowledge-panel {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto auto 1fr;
+  background: var(--bg);
+  container-type: inline-size;
+}
+
+.knowledge-status-panel {
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 78%, var(--bg));
+}
+
+.knowledge-status-panel > summary {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 9px;
+  padding: 7px 12px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.knowledge-status-panel > summary strong {
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.knowledge-sync-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+}
+
+.knowledge-status-meta {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sync-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.sync-dot.ok {
+  background: #318264;
+}
+
+.sync-dot.pending {
+  background: #b57b22;
+}
+
+.sync-dot.error {
+  background: #b4423c;
+}
+
+.knowledge-status-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--line);
+}
+
+.knowledge-status-actions button {
+  min-height: 29px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.knowledge-status-list {
+  max-height: 170px;
+  overflow: auto;
+  display: grid;
+  gap: 4px;
+  padding: 0 12px 9px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.knowledge-status-list.health strong {
+  color: #b4423c;
+}
+
+.knowledge-status-list.maintenance {
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.knowledge-status-list.maintenance strong {
+  color: var(--accent-strong);
+}
+
+.sync-label {
+  margin-left: 5px;
+  color: #318264;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.sync-label.等待更新,
+.sync-label.摘要待更新,
+.sync-label.未索引 {
+  color: #9b671a;
+}
+
+.sync-label.文件缺失 {
+  color: #b4423c;
+}
+
+.knowledge-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 86%, var(--bg));
+}
+
+.knowledge-header div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.knowledge-header button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.knowledge-toolbar {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(130px, 160px) auto;
+  gap: 7px;
+  align-items: center;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 70%, var(--bg));
+}
+
+.knowledge-batch-actions {
+  position: relative;
+}
+
+.knowledge-batch-actions > summary {
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  background: var(--panel);
+}
+
+.knowledge-batch-actions > div {
+  position: absolute;
+  z-index: 20;
+  right: 0;
+  top: calc(100% + 4px);
+  min-width: 130px;
+  display: grid;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: var(--shadow);
+  background: var(--panel);
+}
+
+.knowledge-toolbar input,
+.knowledge-toolbar select {
+  min-height: 32px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.knowledge-toolbar button {
+  min-height: 30px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.knowledge-list {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 12px;
+}
+
+.knowledge-group {
+  display: grid;
+  gap: 6px;
+}
+
+.knowledge-group header {
+  color: var(--muted);
+}
+
+.knowledge-group header span,
+.knowledge-row small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.knowledge-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(110px, 150px) minmax(130px, 190px);
+  gap: 9px;
+  align-items: center;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.knowledge-row > div,
+.knowledge-row label {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.knowledge-row strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledge-row label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.knowledge-row input,
+.knowledge-row select {
+  width: 100%;
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 8px;
+}
+
+@container (max-width: 520px) {
+  .knowledge-status-panel > summary .knowledge-status-meta {
+    display: none;
+  }
+
+  .knowledge-toolbar {
+    grid-template-columns: minmax(0, 1fr) minmax(108px, 138px);
+  }
+
+  .knowledge-batch-actions {
+    grid-column: 1 / -1;
+    justify-self: end;
+  }
+
+  .knowledge-row {
+    grid-template-columns: minmax(0, 1fr) minmax(108px, 138px);
+  }
+
+  .knowledge-row > label:last-child {
+    grid-column: 1 / -1;
+  }
+}
+
+@container (max-width: 380px) {
+  .knowledge-toolbar,
+  .knowledge-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .knowledge-batch-actions,
+  .knowledge-row > label:last-child {
+    grid-column: auto;
+  }
+
+  .knowledge-batch-actions {
+    justify-self: stretch;
+  }
+
+  .knowledge-batch-actions > summary {
+    justify-content: center;
+  }
+}
+
+.progress-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 320px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress-pill button {
+  min-height: 22px;
+  padding: 0 7px;
+  font-size: 11px;
+}
+
+.context-menu-note {
+  padding: 4px 8px 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+button.danger {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
+  color: var(--danger);
+}
+
+.context-menu {
+  position: fixed;
+  z-index: 20;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  max-height: calc(100vh - 16px);
+  overflow: auto;
+}
+
+[role="dialog"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.context-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+}
+

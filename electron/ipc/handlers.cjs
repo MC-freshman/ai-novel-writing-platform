@@ -1,12 +1,12 @@
 // 本文件由 P2 重构自 electron/main.cjs 机械搬迁（scripts/refactor-split.cjs），逻辑未改动。
 "use strict";
 
-const { app, BrowserWindow, dialog, ipcMain, Menu, shell } = require("electron");
-const { createWriteStream, existsSync } = require("node:fs");
+const { dialog, ipcMain, shell } = require("electron");
+const { existsSync } = require("node:fs");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { writeFileAtomic, writeJsonAtomic, withProjectTransaction, writeProjectFiles } = require("../services/project-storage.cjs");
+const { writeFileAtomic, withProjectTransaction, writeProjectFiles } = require("../services/project-storage.cjs");
 const storyState = require("../services/story-state.cjs");
 const projectSnapshots = require("../services/project-snapshots.cjs");
 const creativeWorkspace = require("../services/creative-workspace.cjs");
@@ -15,7 +15,7 @@ const { normalizeNetwork } = require("../services/novel-network.cjs");
 const operationJournal = require("../services/operation-journal.cjs");
 const { assertTrustedSender, validateIpcArguments } = require("../services/ipc-security.cjs");
 const releasePrivacy = require("../services/release-privacy.cjs");
-const { initLogger, log } = require("../services/logger.cjs");
+const { log } = require("../services/logger.cjs");
 const { verifyIpcContract } = require("../services/ipc-contract.cjs");
 const { channelsRequiringHandler } = require("../../shared/contracts/ipc-channels.cjs");
 const { state, sendRendererEvent } = require("../services/runtime-state.cjs");

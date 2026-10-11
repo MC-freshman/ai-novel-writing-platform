@@ -1,0 +1,56 @@
+.analysis-panel {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  background: var(--bg);
+}
+
+.analysis-tabs {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 10px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 86%, var(--bg));
+}
+
+.analysis-tabs button,
+.analysis-actions button,
+.analysis-search button,
+.version-tools button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 9px;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.analysis-tabs button.active {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+}
+
+.analysis-section {
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+
+.analysis-search {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  gap: 7px;
+  margin-bottom: 10px;
+}
+
+.analysis-search input,
+.version-tools select {
+  min-height: 32px;
+  padding: 0 9px;
+}
+

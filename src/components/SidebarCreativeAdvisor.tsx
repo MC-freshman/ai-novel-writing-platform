@@ -39,10 +39,15 @@ export function SidebarCreativeAdvisor({
     ...state.worldDocs.map((item) => ({ id: item.id, label: item.title, group: `世界 / ${item.category || "未分类"}` })),
   ], [state.chapters, state.characters, state.worldDocs]);
 
+  const latestSelection = useRef({ selectedChapterId, chapters: state.chapters });
+  latestSelection.current = { selectedChapterId, chapters: state.chapters };
   useEffect(() => {
+    let cancelled = false;
     window.novelAPI
       .getAnalysisState()
       .then((snapshot) => {
+        if (cancelled) return;
+        const { chapters, selectedChapterId: selected } = latestSelection.current;
         if (snapshot.creativeAdvice) setCreativeAdvice(snapshot.creativeAdvice);
         if (snapshot.creativeOptions?.mode) setCreativeMode(snapshot.creativeOptions.mode);
         if (typeof snapshot.creativeOptions?.focus === "string") setCreativeFocus(snapshot.creativeOptions.focus);
@@ -50,19 +55,21 @@ export function SidebarCreativeAdvisor({
         if (Array.isArray(snapshot.creativeOptions?.includeSourceIds)) setCreativeIncludeSourceIds(snapshot.creativeOptions.includeSourceIds);
         if (Array.isArray(snapshot.creativeOptions?.excludeSourceIds)) setCreativeExcludeSourceIds(snapshot.creativeOptions.excludeSourceIds);
         if (["auto", "chapter", "volume", "book"].includes(String(snapshot.creativeOptions?.scopeType || ""))) setScopeType(snapshot.creativeOptions?.scopeType as AgentScopeType | "auto");
-        if (snapshot.creativeOptions?.chapterId && state.chapters.some((chapter) => chapter.id === snapshot.creativeOptions?.chapterId)) {
+        if (snapshot.creativeOptions?.chapterId && chapters.some((chapter) => chapter.id === snapshot.creativeOptions?.chapterId)) {
           setAdvisorChapterId(snapshot.creativeOptions.chapterId);
         } else {
-          setAdvisorChapterId(selectedChapterId || state.chapters[0]?.id || "");
+          setAdvisorChapterId(selected || chapters[0]?.id || "");
         }
       })
       .catch(() => null);
     void window.novelAPI.getCreativeWorkspace()
       .then((workspace) => {
+        if (cancelled) return;
         setAgentHistory(workspace.agentRuns);
         setAgentPlan(workspace.agentRuns.find((item) => item.status === "待确认") || null);
       })
       .catch(() => null);
+    return () => { cancelled = true; };
   }, [state.projectPath]);
 
   useEffect(() => {

@@ -1,7 +1,7 @@
 // Extracted from src/App.tsx by the P3 refactor (cut-paste, no logic changes).
 import { AlignCenter, AlignLeft, AlignRight, ArrowDown, ArrowUp, Bold, Italic, List, ListOrdered, Minus, Quote, Redo2, Table2, Underline as UnderlineIcon, Undo2 } from "lucide-react";
 import type { Editor } from "@tiptap/react";
-import type { Chapter } from "../types";
+
 import { scrollRichSelectionIntoView, moveCurrentTopLevelBlock } from "../lib/editor-ops";
 
 export function RichEditorToolbar({ editor }: { editor: Editor | null }) {

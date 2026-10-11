@@ -1,0 +1,73 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 6px;
+  min-height: 30px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--accent);
+}
+
+button svg {
+  flex: 0 0 auto;
+}
+
+input,
+textarea,
+select {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 6px;
+  outline: none;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.loading-screen {
+  height: 100vh;
+  display: grid;
+  place-content: center;
+  gap: 16px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.spin-slow {
+  margin: 0 auto;
+  color: var(--accent);
+  animation: spin 2s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+

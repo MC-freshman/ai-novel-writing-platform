@@ -4,9 +4,11 @@
 
 A Windows desktop application for long-form fiction. Keep manuscripts, outlines, characters, worldbuilding, progress, and AI assistance in one local project, with a quiet writing workspace and tools for checking story continuity.
 
-**当前版本 / Current release: 0.3.7 · Windows x64**
+**当前版本 / Current release: 0.3.8 · Windows x64**
 
 软件界面目前使用中文；本 README 提供完整的中文和英文操作说明，英文部分保留实际中文按钮名称，方便对照界面。
+
+更新方式为在设置中手动检查、下载并确认打开安装程序；当前不提供后台自动安装，也不消费发布包中的latest.yml和blockmap。界面暂无多语言切换。这两项维持现状的范围决策见[整改验收记录](docs/整改验收_2026-10-11.md)。0.3.6为本地迭代，已汇总到0.3.7公开发布。
 
 The application uses Chinese interface labels. This README includes complete Chinese and English instructions; the English guide quotes the actual Chinese labels so you can find each control.
 
@@ -22,12 +24,12 @@ AI 功能用于检索相关资料、讨论情节、生成规划和提出修订�
 
 ### 2. 下载、安装与升级
 
-在 [0.3.7 发布页](https://github.com/MC-freshman/ai-novel-writing-platform/releases/tag/v0.3.7) 下载适合自己的文件。下面的说明已经包含安装和升级步骤，不需要另找教程。
+在 [0.3.8 发布页](https://github.com/MC-freshman/ai-novel-writing-platform/releases/tag/v0.3.8) 下载适合自己的文件。下面的说明已经包含安装和升级步骤，不需要另找教程。
 
 | 文件 | 用途 | 如何使用 |
 | --- | --- | --- |
-| [AI-Novel-Writing-Platform-Setup-0.3.7-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.3.7/AI-Novel-Writing-Platform-Setup-0.3.7-x64.exe) | Windows 64 位安装版 | 运行安装向导，选择安装位置，之后从桌面或开始菜单打开。适合日常固定使用。 |
-| [AI-Novel-Writing-Platform-Portable-0.3.7-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.3.7/AI-Novel-Writing-Platform-Portable-0.3.7-x64.exe) | Windows 64 位便携版 | 下载后直接运行，程序包含所需运行环境，无需安装 Node.js。项目数据仍保存在独立项目目录。 |
+| [AI-Novel-Writing-Platform-Setup-0.3.8-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.3.8/AI-Novel-Writing-Platform-Setup-0.3.8-x64.exe) | Windows 64 位安装版 | 运行安装向导，选择安装位置，之后从桌面或开始菜单打开。适合日常固定使用。 |
+| [AI-Novel-Writing-Platform-Portable-0.3.8-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.3.8/AI-Novel-Writing-Platform-Portable-0.3.8-x64.exe) | Windows 64 位便携版 | 下载后直接运行，程序包含所需运行环境，无需安装 Node.js。项目数据仍保存在独立项目目录。 |
 | SHA256SUMS.txt | 文件校验 | 与程序一起下载，用 PowerShell 的 `Get-FileHash -Algorithm SHA256` 对照其中的哈希值。 |
 | latest.yml、`.blockmap` | 发布更新元数据 | 普通使用者不需要手动打开；它们用于记录发布包和更新信息。 |
 
@@ -44,9 +46,9 @@ AI 功能用于检索相关资料、讨论情节、生成规划和提出修订�
 
 1. 在旧版中保存当前章节及正在编辑的角色、世界观或小说统筹网。
 2. 使用顶部“更多 → 备份项目”导出备份，保留原项目目录。
-3. 关闭旧版，再运行 0.3.7 安装程序或新的便携程序。
+3. 关闭旧版，再运行 0.3.8 安装程序或新的便携程序。
 4. 在新版中点击“打开”，选择原来的小说项目目录。无需把章节复制进软件安装目录。
-5. 升级后可继续使用既有正文、资料、进度和小说统筹网。若界面仍显示旧样式，确认启动的是新的 0.3.7 文件，而不是旧快捷方式。
+5. 升级后可继续使用既有正文、资料、进度和小说统筹网。若界面仍显示旧样式，确认启动的是新的 0.3.8 文件，而不是旧快捷方式。
 
 ### 3. 五分钟开始写作
 
@@ -157,7 +159,7 @@ AI 功能用于检索相关资料、讨论情节、生成规划和提出修订�
 
 **打开后不是我的小说。** 可能打开了默认项目。点击顶部“打开”，选择保存原小说的项目目录，查看左侧底部路径确认位置。
 
-**升级后界面没变。** 检查是否仍在运行旧程序或旧快捷方式。保存并关闭旧版，再打开 0.3.7 的安装版或便携版。
+**升级后界面没变。** 检查是否仍在运行旧程序或旧快捷方式。保存并关闭旧版，再打开 0.3.8 的安装版或便携版。
 
 **想在专注模式里查看任务。** 底部仍显示当前章进度条，点击箭头展开任务说明。可勾选任务、切换状态；`Esc` 返回普通布局。
 
@@ -167,9 +169,11 @@ AI 功能用于检索相关资料、讨论情节、生成规划和提出修订�
 
 **保存提示冲突。** 当前输入可能仍在恢复草稿里。先保留或导出草稿，重新读取最新内容，再对照历史版本；不要通过删除项目文件来绕过保护。
 
-### 11. 0.3.7 本次更新与验证
+### 11. 0.3.8 本次更新与验证
 
-0.3.7 汇总了自 0.3.5 公开版本之后的写作界面更新：暖纸/自然绿与森林夜色、正文优先布局、清晰的专注入口、章节进度默认收起、可行动的 AI 示例；同时修复进度页拥挤重叠，并恢复专注模式中的完整进度与任务操作。
+0.3.8 增加多文件事务的重启恢复，将App状态迁入六个Zustand状态域，按职责拆分核心样式，补齐按钮名称，并扩充服务测试和质量门禁。进程强杀测试已通过；物理断电仍未验收。合成检索基准覆盖20万片段、384和1024维，具体条件见[容量实测](docs/检索容量实测_2026-10-11.md)。
+
+本版延续0.3.7的写作界面：暖纸/自然绿与森林夜色、正文优先布局、清晰的专注入口、章节进度默认收起、可行动的 AI 示例，以及专注模式中的完整进度与任务操作。
 
 这次验证覆盖构建、自动回归、章节保存与撤销隔离、角色/世界表单、小说统筹网、现有界面回归，以及 37 章合成项目在 1440×900 和 1180×720 窗口中的进度布局。便携版经过实际启动、编辑保存、专注进入/退出、任务勾选和批量进度操作检查。测试使用合成资料，未调用用户的云端模型账户；界面走查不等于真人长期写作体验研究。
 
@@ -190,10 +194,15 @@ npm run start
 npm run build
 npm run test:regression
 npm run lint
+npm run check:quality
+npm run check:services
+npm run test:services:coverage
+npm run typecheck:electron
 npm run test:ui-plan
 npm run test:ui-novel-network
 npm run test:ui-visual
 npm run test:ui-serene
+npm run test:ui-stores
 npm run scan:privacy
 npm run dist
 ```
@@ -216,12 +225,12 @@ AI tools retrieve relevant material, discuss plot ideas, prepare plans, and prop
 
 ### 2. Download, install, and upgrade
 
-Download the files from the [0.3.7 release](https://github.com/MC-freshman/ai-novel-writing-platform/releases/tag/v0.3.7). The installation and upgrade instructions are included below.
+Download the files from the [0.3.8 release](https://github.com/MC-freshman/ai-novel-writing-platform/releases/tag/v0.3.8). The installation and upgrade instructions are included below.
 
 | File | Purpose | How to use it |
 | --- | --- | --- |
-| [AI-Novel-Writing-Platform-Setup-0.3.7-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.3.7/AI-Novel-Writing-Platform-Setup-0.3.7-x64.exe) | Windows x64 installer | Run the wizard, choose an installation location, then launch from the desktop or Start menu. Suitable for regular use on one computer. |
-| [AI-Novel-Writing-Platform-Portable-0.3.7-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.3.7/AI-Novel-Writing-Platform-Portable-0.3.7-x64.exe) | Windows x64 portable application | Download and run it directly. The runtime is bundled; Node.js is not required. Your novel remains in a separate project directory. |
+| [AI-Novel-Writing-Platform-Setup-0.3.8-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.3.8/AI-Novel-Writing-Platform-Setup-0.3.8-x64.exe) | Windows x64 installer | Run the wizard, choose an installation location, then launch from the desktop or Start menu. Suitable for regular use on one computer. |
+| [AI-Novel-Writing-Platform-Portable-0.3.8-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.3.8/AI-Novel-Writing-Platform-Portable-0.3.8-x64.exe) | Windows x64 portable application | Download and run it directly. The runtime is bundled; Node.js is not required. Your novel remains in a separate project directory. |
 | SHA256SUMS.txt | Download verification | Download it alongside the application and compare its entries with PowerShell `Get-FileHash -Algorithm SHA256`. |
 | latest.yml and `.blockmap` | Release/update metadata | Ordinary users do not need to open these files manually. They describe the release artifacts and update information. |
 
@@ -238,7 +247,7 @@ This release provides Windows x64 applications. Real Electron interface and writ
 
 1. Save the current chapter and any character, worldbuilding, or planning-network edits in the old version.
 2. Use `更多 → 备份项目` (More → Back up project) and keep the original project directory.
-3. Close the old version, then run the 0.3.7 installer or the new portable executable.
+3. Close the old version, then run the 0.3.8 installer or the new portable executable.
 4. Click `打开` (Open) in the new version and select the existing novel directory. You do not need to copy chapters into the application's installation directory.
 5. Continue using your existing chapters, reference material, progress, and planning networks. If the old interface still appears, check that you launched the new file rather than an old shortcut.
 
@@ -278,7 +287,7 @@ Open `分析 → 进度 → 章节进度`. Documents are grouped by volume. Card
 - Without an override, status is derived from scene completion and word count. This is an organizational aid; the author can set the intended status manually.
 - `隐藏已完成` filters completed chapters out of the view. Hiding a volume or removing a card from the progress view does not delete its document. Restore removed chapters from `已移出`, or use the toolbar button for a hidden volume.
 
-In 0.3.7, navigation, mode controls, action buttons, help text, and volume statistics have separate space. Long chapter lists scroll inside the progress area, and statistics/progress controls wrap in compact windows. They no longer compress the navigation into the content. The current chapter's progress strip appears in both normal writing and focus mode.
+Since 0.3.7, navigation, mode controls, action buttons, help text, and volume statistics have separate space. Long chapter lists scroll inside the progress area, and statistics/progress controls wrap in compact windows. They no longer compress the navigation into the content. The current chapter's progress strip appears in both normal writing and focus mode.
 
 ### 6. Novel planning networks
 
@@ -351,7 +360,7 @@ The candidate scan limit and sent-excerpt limit are separate ceilings, not an in
 
 **The application opened an unfamiliar novel.** It may be the default project. Use `打开` to select your existing novel directory and check the path displayed at the bottom of the left panel.
 
-**The interface did not change after upgrading.** Check the executable and shortcut. Save and close the old application, then open the 0.3.7 installed or portable version.
+**The interface did not change after upgrading.** Check the executable and shortcut. Save and close the old application, then open the 0.3.8 installed or portable version.
 
 **I need tasks in focus mode.** The chapter progress strip remains at the bottom. Expand it to read tasks, mark completion, and change status. `Esc` returns to the normal layout.
 
@@ -361,9 +370,11 @@ The candidate scan limit and sent-excerpt limit are separate ceilings, not an in
 
 **Saving reports a conflict.** Current input may still be in a recovery draft. Preserve/export it, reload the latest content, and compare history. Do not delete project files to bypass the protection.
 
-### 11. Changes and validation in 0.3.7
+### 11. Changes and validation in 0.3.8
 
-0.3.7 includes the writing-interface changes since the public 0.3.5 release: warm paper/natural green and forest-night themes, a manuscript-first layout, a clearer focus entry, a collapsed-by-default chapter strip, and editable AI examples. It also fixes crowded/overlapping progress navigation and keeps complete chapter/task controls available in focus mode.
+This maintenance release adds restart recovery for multi-file transactions, moves App state into six Zustand domains, splits the core stylesheet while preserving its cascade, adds accessible button names, and strengthens service tests and quality gates. Crash tests use process termination; they do not certify physical power-loss recovery. Synthetic retrieval benchmarks cover up to 200,000 chunks at 384 and 1024 dimensions.
+
+0.3.8 also includes the writing-interface changes since the public 0.3.5 release: warm paper/natural green and forest-night themes, a manuscript-first layout, a clearer focus entry, a collapsed-by-default chapter strip, and editable AI examples. It also fixes crowded/overlapping progress navigation and keeps complete chapter/task controls available in focus mode.
 
 Validation covered the build, automated regression suite, saving and undo isolation, character/world forms, planning networks, existing UI regression, and progress layout with 37 synthetic chapters at 1440×900 and 1180×720. The portable executable was exercised for startup, editing/saving, focus entry/exit, checking tasks, and batch progress operations. Tests use synthetic material and do not call a user's remote model account. These checks are not a long-term study with real writers.
 
@@ -384,10 +395,15 @@ npm run start
 npm run build
 npm run test:regression
 npm run lint
+npm run check:quality
+npm run check:services
+npm run test:services:coverage
+npm run typecheck:electron
 npm run test:ui-plan
 npm run test:ui-novel-network
 npm run test:ui-visual
 npm run test:ui-serene
+npm run test:ui-stores
 npm run scan:privacy
 npm run dist
 ```

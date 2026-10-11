@@ -1,4 +1,4 @@
-// 本文件由 P2 重构自 electron/main.cjs 机械搬迁（scripts/refactor-split.cjs），逻辑未改动。
+// 本文件源自P2主进程拆分；后续维护与行为修复见Git历史。
 "use strict";
 
 const storyState = require("./story-state.cjs");
@@ -227,7 +227,7 @@ async function buildAppearanceStats(projectPath) {
   const { chapters, characters } = await loadProjectSources(projectPath);
   const stats = characters.map((card) => {
     const appearances = [];
-    let total = 0;
+    const total = 0;
     return { card, appearances, total };
   });
   for (const stat of stats) {

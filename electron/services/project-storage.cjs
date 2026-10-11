@@ -2,6 +2,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { AsyncLocalStorage } = require("node:async_hooks");
+const { createFileTransaction, recordBeforeWrite, commitFileTransaction, recoverFileTransactions } = require("./project-transactions.cjs");
 const projectWriteQueues = new Map();
 const transactionContext = new AsyncLocalStorage();
 
@@ -18,9 +19,31 @@ async function readJson(filePath, fallback) {
 }
 
 /** @param {string} filePath @param {string | Buffer | Uint8Array} value @param {BufferEncoding} [encoding="utf8"] */
-async function writeFileAtomic(filePath, value, encoding = "utf8") {
-  await ensureDir(path.dirname(filePath));
+function writeFileAtomic(filePath, value, encoding = "utf8") {
+  const context = transactionContext.getStore();
+  const promise = performFileAtomic(filePath, value, encoding);
+  if (context?.active && context.recording) {
+    context.pendingWrites.add(promise);
+    promise.then(() => context.pendingWrites.delete(promise), () => context.pendingWrites.delete(promise));
+  }
+  return promise;
+}
+
+/** @param {string} filePath @param {string | Buffer | Uint8Array} value @param {BufferEncoding} encoding */
+async function performFileAtomic(filePath, value, encoding = "utf8") {
   const temporaryPath = `${filePath}.${process.pid}.${crypto.randomBytes(5).toString("hex")}.tmp`;
+  const context = transactionContext.getStore();
+  const relative = context ? path.relative(path.resolve(context.projectPath), path.resolve(filePath)) : "";
+  const journalable = relative && !relative.startsWith("..") && !path.isAbsolute(relative) && ![".novel-transactions", "backups"].includes(relative.split(path.sep)[0]) && !relative.startsWith(".novel-write.lock");
+  if (context?.active && context.recording && journalable) {
+    // The journal itself is excluded by recordBeforeWrite; serialize registration
+    // when an operation issues independent writes with Promise.all.
+    const body = typeof value === "string" ? Buffer.from(value, encoding) : Buffer.from(value);
+    const registration = context.pendingRecord.then(() => recordBeforeWrite(context.transaction, context.projectPath, filePath, body, writeFileAtomic, temporaryPath));
+    context.pendingRecord = registration.catch(() => null);
+    await registration;
+  }
+  await ensureDir(path.dirname(filePath));
   let handle;
   try {
     handle = await fs.open(temporaryPath, "wx", 0o600);
@@ -103,14 +126,55 @@ function withProjectTransaction(projectPath, action) {
   const previous = projectWriteQueues.get(key) || Promise.resolve();
   const queued = previous.catch(() => null).then(async () => {
     const release = await acquireProjectLock(projectPath);
-    const claim = { key, active: true };
-    try { return await transactionContext.run(claim, action); }
-    finally { claim.active = false; await release(); }
+    let claim;
+    try {
+      // Recover before reading configuration or creating any new live data.
+      await recoverFileTransactions(projectPath, writeFileAtomic);
+      claim = { key, projectPath, active: true, recording: true, transaction: await createFileTransaction(projectPath), pendingRecord: Promise.resolve(), pendingWrites: new Set() };
+      return await transactionContext.run(claim, async () => {
+        try {
+          const result = await action();
+          const writes = await Promise.allSettled([...claim.pendingWrites]);
+          const failed = writes.find((item) => item.status === "rejected");
+          if (failed?.status === "rejected") throw failed.reason;
+          await claim.pendingRecord;
+          claim.recording = false;
+          await commitFileTransaction(claim.transaction, projectPath, writeFileAtomic);
+          return result;
+        } catch (error) {
+          // Promise.all rejects early; let the remaining live writes finish before rollback.
+          await Promise.allSettled([...claim.pendingWrites]);
+          claim.recording = false;
+          try { await recoverFileTransactions(projectPath, writeFileAtomic); }
+          catch (recoveryError) { error.message += `；${recoveryError.message}`; error.recoveryPath ||= recoveryError.recoveryPath; }
+          throw error;
+        }
+      });
+    }
+    finally { if (claim) claim.active = false; await release(); }
   });
   projectWriteQueues.set(key, queued);
   return queued.finally(() => {
     if (projectWriteQueues.get(key) === queued) projectWriteQueues.delete(key);
   });
+}
+
+function removeProjectFile(projectPath, filePath) {
+  const context = transactionContext.getStore();
+  if (!context?.active || context.key !== projectKey(projectPath)) return withProjectTransaction(projectPath, () => removeProjectFile(projectPath, filePath));
+  const promise = performProjectFileRemoval(context, projectPath, filePath);
+  if (context.recording) {
+    context.pendingWrites.add(promise);
+    promise.then(() => context.pendingWrites.delete(promise), () => context.pendingWrites.delete(promise));
+  }
+  return promise;
+}
+
+async function performProjectFileRemoval(context, projectPath, filePath) {
+  const registration = context.pendingRecord.then(() => recordBeforeWrite(context.transaction, projectPath, filePath, null, writeFileAtomic));
+  context.pendingRecord = registration.catch(() => null);
+  await registration;
+  await fs.rm(filePath, { force: true });
 }
 
 function withProjectWriteQueue(projectPath, _scope, action) {
@@ -137,7 +201,7 @@ async function writeProjectFiles(projectPath, updates) {
     try {
       for (const update of updates) {
         attempted += 1;
-        if (update.content === null) await fs.rm(update.path, { force: true });
+        if (update.content === null) await removeProjectFile(projectPath, update.path);
         else await writeFileAtomic(update.path, update.content);
       }
     } catch (error) {
@@ -170,7 +234,8 @@ function stableId(prefix, value) {
 
 function safeFileSegment(value, fallback = "item") {
   const normalized = String(value || "")
-    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
+    .split("").map((character) => character.charCodeAt(0) <= 31 ? "_" : character).join("")
+    .replace(/[<>:"/\\|?*]/g, "_")
     .replace(/[. ]+$/g, "")
     .slice(0, 80);
   return normalized || fallback;
@@ -187,4 +252,5 @@ module.exports = {
   withProjectWriteQueue,
   withProjectTransaction,
   writeProjectFiles,
+  removeProjectFile,
 };

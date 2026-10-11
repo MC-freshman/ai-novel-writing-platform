@@ -467,7 +467,7 @@ export function ChapterProgressStrip({
   }, [chapter.id]);
 
   const derived = deriveProgressStatus(chapter, scenes);
-  const boardItems = board?.items || [];
+  const boardItems = useMemo(() => board?.items || [], [board?.items]);
 
   const taskItems = useMemo(() => {
     const base = scenes.length > 0

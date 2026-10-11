@@ -1,0 +1,406 @@
+{
+  "version": "0.3.8",
+  "generatedAt": "2026-10-11T09:50:07.983Z",
+  "baseline": "a884acd8028ae7bc63c5d6a6a762bc66ad07c24e",
+  "quality": {
+    "generatedAt": "2026-10-11T09:49:29.748Z",
+    "revision": "a884acd8028ae7bc63c5d6a6a762bc66ad07c24e",
+    "workingTreeDirty": true,
+    "errors": 0,
+    "warnings": 0,
+    "rules": {}
+  },
+  "services": {
+    "modules": 41,
+    "entryFiles": 9,
+    "tests": 112,
+    "passed": 112,
+    "failed": 0,
+    "measuredCoveragePercent": {
+      "lines": 48.74,
+      "branches": 71.7,
+      "functions": 54.26
+    },
+    "coverageScope": "专门服务套件；不合并其他独立回归；登记不代表100%单测覆盖"
+  },
+  "buttonAudit": {
+    "passed": 9,
+    "warnings": 0,
+    "failed": 0,
+    "realMissingNamesFixed": 7
+  },
+  "css": {
+    "baselineSha256": "5a5d0c3982c689aa8786e04245c3cc71afc3d384cffc67e87e03b9fd1bf5e5f2",
+    "concatenationIdentical": true,
+    "parts": [
+      {
+        "file": "src/styles/core/tokens.css",
+        "originalStartLine": 1,
+        "lines": 36
+      },
+      {
+        "file": "src/styles/core/novel-network.css",
+        "originalStartLine": 36,
+        "lines": 55
+      },
+      {
+        "file": "src/styles/core/base.css",
+        "originalStartLine": 90,
+        "lines": 74
+      },
+      {
+        "file": "src/styles/core/shell.css",
+        "originalStartLine": 163,
+        "lines": 247
+      },
+      {
+        "file": "src/styles/core/chapter-tree.css",
+        "originalStartLine": 409,
+        "lines": 247
+      },
+      {
+        "file": "src/styles/core/editor.css",
+        "originalStartLine": 655,
+        "lines": 425
+      },
+      {
+        "file": "src/styles/core/chat.css",
+        "originalStartLine": 1079,
+        "lines": 617
+      },
+      {
+        "file": "src/styles/core/entity-managers.css",
+        "originalStartLine": 1695,
+        "lines": 155
+      },
+      {
+        "file": "src/styles/core/analysis-navigation.css",
+        "originalStartLine": 1849,
+        "lines": 57
+      },
+      {
+        "file": "src/styles/core/creative-advisor.css",
+        "originalStartLine": 1905,
+        "lines": 339
+      },
+      {
+        "file": "src/styles/core/analysis-tools.css",
+        "originalStartLine": 2243,
+        "lines": 642
+      },
+      {
+        "file": "src/styles/core/knowledge.css",
+        "originalStartLine": 2884,
+        "lines": 362
+      },
+      {
+        "file": "src/styles/core/dialogs.css",
+        "originalStartLine": 3245,
+        "lines": 228
+      },
+      {
+        "file": "src/styles/core/creative-workspace.css",
+        "originalStartLine": 3472,
+        "lines": 712
+      },
+      {
+        "file": "src/styles/core/story-data.css",
+        "originalStartLine": 4183,
+        "lines": 476
+      },
+      {
+        "file": "src/styles/core/feedback-tasks.css",
+        "originalStartLine": 4658,
+        "lines": 368
+      },
+      {
+        "file": "src/styles/core/responsive.css",
+        "originalStartLine": 5025,
+        "lines": 90
+      },
+      {
+        "file": "src/styles/core/progress.css",
+        "originalStartLine": 5114,
+        "lines": 623
+      }
+    ]
+  },
+  "saving": {
+    "characters": 5000000,
+    "chapters": 250,
+    "saves": 30,
+    "p50Milliseconds": 238.07,
+    "p95Milliseconds": 264.29,
+    "otherChapterReads": 0,
+    "eventLoopP95Milliseconds": 12.44,
+    "eventLoopMaxMilliseconds": 14.48,
+    "samplesMilliseconds": [
+      174.88,
+      178.25,
+      178.83,
+      183.71,
+      184.83,
+      187.95,
+      195.26,
+      207.99,
+      215.48,
+      226.65,
+      231.16,
+      234.65,
+      236.18,
+      236.3,
+      238.07,
+      238.25,
+      240.15,
+      240.3,
+      240.86,
+      241.54,
+      248.39,
+      253.1,
+      253.88,
+      253.94,
+      254.77,
+      261.02,
+      261.62,
+      263.71,
+      264.29,
+      274.53
+    ]
+  },
+  "retrieval": {
+    "generatedAt": "2026-10-11T04:04:33.436Z",
+    "node": "v24.18.0",
+    "cpu": "AMD Ryzen 7 8845HS w/ Radeon 780M Graphics     ",
+    "totalMemoryMB": 23848.421875,
+    "synthetic": true,
+    "coldDefinition": "fresh-process index; OS file cache is not flushed",
+    "cases": [
+      {
+        "total": 30000,
+        "dimensions": 384,
+        "textCharactersPerChunk": 560,
+        "generatedMs": 6790.9054,
+        "coldSearchMs": 2172.9010000000007,
+        "warmP50Ms": 35.211199999999735,
+        "warmP95Ms": 40.342500000000655,
+        "repeats": 15,
+        "rssBeforeMB": 155.1875,
+        "peakRssMB": 331.9140625,
+        "arrayBuffersMB": 53.16054916381836,
+        "parity": "pass",
+        "filterAndInvalidation": "pass"
+      },
+      {
+        "total": 50000,
+        "dimensions": 384,
+        "textCharactersPerChunk": 560,
+        "generatedMs": 11176.2199,
+        "coldSearchMs": 3216.7371000000003,
+        "warmP50Ms": 55.64800000000105,
+        "warmP95Ms": 66.43769999999859,
+        "repeats": 15,
+        "rssBeforeMB": 243.53125,
+        "peakRssMB": 493.12109375,
+        "arrayBuffersMB": 82.73365116119385,
+        "parity": "pass",
+        "filterAndInvalidation": "pass"
+      },
+      {
+        "total": 100000,
+        "dimensions": 384,
+        "textCharactersPerChunk": 560,
+        "generatedMs": 24573.3988,
+        "coldSearchMs": 6782.6289,
+        "warmP50Ms": 96.76130000000194,
+        "warmP95Ms": 101.79200000000128,
+        "repeats": 15,
+        "rssBeforeMB": 230.2265625,
+        "peakRssMB": 712.859375,
+        "arrayBuffersMB": 155.69604682922363,
+        "parity": "pass",
+        "filterAndInvalidation": "pass"
+      },
+      {
+        "total": 200000,
+        "dimensions": 384,
+        "textCharactersPerChunk": 560,
+        "generatedMs": 49803.604100000004,
+        "coldSearchMs": 14446.776100000003,
+        "warmP50Ms": 203.4363000000012,
+        "warmP95Ms": 294.3467000000019,
+        "repeats": 15,
+        "rssBeforeMB": 202.34375,
+        "peakRssMB": 1067.70703125,
+        "arrayBuffersMB": 302.6603889465332,
+        "parity": "pass",
+        "filterAndInvalidation": "pass"
+      },
+      {
+        "total": 30000,
+        "dimensions": 1024,
+        "textCharactersPerChunk": 560,
+        "generatedMs": 15447.0676,
+        "coldSearchMs": 4617.911400000001,
+        "warmP50Ms": 82.47109999999884,
+        "warmP95Ms": 90.1182000000008,
+        "repeats": 15,
+        "rssBeforeMB": 336.16015625,
+        "peakRssMB": 747.70703125,
+        "arrayBuffersMB": 135.9945650100708,
+        "parity": "pass",
+        "filterAndInvalidation": "pass"
+      },
+      {
+        "total": 50000,
+        "dimensions": 1024,
+        "textCharactersPerChunk": 560,
+        "generatedMs": 27329.523100000002,
+        "coldSearchMs": 7624.097300000001,
+        "warmP50Ms": 128.37030000000232,
+        "warmP95Ms": 137.80289999999513,
+        "repeats": 15,
+        "rssBeforeMB": 194.1015625,
+        "peakRssMB": 782.9609375,
+        "arrayBuffersMB": 213.8945188522339,
+        "parity": "pass",
+        "filterAndInvalidation": "pass"
+      },
+      {
+        "total": 100000,
+        "dimensions": 1024,
+        "textCharactersPerChunk": 560,
+        "generatedMs": 52139.186200000004,
+        "coldSearchMs": 14622.398700000005,
+        "warmP50Ms": 235.0356000000029,
+        "warmP95Ms": 255.0225999999966,
+        "repeats": 15,
+        "rssBeforeMB": 194.05859375,
+        "peakRssMB": 1105.38671875,
+        "arrayBuffersMB": 409.76939487457275,
+        "parity": "pass",
+        "filterAndInvalidation": "pass"
+      },
+      {
+        "total": 200000,
+        "dimensions": 1024,
+        "textCharactersPerChunk": 560,
+        "generatedMs": 103518.039,
+        "coldSearchMs": 28213.075500000006,
+        "warmP50Ms": 531.0510000000068,
+        "warmP95Ms": 590.2546999999904,
+        "repeats": 15,
+        "rssBeforeMB": 329.3984375,
+        "peakRssMB": 1728.02734375,
+        "arrayBuffersMB": 800.7313032150269,
+        "parity": "pass",
+        "filterAndInvalidation": "pass"
+      }
+    ]
+  },
+  "packagedPayload": {
+    "packageVersion": "0.3.8",
+    "checks": [
+      {
+        "file": "electron/services/project-transactions.cjs",
+        "match": true
+      },
+      {
+        "file": "electron/services/project-storage.cjs",
+        "match": true
+      },
+      {
+        "file": "dist/index.html",
+        "match": true
+      },
+      {
+        "file": "dist/assets/editor-Cfl-7GgN.js",
+        "match": true
+      },
+      {
+        "file": "dist/assets/icons-DY_psQtq.js",
+        "match": true
+      },
+      {
+        "file": "dist/assets/index-CpHR5QJI.js",
+        "match": true
+      },
+      {
+        "file": "dist/assets/index-DdOs5TKv.css",
+        "match": true
+      },
+      {
+        "file": "dist/assets/react-vendor-DI__cl2b.js",
+        "match": true
+      },
+      {
+        "file": "dist/assets/vendor-8gUtny7Z.js",
+        "match": true
+      }
+    ]
+  },
+  "packagedStateUi": {
+    "status": "pass",
+    "syntheticLocalServer": true,
+    "checks": [
+      "实际Electron流式追加、取消、部分内容保留",
+      "取消之后能继续新会话请求，旧内容保留",
+      "实际切换两个合成项目：旧成功/失败回包不污染新会话，不清除新请求运行状态（IPC延迟注入）",
+      "当前写作和对话界面的实际AX树按钮均有名称"
+    ]
+  },
+  "packagedWritingUi": {
+    "status": "pass",
+    "checks": [
+      "空态示例填入输入框并聚焦，不自动发送",
+      "Ctrl+Shift+F 进入专注并聚焦正文，Esc 恢复两侧面板",
+      "专注模式保留章节进度与任务说明，任务可勾选，展开/收起可用",
+      "日夜主题均有可读文字；专注中 Ctrl+S 保存；AI 对话入口恢复侧栏",
+      "1180×720 无工具裁切、输入框可见、进度可展开，专注退出后保留侧栏宽度",
+      "实际输入正文后 Ctrl+S 成功落盘",
+      "设置可打开，Esc 正常关闭弹窗",
+      "37 个长中文章节：导航不挤压，工具/说明/分卷分开排版；批量标记、隐藏及恢复本卷可用"
+    ]
+  },
+  "releaseSha256": [
+    {
+      "name": "AI-Novel-Writing-Platform-Setup-0.3.8-x64.exe",
+      "sha256": "948b281d664a7f19c6e7241f56862849ba19880a6b85516dca1bc7e5c570770f"
+    },
+    {
+      "name": "AI-Novel-Writing-Platform-Portable-0.3.8-x64.exe",
+      "sha256": "6f7b315e72b42525240ae8188b5ee5a0bdeacb55672b09150ed9f510ad68748e"
+    },
+    {
+      "name": "AI-Novel-Writing-Platform-Setup-0.3.8-x64.exe.blockmap",
+      "sha256": "95a18e14af9251b0b05b0ef41df5e633a712bce3e59dcaaa03961b400a81846a"
+    },
+    {
+      "name": "latest.yml",
+      "sha256": "072b2fa461b9ecf05acd6f8fd1f36aad1a534773b5509802e0e841de40f847a2"
+    },
+    {
+      "name": "README.md",
+      "sha256": "061edbaea6bf5dd7c19b98a14247dc4975f04a05fbcd4060d124c0c018292384"
+    },
+    {
+      "name": "USER-GUIDE.zh-CN.md",
+      "sha256": "4d834198a25c334143452405199053d4a9deac6d746f30a396c53bfec287e39d"
+    }
+  ],
+  "runtimeAudit": {
+    "info": 0,
+    "low": 0,
+    "moderate": 3,
+    "high": 0,
+    "critical": 0,
+    "total": 3
+  },
+  "limitations": [
+    "真实云端模型账户及套餐未调用验收",
+    "物理断电未验收，强杀检查不证明设备/文件系统持久化",
+    "安装版与便携版均未签名，安装程序未写入用户安装目录",
+    "部分服务函数尚无独立单测",
+    "多语言与后台自动安装本轮维持未实现",
+    "3个继承的moderate依赖审计项保留"
+  ]
+}

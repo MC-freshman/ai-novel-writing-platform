@@ -42,7 +42,7 @@ function chapterMetrics(chapter, rawContent, characters, scenes, foreshadows) {
   const length = Math.max(1, text.replace(/\s/g, "").length);
   const sentences = text.split(/[。！？!?]+/).map((item) => item.trim()).filter(Boolean);
   const paragraphs = text.split(/\n+/).map((item) => item.trim()).filter(Boolean);
-  const dialogueChars = [...text.matchAll(/[“\"]([^”\"]+)[”\"]/g)].reduce((sum, match) => sum + String(match[1] || "").length, 0);
+  const dialogueChars = [...text.matchAll(/[“"]([^”"]+)[”"]/g)].reduce((sum, match) => sum + String(match[1] || "").length, 0);
   const actionMatches = text.match(/(?:走|跑|冲|追|打|击|砍|刺|抓|推|拉|转身|抬手|举起|落下|跃|闪|躲|扑|挡|退|进|开|关|拿|放|掷|踢|挥)/g) || [];
   const actionChars = Math.min(length - dialogueChars, actionMatches.length * 4);
   const dialogueRatio = clamp((dialogueChars / length) * 100);
@@ -62,7 +62,6 @@ function chapterMetrics(chapter, rawContent, characters, scenes, foreshadows) {
   const ending = paragraphs.slice(-2).join(" ");
   const planted = foreshadows.filter((item) => item.plantedAt?.some((evidence) => evidence.chapterId === chapter.id)).length;
   const closed = foreshadows.filter((item) => item.payoffAt?.some((evidence) => evidence.chapterId === chapter.id)).length;
-  const sceneText = scenes.map((item) => `${item.goal} ${item.conflict} ${item.turn} ${item.outcome}`).join(" ");
   return {
     chapterId: chapter.id,
     chapterTitle: chapter.title,
