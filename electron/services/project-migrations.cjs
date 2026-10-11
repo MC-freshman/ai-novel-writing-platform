@@ -1,6 +1,6 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
-const { ensureDir, readJson, writeJsonAtomic } = require("./project-storage.cjs");
+const { ensureDir, readJson, writeJsonAtomic, writeFileAtomic } = require("./project-storage.cjs");
 
 const CURRENT_PROJECT_SCHEMA = 4;
 
@@ -75,7 +75,7 @@ async function migrateProject(projectPath, options = {}) {
   const backupDir = path.join(projectPath, "analysis", "system", "migration-backups");
   await ensureDir(backupDir);
   const backupPath = path.join(backupDir, `${migrationId}.json`);
-  await fs.writeFile(backupPath, originalBuffer);
+  await writeFileAtomic(backupPath, originalBuffer);
   let snapshot = null;
   try {
     snapshot = await options.createSnapshot?.({ name: `项目结构升级 ${from} -> ${CURRENT_PROJECT_SCHEMA}`, reason: "升级前自动快照" });
@@ -89,7 +89,7 @@ async function migrateProject(projectPath, options = {}) {
     await writeJsonAtomic(migrationStatePath(projectPath), nextState);
     return { migrated: true, from, to: CURRENT_PROJECT_SCHEMA, snapshot, state: nextState };
   } catch (error) {
-    await fs.writeFile(configPath, originalBuffer);
+    await writeFileAtomic(configPath, originalBuffer);
     const failed = {
       id: migrationId, from, to: CURRENT_PROJECT_SCHEMA, status: "已回滚", snapshotId: snapshot?.id || snapshot?.snapshot?.id || "",
       backupPath: path.relative(projectPath, backupPath).replaceAll("\\", "/"), startedAt: nowIso(), completedAt: nowIso(), error: error?.message || String(error),

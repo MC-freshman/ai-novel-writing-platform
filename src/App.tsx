@@ -1,133 +1,28 @@
-import { marked } from "marked";
-import {
-  Activity,
-  AlignCenter,
-  AlignLeft,
-  AlignRight,
-  ArrowDown,
-  ArrowUp,
-  Bot,
-  Bold,
-  BookOpen,
-  Boxes,
-  Check,
-  ChevronDown,
-  ChevronRight,
-  Copy,
-  Download,
-  Eye,
-  EyeOff,
-  FileDown,
-  FileText,
-  FilePlus2,
-  FolderOpen,
-  IndentDecrease,
-  IndentIncrease,
-  Italic,
-  List,
-  ListOrdered,
-  ListTree,
-  ListChecks,
-  Leaf,
-  Lock,
-  LayoutGrid,
-  Maximize2,
-  Minimize2,
-  MessageSquarePlus,
-  Minus,
-  Moon,
-  PanelLeftClose,
-  PanelLeftOpen,
-  Plus,
-  Quote,
-  RefreshCcw,
-  Redo2,
-  Save,
-  Search,
-  Send,
-  Settings,
-  Sparkles,
-  Square,
-  Sun,
-  Table2,
-  Trash2,
-  TriangleAlert,
-  Unlock,
-  Underline as UnderlineIcon,
-  Undo2,
-  Upload,
-  UserRound,
-  Wand2,
-  X,
-} from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Extension, type Editor } from "@tiptap/react";
-import { EditorContent, useEditor } from "@tiptap/react";
-import Image from "@tiptap/extension-image";
-import { Table } from "@tiptap/extension-table";
-import TableCell from "@tiptap/extension-table-cell";
-import TableHeader from "@tiptap/extension-table-header";
-import TableRow from "@tiptap/extension-table-row";
-import TextAlign from "@tiptap/extension-text-align";
-import Underline from "@tiptap/extension-underline";
-import StarterKit from "@tiptap/starter-kit";
-import { Plugin, PluginKey, TextSelection } from "@tiptap/pm/state";
-import { Decoration, DecorationSet } from "@tiptap/pm/view";
-import type {
-  AppState,
-  AgentPermissionLevel,
-  AgentScopeType,
-  AnalysisSnapshot,
-  Chapter,
-  ChapterVersion,
-  ChapterVersionCompare,
-  CharacterCard,
-  ChatMessage,
-  ChatSession,
-  ConsistencyIssue,
-  CreativeAdviceItem,
-  CreativeAdviceMode,
-  CreativeAdviceResult,
-  CreativeAgentRun,
-  ExtractedWorldCandidate,
-  GlobalSearchResult,
-  AppearanceStat,
-  MaterialItem,
-  MaintenanceDiagnostics,
-  ProgressState,
-  Provider,
-  KnowledgeItem,
-  KnowledgeRole,
-  KnowledgeSyncStatus,
-  ProjectHealthReport,
-  RelationshipEdge,
-  RelationshipNode,
-  RetrievalMode,
-  RetrievalDiagnostics,
-  TimelineEvent,
-  WorldDoc,
-  WorldMapEdge,
-  WorldMapNode,
-  BackgroundTask,
-  ChapterPreparationBoard,
-  ForeshadowItem,
-  ForeshadowStatus,
-  ProjectBranches,
-  ProjectSnapshot,
-  ProjectSnapshotComparison,
-  StoryFact,
-  StoryFactStatus,
-  StoryOverview,
-  RecoveryDraft,
-  OperationJournalItem,
-} from "./types";
+import "marked";
+import { BookOpen, Boxes, Download, Eye, EyeOff, FileDown, FileText, FilePlus2, FolderOpen, ListTree, ListChecks, Leaf, Maximize2, MessageSquarePlus, Moon, PanelLeftClose, PanelLeftOpen, RefreshCcw, Save, Search, Settings, Sparkles, Sun, Upload, UserRound, Wand2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useAppStores, useStoreField } from "./stores/use-app-stores";
+import { applyProjectState, readChapterDraft, isCurrentEpoch } from "./stores/app-stores";
+import { type Editor } from "@tiptap/react";
+import "@tiptap/react";
+import "@tiptap/extension-image";
+import "@tiptap/extension-table";
+import "@tiptap/extension-table-cell";
+import "@tiptap/extension-table-header";
+import "@tiptap/extension-table-row";
+import "@tiptap/extension-text-align";
+import "@tiptap/extension-underline";
+import "@tiptap/starter-kit";
+import "@tiptap/pm/state";
+import "@tiptap/pm/view";
+import type { AppState, CharacterCard, ChatMessage, ChatSession, RetrievalMode, WorldDoc, RecoveryDraft } from "./types";
 import { CharacterManager } from "./components/CharacterManager";
 import { WorldManager } from "./components/WorldManager";
-import { groupByCategory, normalizeCategoryLabel, type CategoryGroup } from "./lib/categories";
+import "./lib/categories";
 import type { PageSaveHandle, PageSaveKind } from "./hooks/useEntityDraft";
-import { CreativeWorkspace, type CreativeWorkspaceTab } from "./components/CreativeWorkspace";
+import { type CreativeWorkspaceTab } from "./components/CreativeWorkspace";
 import { ChapterProgressStrip } from "./components/ProgressBoard";
-import { ProgressWorkspace } from "./components/ProgressWorkspace";
+import "./components/ProgressWorkspace";
 import { countWords, escapeRegExp, formatDateTime, getErrorMessage } from "./lib/text-utils";
 import { RETRIEVAL_MODE_OPTIONS, makeMessageId, makeChatSession, titleFromMessages, compactChatMessages, keepRecentChatSessions } from "./lib/chat-utils";
 import { findNextInRichEditor, replaceAllInRichEditor, changeHeadingLevel } from "./lib/editor-ops";
@@ -140,7 +35,7 @@ import { ChatPanel } from "./components/ChatPanel";
 import { KnowledgeOrganizer } from "./components/KnowledgeOrganizer";
 import { AnalysisPanel } from "./components/AnalysisPanel";
 import { SettingsModal } from "./components/SettingsModal";
-import type { AnalysisTab, EditorScrollAnchor } from "./types";
+
 import type { InlineReviewItem } from "./lib/editor-ops";
 
 
@@ -152,60 +47,58 @@ import type { InlineReviewItem } from "./lib/editor-ops";
 
 
 export default function App() {
-  const [state, setState] = useState<AppState | null>(null);
-  const [selectedChapter, setSelectedChapter] = useState<Chapter | null>(null);
-  const [chapterContent, setChapterContent] = useState("");
-  const [chapterTitle, setChapterTitle] = useState("");
-  const [chapterVolume, setChapterVolume] = useState("卷一");
-  const [dirty, setDirty] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [status, setStatus] = useState("正在打开项目...");
-  const [view, setView] = useState<"chapters" | "characters" | "world" | "knowledge" | "analysis">("chapters");
-  const [networkOpenRequest, setNetworkOpenRequest] = useState(0);
-  const [showSettings, setShowSettings] = useState(false);
-  const [showQuickPanel, setShowQuickPanel] = useState(false);
-  const [showStoryCenter, setShowStoryCenter] = useState(false);
-  const [storyCenterInitialTab, setStoryCenterInitialTab] = useState<"facts" | "workspace">("facts");
-  const [workspaceInitialTab, setWorkspaceInitialTab] = useState<CreativeWorkspaceTab>("planning");
-  const [showTaskCenter, setShowTaskCenter] = useState(false);
-  const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
-  const [focusMode, setFocusMode] = useState(false);
-  const [preview, setPreview] = useState(false);
-  const [scrollAnchor, setScrollAnchor] = useState<EditorScrollAnchor | null>(null);
-  const [selectedText, setSelectedText] = useState("");
-  const [editorReviews, setEditorReviews] = useState<InlineReviewItem[]>([]);
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; text: string } | null>(null);
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
-  const [activeChatSessionId, setActiveChatSessionId] = useState("");
-  const [aiProjectMemory, setAiProjectMemory] = useState("");
-  const [chatRetrievalMode, setChatRetrievalMode] = useState<RetrievalMode>("auto");
-  const [chatLoaded, setChatLoaded] = useState(false);
-  const [activeAiRequestId, setActiveAiRequestId] = useState("");
-  const [aiProgress, setAiProgress] = useState<{ phase: string; stopped?: boolean; streamedChars: number; retrieval?: RetrievalDiagnostics } | null>(null);
-  const [draggingChapterId, setDraggingChapterId] = useState<string | null>(null);
-  const [importProgress, setImportProgress] = useState<ProgressState | null>(null);
-  const [indexProgress, setIndexProgress] = useState<ProgressState | null>(null);
-  const [showFindReplace, setShowFindReplace] = useState(false);
-  const [findText, setFindText] = useState("");
-  const [replaceText, setReplaceText] = useState("");
-  const [leftWidth, setLeftWidth] = useState(256);
-  const [rightWidth, setRightWidth] = useState(360);
-  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
-  const [aiExpanded, setAiExpanded] = useState(false);
-  const [aiChatOpenRequest, setAiChatOpenRequest] = useState(0);
-  const [previewWidth, setPreviewWidth] = useState(46);
-  const [recoveryDrafts, setRecoveryDrafts] = useState<RecoveryDraft[]>([]);
+  const stores = useAppStores();
+  const [chapterRevision, setChapterRevision] = useStoreField(stores.project, "chapterRevision");
+  const [state, setState] = useStoreField(stores.project, "state");
+  const [selectedChapter, setSelectedChapter] = useStoreField(stores.project, "selectedChapter");
+  const [chapterContent, setChapterContent] = useStoreField(stores.project, "chapterContent");
+  const [chapterTitle, setChapterTitle] = useStoreField(stores.project, "chapterTitle");
+  const [chapterVolume, setChapterVolume] = useStoreField(stores.project, "chapterVolume");
+  const [dirty, setDirty] = useStoreField(stores.project, "dirty");
+  const [saving, setSaving] = useStoreField(stores.project, "saving");
+  const [status, setStatus] = useStoreField(stores.project, "status");
+  const [view, setView] = useStoreField(stores.navigation, "view");
+  const [networkOpenRequest, setNetworkOpenRequest] = useStoreField(stores.navigation, "networkOpenRequest");
+  const [showSettings, setShowSettings] = useStoreField(stores.navigation, "showSettings");
+  const [showQuickPanel, setShowQuickPanel] = useStoreField(stores.navigation, "showQuickPanel");
+  const [showStoryCenter, setShowStoryCenter] = useStoreField(stores.navigation, "showStoryCenter");
+  const [storyCenterInitialTab, setStoryCenterInitialTab] = useStoreField(stores.navigation, "storyCenterInitialTab");
+  const [workspaceInitialTab, setWorkspaceInitialTab] = useStoreField(stores.navigation, "workspaceInitialTab");
+  const [showTaskCenter, setShowTaskCenter] = useStoreField(stores.navigation, "showTaskCenter");
+  const [backgroundTasks, setBackgroundTasks] = useStoreField(stores.tasks, "backgroundTasks");
+  const [focusMode, setFocusMode] = useStoreField(stores.layout, "focusMode");
+  const [preview, setPreview] = useStoreField(stores.layout, "preview");
+  const [scrollAnchor, setScrollAnchor] = useStoreField(stores.editor, "scrollAnchor");
+  const [selectedText, setSelectedText] = useStoreField(stores.editor, "selectedText");
+  const [editorReviews, setEditorReviews] = useStoreField(stores.editor, "editorReviews");
+  const [contextMenu, setContextMenu] = useStoreField(stores.editor, "contextMenu");
+  const [chatMessages, setChatMessages] = useStoreField(stores.chat, "chatMessages");
+  const [chatSessions, setChatSessions] = useStoreField(stores.chat, "chatSessions");
+  const [activeChatSessionId, setActiveChatSessionId] = useStoreField(stores.chat, "activeChatSessionId");
+  const [aiProjectMemory, setAiProjectMemory] = useStoreField(stores.chat, "aiProjectMemory");
+  const [chatRetrievalMode, setChatRetrievalMode] = useStoreField(stores.chat, "chatRetrievalMode");
+  const [chatLoaded, setChatLoaded] = useStoreField(stores.chat, "chatLoaded");
+  const [activeAiRequestId, setActiveAiRequestId] = useStoreField(stores.chat, "activeAiRequestId");
+  const [aiProgress, setAiProgress] = useStoreField(stores.chat, "aiProgress");
+  const [draggingChapterId, setDraggingChapterId] = useStoreField(stores.tasks, "draggingChapterId");
+  const [importProgress, setImportProgress] = useStoreField(stores.tasks, "importProgress");
+  const [indexProgress, setIndexProgress] = useStoreField(stores.tasks, "indexProgress");
+  const [showFindReplace, setShowFindReplace] = useStoreField(stores.editor, "showFindReplace");
+  const [findText, setFindText] = useStoreField(stores.editor, "findText");
+  const [replaceText, setReplaceText] = useStoreField(stores.editor, "replaceText");
+  const [leftWidth, setLeftWidth] = useStoreField(stores.layout, "leftWidth");
+  const [rightWidth, setRightWidth] = useStoreField(stores.layout, "rightWidth");
+  const [viewportWidth, setViewportWidth] = useStoreField(stores.layout, "viewportWidth");
+  const [aiExpanded, setAiExpanded] = useStoreField(stores.layout, "aiExpanded");
+  const [aiChatOpenRequest, setAiChatOpenRequest] = useStoreField(stores.navigation, "aiChatOpenRequest");
+  const [previewWidth, setPreviewWidth] = useStoreField(stores.layout, "previewWidth");
+  const [recoveryDrafts, setRecoveryDrafts] = useStoreField(stores.project, "recoveryDrafts");
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
   const richEditorRef = useRef<Editor | null>(null);
   const workspaceRef = useRef<HTMLElement | null>(null);
-  const selectedChapterIdRef = useRef("");
-  const chapterRevisionRef = useRef("");
   const chapterLoadRequestRef = useRef(0);
   const savePromiseRef = useRef<Promise<boolean> | null>(null);
   const closingRef = useRef(false);
-  const chatMessagesRef = useRef<ChatMessage[]>([]);
-  const chapterDraftRef = useRef({ content: "", title: "", volume: "" });
   const pageSaversRef = useRef(new Map<PageSaveKind, PageSaveHandle>());
   const registerPageSave = useCallback((kind: PageSaveKind, handle: PageSaveHandle | null) => {
     if (handle) pageSaversRef.current.set(kind, handle);
@@ -220,37 +113,33 @@ export default function App() {
     const updateViewportWidth = () => setViewportWidth(window.innerWidth);
     window.addEventListener("resize", updateViewportWidth);
     return () => window.removeEventListener("resize", updateViewportWidth);
-  }, []);
+  }, [setViewportWidth]);
 
   const applyAppState = useCallback((nextState: AppState) => {
     chapterLoadRequestRef.current += 1;
-    selectedChapterIdRef.current = nextState.selectedChapter?.id ?? "";
-    chapterDraftRef.current = {
-      content: nextState.chapterContent,
-      title: nextState.selectedChapter?.title ?? "",
-      volume: nextState.selectedChapter?.volume ?? "卷一",
-    };
-    setState(nextState);
-    setSelectedChapter(nextState.selectedChapter);
-    setChapterContent(nextState.chapterContent);
-    setChapterTitle(nextState.selectedChapter?.title ?? "");
-    setChapterVolume(nextState.selectedChapter?.volume ?? "卷一");
-    chapterRevisionRef.current = nextState.chapterRevision || "";
+    const oldRequest = stores.chat.store.getState().activeAiRequestId;
+    if (stores.project.store.getState().state?.projectPath !== nextState.projectPath) {
+      savePromiseRef.current = null;
+      if (oldRequest) void window.novelAPI.cancelAI(oldRequest).catch(() => null);
+    }
+    applyProjectState(stores, nextState);
     document.documentElement.dataset.theme = nextState.config.ui.theme;
     setDirty(false);
     setStatus(`已打开：${nextState.config.title}`);
-  }, []);
+  }, [setDirty, setStatus, stores]);
 
   useEffect(() => {
     window.novelAPI
       .getAppState()
       .then(applyAppState)
       .catch((error) => setStatus(`打开失败：${error.message}`));
-  }, [applyAppState]);
+  }, [applyAppState, setStatus]);
 
   useEffect(() => {
     if (!state?.projectPath) return;
+    const epoch = stores.project.store.getState().projectEpoch;
     void window.novelAPI.getRecoveryStatus().then((recovery) => {
+      if (!isCurrentEpoch(stores, epoch)) return;
       setRecoveryDrafts(recovery.drafts);
       if (recovery.windowState) {
         setView(recovery.windowState.view || "chapters");
@@ -262,13 +151,15 @@ export default function App() {
         setStatus(`发现可恢复内容：${recovery.drafts.length} 份草稿，${recovery.interruptedOperations.length} 项中断操作`);
       }
     }).catch(() => null);
-  }, [state?.projectPath]);
+  }, [setLeftWidth, setPreviewWidth, setRecoveryDrafts, setRightWidth, setStatus, setView, state?.projectPath, stores]);
 
   useEffect(() => {
     const chapterId = selectedChapter?.id;
     if (!state?.projectPath || !chapterId || showStoryCenter) return;
+    const epoch = stores.project.store.getState().projectEpoch;
     void window.novelAPI.getCreativeWorkspace()
       .then((workspace) => {
+        if (!isCurrentEpoch(stores, epoch) || stores.project.store.getState().selectedChapter?.id !== chapterId) return;
         const annotations: InlineReviewItem[] = workspace.annotations
           .filter((item) => item.chapterId === chapterId)
           .map((item) => ({ id: item.id, kind: "annotation", quote: item.quote, label: item.comment, status: item.status }));
@@ -277,24 +168,19 @@ export default function App() {
           .map((item) => ({ id: item.id, kind: "revision", quote: item.original, label: `${item.action}：${item.replacement}`, status: item.status }));
         setEditorReviews([...annotations, ...revisions]);
       })
-      .catch(() => setEditorReviews([]));
-  }, [selectedChapter?.id, showStoryCenter, state?.projectPath]);
+      .catch(() => { if (isCurrentEpoch(stores, epoch) && stores.project.store.getState().selectedChapter?.id === chapterId) setEditorReviews([]); });
+  }, [selectedChapter?.id, setEditorReviews, showStoryCenter, state?.projectPath, stores]);
 
-  useEffect(() => {
-    selectedChapterIdRef.current = selectedChapter?.id ?? "";
-    chapterDraftRef.current = { content: chapterContent, title: chapterTitle, volume: chapterVolume };
-  }, [chapterContent, chapterTitle, chapterVolume, selectedChapter?.id]);
 
-  useEffect(() => {
-    chatMessagesRef.current = chatMessages;
-  }, [chatMessages]);
 
   useEffect(() => {
     if (!state?.projectPath) return;
+    const epoch = stores.project.store.getState().projectEpoch;
     setChatLoaded(false);
     window.novelAPI
       .getAnalysisState()
       .then((snapshot) => {
+        if (!isCurrentEpoch(stores, epoch)) return;
         const restored = keepRecentChatSessions(snapshot.chatSessions || [], snapshot.activeChatSessionId || "");
         let initialSessions = restored.length ? restored : [makeChatSession()];
         const activeId = initialSessions.some((session) => session.id === snapshot.activeChatSessionId) ? snapshot.activeChatSessionId || initialSessions[0].id : initialSessions[0].id;
@@ -302,7 +188,7 @@ export default function App() {
         const recovery = snapshot.aiStreamRecovery;
         if (recovery?.requestId && recovery.answer) {
           const existing = active.messages.find((message) => message.id === recovery.requestId);
-          let recoveredMessages = active.messages;
+          let recoveredMessages: ChatMessage[];
           if (existing) {
             recoveredMessages = active.messages.map((message) =>
               message.id === recovery.requestId && recovery.answer.length > message.content.length ? { ...message, content: recovery.answer } : message,
@@ -328,6 +214,7 @@ export default function App() {
         setChatRetrievalMode(snapshot.chatRetrievalMode || "auto");
       })
       .catch(() => {
+        if (!isCurrentEpoch(stores, epoch)) return;
         const session = makeChatSession();
         setChatSessions([session]);
         setActiveChatSessionId(session.id);
@@ -335,23 +222,25 @@ export default function App() {
         setAiProjectMemory("");
         setChatRetrievalMode("auto");
       })
-      .finally(() => setChatLoaded(true));
-  }, [state?.projectPath]);
+      .finally(() => { if (isCurrentEpoch(stores, epoch)) setChatLoaded(true); });
+  }, [setActiveChatSessionId, setAiProjectMemory, setChatLoaded, setChatMessages, setChatRetrievalMode, setChatSessions, setStatus, state?.projectPath, stores]);
 
   useEffect(() => {
     if (!state?.projectPath) return undefined;
-    void window.novelAPI.listTasks().then((result) => setBackgroundTasks(result.tasks)).catch(() => setBackgroundTasks([]));
+    const epoch = stores.project.store.getState().projectEpoch;
+    void window.novelAPI.listTasks().then((result) => { if (isCurrentEpoch(stores, epoch)) setBackgroundTasks(result.tasks); }).catch(() => { if (isCurrentEpoch(stores, epoch)) setBackgroundTasks([]); });
     const off = window.novelAPI.onTaskProgress((task) => {
-      if (task.projectPath && task.projectPath !== state.projectPath) return;
+      if (!isCurrentEpoch(stores, epoch) || (task.projectPath && task.projectPath !== state.projectPath)) return;
       setBackgroundTasks((current) => [task, ...current.filter((item) => item.id !== task.id)].slice(0, 120));
       if (task.type === "knowledge-rebuild" && task.status === "已完成") {
         void window.novelAPI.getAppState().then((nextState) => {
+          if (!isCurrentEpoch(stores, epoch)) return;
           setState((current) => current ? { ...current, vectorStats: nextState.vectorStats, chapters: nextState.chapters, config: nextState.config } : nextState);
         }).catch(() => null);
       }
     });
     return off;
-  }, [state?.projectPath]);
+  }, [setBackgroundTasks, setState, state?.projectPath, stores]);
 
   useEffect(() => {
     const offImport = window.novelAPI.onImportProgress((progress) => {
@@ -370,11 +259,11 @@ export default function App() {
       offImport();
       offIndex();
     };
-  }, []);
+  }, [setImportProgress, setIndexProgress, setStatus]);
 
   useEffect(() => {
     const off = window.novelAPI.onAIStream((payload) => {
-      if (!payload.requestId) return;
+      if (!payload.requestId || payload.requestId !== stores.chat.store.getState().activeAiRequestId) return;
       if (payload.type === "chunk" && payload.text) {
         setChatMessages((current) =>
           current.map((message) => {
@@ -392,11 +281,13 @@ export default function App() {
       }));
     });
     return off;
-  }, []);
+  }, [setAiProgress, setChatMessages, stores.chat.store]);
 
   useEffect(() => {
     if (!chatLoaded || !activeChatSessionId) return;
+    const epoch = stores.project.store.getState().projectEpoch;
     const timer = window.setTimeout(() => {
+      if (!isCurrentEpoch(stores, epoch)) return;
       const now = new Date().toISOString();
       setChatSessions((current) => {
         const active = current.find((session) => session.id === activeChatSessionId) || current[0];
@@ -420,7 +311,7 @@ export default function App() {
       });
     }, 900);
     return () => window.clearTimeout(timer);
-  }, [activeChatSessionId, aiProjectMemory, chatLoaded, chatMessages, chatRetrievalMode]);
+  }, [activeChatSessionId, aiProjectMemory, chatLoaded, chatMessages, chatRetrievalMode, setChatSessions, stores]);
 
   const saveChapter = useCallback((): Promise<boolean> => {
     if (!selectedChapter) {
@@ -431,21 +322,22 @@ export default function App() {
       setStatus("当前文档正在保存，请稍候。");
       return savePromiseRef.current;
     }
+    const saveEpoch = stores.project.store.getState().projectEpoch;
     const draft = {
       chapterId: selectedChapter.id,
       title: chapterTitle,
       volume: chapterVolume,
       content: chapterContent,
-      expectedRevision: chapterRevisionRef.current,
+      expectedRevision: chapterRevision,
     };
-    let operation!: Promise<boolean>;
-    operation = (async () => {
+    const operation = (async () => {
       setSaving(true);
       setStatus("正在保存并更新知识库...");
       try {
         const result = await window.novelAPI.saveChapter(draft);
-        const stillViewingSameChapter = selectedChapterIdRef.current === draft.chapterId;
-        const currentDraft = chapterDraftRef.current;
+        if (!isCurrentEpoch(stores, saveEpoch)) return false;
+        const stillViewingSameChapter = (stores.project.store.getState().selectedChapter?.id || "") === draft.chapterId;
+        const currentDraft = readChapterDraft(stores);
         const draftUnchanged =
           currentDraft.content === draft.content && currentDraft.title === draft.title && currentDraft.volume === draft.volume;
         if (stillViewingSameChapter) {
@@ -464,7 +356,7 @@ export default function App() {
             : current,
         );
         if (stillViewingSameChapter) {
-          chapterRevisionRef.current = result.revision;
+          setChapterRevision(result.revision);
           if (draftUnchanged) {
             setDirty(false);
             setRecoveryDrafts((current) => current.filter((item) => item.chapterId !== draft.chapterId));
@@ -475,16 +367,16 @@ export default function App() {
         setStatus([result.indexWarning, result.journalWarning].filter(Boolean).join("；") || (draftUnchanged ? `已保存，${mode}` : "已保存此前版本，当前还有新改动待保存"));
         return stillViewingSameChapter && draftUnchanged;
       } catch (error) {
-        setStatus(`保存失败：${error instanceof Error ? error.message : String(error)}`);
+        if (isCurrentEpoch(stores, saveEpoch)) setStatus(`保存失败：${error instanceof Error ? error.message : String(error)}`);
         return false;
-      } finally {
-        if (savePromiseRef.current === operation) savePromiseRef.current = null;
-        setSaving(false);
       }
-    })();
+    })().finally(() => {
+      if (savePromiseRef.current === operation) savePromiseRef.current = null;
+      if (isCurrentEpoch(stores, saveEpoch)) setSaving(false);
+    });
     savePromiseRef.current = operation;
     return operation;
-  }, [chapterContent, chapterTitle, chapterVolume, selectedChapter]);
+  }, [chapterContent, chapterRevision, chapterTitle, chapterVolume, selectedChapter, setChapterRevision, setDirty, setRecoveryDrafts, setSaving, setSelectedChapter, setState, setStatus, stores]);
 
   const saveChapterIfDirty = useCallback(async () => {
     if (!dirty) return true;
@@ -507,7 +399,7 @@ export default function App() {
     if (view === "chapters") return saveChapter();
     setStatus("当前页面的操作会即时保存。");
     return true;
-  }, [saveChapter, view]);
+  }, [saveChapter, setStatus, view]);
 
   useEffect(() => {
     return window.novelAPI.onAppCloseRequested(() => {
@@ -516,13 +408,13 @@ export default function App() {
       void (async () => {
         try {
           if (dirty && selectedChapter?.id && state?.config.ui.recoveryEnabled !== false) {
-            const draft = chapterDraftRef.current;
+            const draft = readChapterDraft(stores);
             await window.novelAPI.saveRecoveryDraft({
               chapterId: selectedChapter.id,
               chapterTitle: draft.title,
               volume: draft.volume,
               content: draft.content,
-              baseRevision: chapterRevisionRef.current,
+              baseRevision: chapterRevision,
               wordCount: countWords(draft.content),
             });
           }
@@ -539,7 +431,7 @@ export default function App() {
         }
       })();
     });
-  }, [dirty, saveChapter, selectedChapter?.id, state?.config.ui.recoveryEnabled]);
+  }, [chapterRevision, dirty, saveChapter, selectedChapter?.id, setStatus, state?.config.ui.recoveryEnabled, stores]);
 
   async function changeView(nextView: typeof view) {
     if (nextView === view) return true;
@@ -582,12 +474,12 @@ export default function App() {
         chapterTitle,
         volume: chapterVolume,
         content: chapterContent,
-        baseRevision: chapterRevisionRef.current,
+        baseRevision: chapterRevision,
         wordCount: countWords(chapterContent),
       }).catch(() => null);
     }, 650);
     return () => window.clearTimeout(timer);
-  }, [chapterContent, chapterTitle, chapterVolume, dirty, selectedChapter?.id, state?.config.ui.recoveryEnabled]);
+  }, [chapterContent, chapterRevision, chapterTitle, chapterVolume, dirty, selectedChapter?.id, state?.config.ui.recoveryEnabled]);
 
   useEffect(() => {
     if (!state?.projectPath) return;
@@ -624,7 +516,7 @@ export default function App() {
     setChapterVolume(draft.volume || chapterVolume);
     setRecoveryDrafts((current) => current.filter((item) => item.chapterId !== draft.chapterId));
     setDirty(true);
-    setStatus(draft.baseRevision && draft.baseRevision !== chapterRevisionRef.current ? "已恢复草稿；原章节保存后曾变化，请对照历史版本后再保存" : "已恢复未保存草稿");
+    setStatus(draft.baseRevision && draft.baseRevision !== chapterRevision ? "已恢复草稿；原章节保存后曾变化，请对照历史版本后再保存" : "已恢复未保存草稿");
   }
 
   async function discardRecoveryDraft(draft: RecoveryDraft) {
@@ -656,7 +548,7 @@ export default function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [contextMenu, focusMode, saveCurrentPage, showQuickPanel, showSettings, showStoryCenter, showTaskCenter, view]);
+  }, [contextMenu, focusMode, saveCurrentPage, setFocusMode, setShowQuickPanel, showQuickPanel, showSettings, showStoryCenter, showTaskCenter, view]);
 
   useEffect(() => {
     if (!focusMode || view !== "chapters") return;
@@ -686,17 +578,11 @@ export default function App() {
       const payload = await window.novelAPI.loadChapter(chapterId);
       if (requestId !== chapterLoadRequestRef.current) return;
       if (!payload.chapter || payload.chapter.id !== chapterId) throw new Error("章节身份校验失败，已停止切换。");
-      selectedChapterIdRef.current = payload.chapter.id;
-      chapterDraftRef.current = {
-        content: payload.content,
-        title: payload.chapter.title,
-        volume: payload.chapter.volume || "卷一",
-      };
       setSelectedChapter(payload.chapter);
       setChapterContent(payload.content);
       setChapterTitle(payload.chapter?.title ?? "");
       setChapterVolume(payload.chapter?.volume ?? "卷一");
-      chapterRevisionRef.current = payload.revision || "";
+      setChapterRevision(payload.revision || "");
       setState((current) => current ? {
         ...current,
         selectedChapter: payload.chapter,
@@ -843,7 +729,7 @@ export default function App() {
           : current,
       );
       if (chapterId === selectedChapter?.id) {
-        chapterRevisionRef.current = result.revision;
+        setChapterRevision(result.revision);
         setSelectedChapter(result.chapter);
         setChapterContent(nextContent);
         setChapterTitle(result.chapter.title);
@@ -984,7 +870,7 @@ export default function App() {
     setSaving(true);
     setStatus("正在从 Word 原文恢复表格和富文档格式...");
     try {
-      const result = await window.novelAPI.refreshChapterFromOriginal({ chapterId: selectedChapter.id, expectedRevision: chapterRevisionRef.current });
+      const result = await window.novelAPI.refreshChapterFromOriginal({ chapterId: selectedChapter.id, expectedRevision: chapterRevision });
       applyAppState(result.state);
       setView("chapters");
       setPreview(false);
@@ -1313,6 +1199,7 @@ export default function App() {
       setStatus("AI 正在生成上一条回答，请先停止或等待完成。");
       return;
     }
+    const requestEpoch = stores.project.store.getState().projectEpoch;
     const userMessage: ChatMessage = {
       id: makeMessageId(),
       role: "user",
@@ -1340,6 +1227,7 @@ export default function App() {
         selectedChapterId: selectedChapter?.id || "",
         additionalSourceIds,
       });
+      if (!isCurrentEpoch(stores, requestEpoch) || stores.chat.store.getState().activeAiRequestId !== pendingId) return;
       updateCurrentChat(
         startedMessages.map((item) =>
           item.id === pendingId
@@ -1362,7 +1250,8 @@ export default function App() {
           : `检索已完成：${modeLabel}，扫描 ${scannedCount} 条，候选 ${candidateCount} 条，发送 ${contextCount} 条，流式接收 ${response.streamedChars || 0} 字`,
       );
     } catch (error) {
-      const currentMessages = chatMessagesRef.current.length ? chatMessagesRef.current : startedMessages;
+      if (!isCurrentEpoch(stores, requestEpoch)) return;
+      const currentMessages = stores.chat.store.getState().chatMessages.length ? stores.chat.store.getState().chatMessages : startedMessages;
       updateCurrentChat(
         currentMessages.map((item) =>
           item.id === pendingId
@@ -1376,14 +1265,17 @@ export default function App() {
         ),
       );
     } finally {
-      setActiveAiRequestId("");
+      if (isCurrentEpoch(stores, requestEpoch) && stores.chat.store.getState().activeAiRequestId === pendingId) setActiveAiRequestId("");
     }
   }
 
   async function stopChatGeneration() {
     if (!activeAiRequestId) return;
+    const requestId = activeAiRequestId;
+    const epoch = stores.project.store.getState().projectEpoch;
     setAiProgress((current) => ({ phase: "正在停止，已生成内容会保留", streamedChars: current?.streamedChars || 0, retrieval: current?.retrieval }));
-    const result = await window.novelAPI.cancelAI(activeAiRequestId).catch(() => ({ canceled: false }));
+    const result = await window.novelAPI.cancelAI(requestId).catch(() => ({ canceled: false }));
+    if (!isCurrentEpoch(stores, epoch) || (stores.chat.store.getState().activeAiRequestId && stores.chat.store.getState().activeAiRequestId !== requestId)) return;
     setStatus(result.canceled ? "正在停止生成，已收到的内容会保留" : "这次生成已经结束");
   }
 
@@ -1677,7 +1569,7 @@ export default function App() {
               </div>
               {activeRecoveryDraft && (
                 <div className="draft-recovery-bar">
-                  <div><strong>发现未保存草稿</strong><span>{formatDateTime(activeRecoveryDraft.updatedAt)} / {activeRecoveryDraft.wordCount.toLocaleString()} 字{activeRecoveryDraft.baseRevision !== chapterRevisionRef.current ? " / 原章节已变化" : ""}</span></div>
+                  <div><strong>发现未保存草稿</strong><span>{formatDateTime(activeRecoveryDraft.updatedAt)} / {activeRecoveryDraft.wordCount.toLocaleString()} 字{activeRecoveryDraft.baseRevision !== chapterRevision ? " / 原章节已变化" : ""}</span></div>
                   <button onClick={() => void discardRecoveryDraft(activeRecoveryDraft)}>放弃</button>
                   <button className="primary" onClick={() => restoreRecoveryDraft(activeRecoveryDraft)}>恢复草稿</button>
                 </div>
@@ -1719,7 +1611,7 @@ export default function App() {
                     scrollAnchor={scrollAnchor}
                     reviews={editorReviews}
                     onChange={(documentId, next) => {
-                      if (!documentId || selectedChapterIdRef.current !== documentId) return;
+                      if (!documentId || (stores.project.store.getState().selectedChapter?.id || "") !== documentId) return;
                       setChapterContent(next);
                       setDirty(true);
                     }}
@@ -1929,7 +1821,7 @@ export default function App() {
           state={state}
           selectedChapterId={selectedChapter?.id || ""}
           selectedText={selectedText}
-          chapterRevision={chapterRevisionRef.current}
+          chapterRevision={chapterRevision}
           initialTab={storyCenterInitialTab}
           workspaceInitialTab={workspaceInitialTab}
           onClose={() => {

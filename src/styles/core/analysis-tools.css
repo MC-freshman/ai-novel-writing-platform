@@ -1,0 +1,641 @@
+.analysis-actions select,
+.tool-card select,
+.inline-form input {
+  min-height: 30px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.timeline-list {
+  position: relative;
+  display: grid;
+  gap: 7px;
+  padding-left: 10px;
+}
+
+.timeline-list::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 18px;
+  width: 1px;
+  background: var(--line);
+}
+
+.timeline-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px 7px 0;
+  text-align: left;
+  border: 0;
+  background: transparent;
+}
+
+.timeline-dot {
+  z-index: 1;
+  width: 12px;
+  height: 12px;
+  margin: 8px 0 0 2px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  background: var(--panel);
+}
+
+.timeline-item div {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.timeline-item em,
+.issue-card em {
+  color: var(--accent-strong);
+  font-style: normal;
+  font-size: 12px;
+}
+
+.relationship-graph {
+  width: 100%;
+  height: 520px;
+  display: block;
+  user-select: none;
+}
+
+.relationship-graph-shell {
+  position: relative;
+  overflow: hidden;
+  overscroll-behavior: contain;
+  touch-action: none;
+  height: min(560px, 58vh);
+  min-height: 360px;
+  margin-bottom: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  cursor: grab;
+}
+
+.relationship-graph-shell.dragging {
+  cursor: grabbing;
+}
+
+.relationship-graph-tools {
+  position: absolute;
+  z-index: 2;
+  top: 10px;
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  box-shadow: var(--shadow);
+}
+
+.relationship-graph-tools span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.relationship-graph-tools button {
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.relationship-graph .relationship-branch {
+  fill: none;
+  stroke: color-mix(in srgb, var(--accent) 38%, var(--line));
+  stroke-linecap: round;
+}
+
+.relationship-graph rect {
+  fill: color-mix(in srgb, var(--accent) 18%, var(--panel));
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.relationship-graph .relationship-node.center rect {
+  fill: color-mix(in srgb, var(--accent) 26%, var(--panel));
+  stroke-width: 2.4;
+}
+
+.relationship-graph .relationship-node.left rect,
+.relationship-graph .relationship-node.right rect {
+  fill: var(--panel);
+}
+
+.relationship-graph .relationship-node {
+  cursor: move;
+}
+
+.relationship-graph .relationship-node.selected rect {
+  stroke: #d99b12;
+  stroke-width: 3px;
+}
+
+.relationship-graph text {
+  fill: var(--text);
+  font-size: 13px;
+}
+
+.relationship-graph .relationship-edge-label {
+  fill: var(--accent-strong);
+  stroke: var(--panel);
+  stroke-width: 4px;
+  paint-order: stroke;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.relationship-graph marker path {
+  fill: var(--accent-strong);
+}
+
+.graph-selection-box {
+  position: absolute;
+  z-index: 3;
+  pointer-events: none;
+  border: 1px solid #2680a6;
+  background: color-mix(in srgb, #2680a6 12%, transparent);
+}
+
+.graph-edge-editor {
+  position: absolute;
+  z-index: 4;
+  left: 10px;
+  bottom: 10px;
+  width: min(620px, calc(100% - 20px));
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.graph-edge-editor strong {
+  flex: 1 0 100%;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-edge-editor input,
+.graph-edge-editor select,
+.graph-edge-editor button {
+  min-width: 0;
+  min-height: 28px;
+  max-width: 100%;
+}
+
+.graph-edge-editor input:not([type="color"]) {
+  flex: 1 1 120px;
+  width: 120px;
+}
+
+.graph-edge-editor select {
+  width: 110px;
+}
+
+.graph-edge-editor button {
+  padding-inline: 7px;
+  white-space: nowrap;
+}
+
+.graph-edge-editor input[type="color"] {
+  width: 34px;
+  padding: 2px;
+}
+
+.relationship-edges {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.relation-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.relation-controls details,
+.experimental-card,
+.candidate-list,
+.scope-panel {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.relation-controls summary,
+.experimental-card summary,
+.scope-panel summary {
+  cursor: pointer;
+  color: var(--accent-strong);
+  font-weight: 700;
+}
+
+.relation-filter-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(120px, 180px);
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.relation-filter-row input,
+.relation-filter-row select {
+  min-height: 34px;
+  padding: 0 10px;
+}
+
+.relation-filter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.relation-filter-actions button {
+  min-height: 30px;
+  padding: 0 10px;
+}
+
+.relation-tree-select {
+  max-height: 260px;
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.relation-category-group {
+  display: grid;
+  gap: 3px;
+}
+
+.relation-category-title {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.relation-category-title small {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.relation-tree-select label {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.relation-tree-select span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.check-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 6px 10px;
+  margin: 10px 0;
+}
+
+.check-grid label,
+.tool-card label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.chip-list button {
+  min-height: 28px;
+  padding: 0 9px;
+  border-radius: 999px;
+  color: var(--accent-strong);
+}
+
+.inline-form {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) auto;
+  gap: 8px;
+}
+
+.relationship-edges div,
+.issue-card,
+.diff-view,
+.tool-card {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.issue-card {
+  display: grid;
+  gap: 8px;
+}
+
+.issue-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.issue-card header span {
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.issue-card.severity-高 {
+  border-color: color-mix(in srgb, var(--danger) 58%, var(--line));
+}
+
+.issue-card.severity-中 {
+  border-color: color-mix(in srgb, #c28a2e 58%, var(--line));
+}
+
+.issue-card small {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.issue-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.issue-actions button {
+  min-height: 28px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.scope-panel {
+  margin-bottom: 14px;
+}
+
+.scope-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.scope-grid section {
+  min-height: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.scope-grid header,
+.knowledge-group header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.scope-grid header div {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.scope-grid button {
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.scope-check-list {
+  max-height: 260px;
+  overflow: auto;
+  display: grid;
+  gap: 5px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.scope-check-list label {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.scope-check-list span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.version-tools {
+  display: grid;
+  grid-template-columns: minmax(180px, 320px) auto;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.diff-view {
+  display: grid;
+  gap: 4px;
+  overflow: auto;
+}
+
+.diff-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.diff-line {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 8px;
+  margin: 0;
+  padding: 5px 8px;
+  border-radius: 6px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.diff-line.added {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.diff-line.removed {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.diff-line span {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.tool-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 14px;
+  align-content: start;
+}
+
+.tool-card {
+  min-height: 104px;
+  display: grid;
+  justify-items: start;
+  align-content: start;
+  gap: 8px;
+  text-align: left;
+}
+
+.export-lab {
+  display: grid;
+  gap: 10px;
+}
+
+.candidate-list {
+  display: grid;
+  gap: 8px;
+}
+
+.candidate-card {
+  display: grid;
+  gap: 5px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.candidate-card label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.candidate-card span,
+.candidate-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.experimental-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 9px;
+  margin-top: 9px;
+}
+
+.experimental-grid section {
+  display: grid;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.experimental-grid header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.compact-list {
+  display: grid;
+  gap: 7px;
+}
+
+.compact-list div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 58%, transparent);
+}
+
+.compact-list span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compact-list small,
+.compact-list p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.material-form {
+  display: grid;
+  gap: 8px;
+}
+
+.material-form input {
+  height: 32px;
+  padding: 0 9px;
+}
+
+.material-form textarea {
+  min-height: 90px;
+  padding: 9px;
+  resize: vertical;
+}
+

@@ -1,9 +1,9 @@
-// 本文件由 P2 重构自 electron/main.cjs 机械搬迁（scripts/refactor-split.cjs），逻辑未改动。
+// 本文件源自P2主进程拆分；后续维护与行为修复见Git历史。
 "use strict";
 
-const { fileURLToPath, pathToFileURL } = require("node:url");
+const { fileURLToPath } = require("node:url");
 const { parse: parseHtml } = require("node-html-parser");
-const { writeFileAtomic, writeJsonAtomic, withProjectTransaction, writeProjectFiles } = require("./project-storage.cjs");
+const { writeFileAtomic } = require("./project-storage.cjs");
 const creativeWorkspace = require("./creative-workspace.cjs");
 const fs = require("node:fs/promises");
 const path = require("node:path");

@@ -27,7 +27,7 @@ export default tseslint.config(
   {
     rules: {
       // 存量代码先以警告为主，避免一次性大改 2.7 万行；真正的问题规则保持 error。
-      "@typescript-eslint/no-unused-vars": "warn",
+      "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_", ignoreRestSiblings: true }],
       "@typescript-eslint/no-explicit-any": "warn",
       "no-empty": ["warn", { allowEmptyCatch: true }],
       "no-useless-escape": "warn",

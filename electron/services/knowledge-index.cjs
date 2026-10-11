@@ -1,12 +1,13 @@
-// 本文件由 P2 重构自 electron/main.cjs 机械搬迁（scripts/refactor-split.cjs），逻辑未改动。
+// 本文件源自P2主进程拆分；后续维护与行为修复见Git历史。
 "use strict";
 
 const vectorShards = require("./vector-shards.cjs");
+const { removeProjectFile } = require("./project-storage.cjs");
 const creativeWorkspace = require("./creative-workspace.cjs");
 const retrievalPlanner = require("./retrieval-planner.cjs");
 const knowledgeFreshness = require("./knowledge-freshness.cjs");
 const { VECTOR_DIMENSIONS, CHUNK_SIZE, CHUNK_OVERLAP, MAX_RETRIEVAL_TOP_K, MAX_RETRIEVAL_SCAN_K, DEFAULT_RETRIEVAL_SCAN_K, CHAT_CONTEXT_CHAR_BUDGET, EMBEDDING_INDEX_CONCURRENCY } = require("./constants.cjs");
-const { state, sendRendererEvent } = require("./runtime-state.cjs");
+const { sendRendererEvent } = require("./runtime-state.cjs");
 const __dep0 = require("./project-files.cjs");
 const __dep1 = require("./credentials.cjs");
 const __dep2 = require("./retrieval-pipeline.cjs");
@@ -104,7 +105,7 @@ async function saveMaterial(projectPath, payload) {
 async function deleteMaterial(projectPath, materialId) {
   const id = normalizeDataId(materialId);
   if (!id) return;
-  await fs.rm(getMaterialPath(projectPath, id), { force: true });
+  await removeProjectFile(projectPath, getMaterialPath(projectPath, id));
 }
 
 

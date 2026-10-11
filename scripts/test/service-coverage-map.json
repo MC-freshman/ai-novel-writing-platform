@@ -1,0 +1,164 @@
+{
+  "ai-generate.cjs": [
+    "scripts/test/services/domain-behavior.test.cjs",
+    "scripts/test-core-regression.cjs"
+  ],
+  "analysis-tools.cjs": [
+    "scripts/test-core-regression.cjs",
+    "scripts/test-agent-platform.cjs"
+  ],
+  "app-update.cjs": [
+    "scripts/test/services/domain-behavior.test.cjs"
+  ],
+  "chat-stream.cjs": [
+    "scripts/test/services/domain-behavior.test.cjs",
+    "scripts/test-core-regression.cjs"
+  ],
+  "constants.cjs": [
+    "scripts/test-core-regression.cjs",
+    "scripts/test-plan-regression.cjs"
+  ],
+  "creative-agent.cjs": [
+    "scripts/test/services/domain-behavior.test.cjs",
+    "scripts/test-agent-platform.cjs"
+  ],
+  "creative-statistics.cjs": [
+    "scripts/test/services/domain-behavior.test.cjs",
+    "scripts/test-agent-platform.cjs"
+  ],
+  "creative-workspace.cjs": [
+    "scripts/test-core-regression.cjs",
+    "scripts/test-agent-platform.cjs",
+    "scripts/test-novel-network.cjs",
+    "scripts/test-plan-regression.cjs"
+  ],
+  "credentials.cjs": [
+    "scripts/test/services/domain-behavior.test.cjs",
+    "scripts/test-plan-regression.cjs"
+  ],
+  "docx-export.cjs": [
+    "scripts/test-batch-docx-export.cjs",
+    "scripts/test-core-regression.cjs"
+  ],
+  "docx-fidelity.cjs": [
+    "scripts/test-batch-docx-export.cjs",
+    "scripts/test-core-regression.cjs"
+  ],
+  "ipc-contract.cjs": [
+    "scripts/test/services/ipc-contract.test.cjs"
+  ],
+  "ipc-security.cjs": [
+    "scripts/test/services/domain-behavior.test.cjs",
+    "scripts/test-plan-regression.cjs"
+  ],
+  "knowledge-freshness.cjs": [
+    "scripts/test/services/domain-behavior.test.cjs",
+    "scripts/test-agent-platform.cjs"
+  ],
+  "knowledge-index.cjs": [
+    "scripts/test/services/domain-behavior.test.cjs",
+    "scripts/test-core-regression.cjs",
+    "scripts/test-agent-platform.cjs"
+  ],
+  "logger.cjs": [
+    "scripts/test/services/logger.test.cjs"
+  ],
+  "novel-agent.cjs": [
+    "scripts/test/services/domain-behavior.test.cjs",
+    "scripts/test-agent-platform.cjs"
+  ],
+  "novel-network-import.cjs": [
+    "scripts/test-novel-network.cjs"
+  ],
+  "novel-network.cjs": [
+    "scripts/test-novel-network.cjs"
+  ],
+  "operation-journal.cjs": [
+    "scripts/test/services/domain-behavior.test.cjs",
+    "scripts/test-agent-platform.cjs",
+    "scripts/test-plan-regression.cjs"
+  ],
+  "project-archives.cjs": [
+    "scripts/test/services/domain-behavior.test.cjs",
+    "scripts/test-plan-regression.cjs"
+  ],
+  "project-config.cjs": [
+    "scripts/test-core-regression.cjs",
+    "scripts/test-plan-regression.cjs"
+  ],
+  "project-content.cjs": [
+    "scripts/test-core-regression.cjs",
+    "scripts/test-plan-regression.cjs"
+  ],
+  "project-exchange-security.cjs": [
+    "scripts/test/services/domain-behavior.test.cjs",
+    "scripts/test-core-regression.cjs"
+  ],
+  "project-exchange.cjs": [
+    "scripts/test-core-regression.cjs",
+    "scripts/test-plan-regression.cjs",
+    "scripts/test/services/crash-recovery.test.cjs"
+  ],
+  "project-files.cjs": [
+    "scripts/test/services/domain-behavior.test.cjs",
+    "scripts/test-plan-regression.cjs"
+  ],
+  "project-migrations.cjs": [
+    "scripts/test/services/domain-behavior.test.cjs",
+    "scripts/test-agent-platform.cjs"
+  ],
+  "project-ops.cjs": [
+    "scripts/test-plan-regression.cjs",
+    "scripts/test/services/crash-recovery.test.cjs"
+  ],
+  "project-snapshots.cjs": [
+    "scripts/test/services/crash-recovery.test.cjs",
+    "scripts/test-safety-regression.cjs",
+    "scripts/test-agent-platform.cjs"
+  ],
+  "project-storage.cjs": [
+    "scripts/test/services/project-storage.test.cjs",
+    "scripts/test/services/crash-recovery.test.cjs",
+    "scripts/test-safety-regression.cjs"
+  ],
+  "project-transactions.cjs": [
+    "scripts/test/services/crash-recovery.test.cjs"
+  ],
+  "release-privacy.cjs": [
+    "scripts/test/services/domain-behavior.test.cjs",
+    "scripts/test-core-regression.cjs"
+  ],
+  "retrieval-pipeline.cjs": [
+    "scripts/test/services/domain-behavior.test.cjs",
+    "scripts/test-core-regression.cjs"
+  ],
+  "retrieval-planner.cjs": [
+    "scripts/test-agent-platform.cjs"
+  ],
+  "runtime-state.cjs": [
+    "scripts/test/services/domain-behavior.test.cjs",
+    "scripts/test-plan-regression.cjs"
+  ],
+  "story-state.cjs": [
+    "scripts/test-agent-platform.cjs"
+  ],
+  "task-center.cjs": [
+    "scripts/test-safety-regression.cjs",
+    "scripts/test-agent-platform.cjs"
+  ],
+  "task-runtime.cjs": [
+    "scripts/test-agent-platform.cjs",
+    "scripts/test-plan-regression.cjs"
+  ],
+  "vector-shards.cjs": [
+    "scripts/test/services/vector-shards.test.cjs",
+    "scripts/test-safety-regression.cjs"
+  ],
+  "windows-credentials.cjs": [
+    "scripts/test/services/domain-behavior.test.cjs"
+  ],
+  "word-import.cjs": [
+    "scripts/test-core-regression.cjs",
+    "scripts/test-batch-docx-export.cjs"
+  ]
+}

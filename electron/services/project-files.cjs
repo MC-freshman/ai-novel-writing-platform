@@ -1,15 +1,15 @@
-// 本文件由 P2 重构自 electron/main.cjs 机械搬迁（scripts/refactor-split.cjs），逻辑未改动。
+// 本文件源自P2主进程拆分；后续维护与行为修复见Git历史。
 "use strict";
 
 const { toUSVString } = require("node:util");
-const { createWriteStream, existsSync } = require("node:fs");
+const { existsSync } = require("node:fs");
 const crypto = require("node:crypto");
 const AdmZip = require("adm-zip");
 const { parse: parseHtml } = require("node-html-parser");
-const { writeFileAtomic, writeJsonAtomic, withProjectTransaction, writeProjectFiles } = require("./project-storage.cjs");
+const { writeFileAtomic, writeJsonAtomic } = require("./project-storage.cjs");
 const projectMigrations = require("./project-migrations.cjs");
 const { DEFAULT_CHAT_BASE_URL, DEFAULT_EMBEDDING_BASE_URL, DEFAULT_PROJECT_NAME, DEFAULT_RETRIEVAL_SCAN_K, DEFAULT_CATEGORY } = require("./constants.cjs");
-const { state, sendRendererEvent } = require("./runtime-state.cjs");
+const { state } = require("./runtime-state.cjs");
 const __dep0 = require("./credentials.cjs");
 const __dep1 = require("./project-ops.cjs");
 const path = require("node:path");
@@ -43,7 +43,8 @@ function sanitizeFileName(name) {
 
 function sanitizeExportPathSegment(value, fallback = "未分类") {
   let segment = String(value || fallback)
-    .replace(/[\u0000-\u001f\\/:*?"<>|]/g, "_")
+    .split("").map((character) => character.charCodeAt(0) <= 31 ? "_" : character).join("")
+    .replace(/[\\/:*?"<>|]/g, "_")
     .replace(/\s+/g, " ")
     .trim()
     .replace(/[. ]+$/g, "")
@@ -130,7 +131,7 @@ async function mapWithConcurrency(items, limit, mapper) {
 function sanitizeDocxText(value) {
   return toUSVString(String(value || ""))
     .replace(/\r\n?/g, "\n")
-    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\uFFFE\uFFFF]/g, "");
+    .split("").filter((character) => { const code = character.charCodeAt(0); return (code >= 32 || [9, 10, 13].includes(code)) && ![127, 65534, 65535].includes(code); }).join("");
 }
 
 

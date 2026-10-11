@@ -1,4 +1,4 @@
-// 本文件由 P2 重构自 electron/main.cjs 机械搬迁（scripts/refactor-split.cjs），逻辑未改动。
+// 本文件源自P2主进程拆分；后续维护与行为修复见Git历史。
 "use strict";
 
 const creativeWorkspace = require("./creative-workspace.cjs");
@@ -112,7 +112,7 @@ async function callChatApi(config, systemPrompt, question, history = [], options
 
 function estimateTokenCount(value) {
   const text = String(value || "");
-  const asciiLength = (text.match(/[\x00-\x7f]/g) || []).length;
+  const asciiLength = Array.from(text).filter((character) => character.charCodeAt(0) <= 0x7f).length;
   return Math.max(1, Math.ceil((text.length - asciiLength) / 1.6 + asciiLength / 4));
 }
 

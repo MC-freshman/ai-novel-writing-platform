@@ -1,10 +1,10 @@
-// 本文件由 P2 重构自 electron/main.cjs 机械搬迁（scripts/refactor-split.cjs），逻辑未改动。
+// 本文件源自P2主进程拆分；后续维护与行为修复见Git历史。
 "use strict";
 
-const { fileURLToPath, pathToFileURL } = require("node:url");
-const { createWriteStream, existsSync } = require("node:fs");
+const { pathToFileURL } = require("node:url");
+const { existsSync } = require("node:fs");
 const mammoth = require("./word-import.cjs");
-const { writeFileAtomic, writeJsonAtomic, withProjectTransaction, writeProjectFiles } = require("./project-storage.cjs");
+const { writeFileAtomic, withProjectTransaction, writeProjectFiles } = require("./project-storage.cjs");
 const vectorShards = require("./vector-shards.cjs");
 const creativeWorkspace = require("./creative-workspace.cjs");
 const operationJournal = require("./operation-journal.cjs");
@@ -66,7 +66,7 @@ async function convertDocumentToRichContent(projectPath, filePath, importId) {
     await ensureDir(originalDir);
     const originalFileName = await uniqueFileName(originalDir, fallbackTitle, ".docx");
     const originalDocxPath = path.join(originalDir, originalFileName);
-    await fs.copyFile(filePath, originalDocxPath);
+    await writeFileAtomic(originalDocxPath, await fs.readFile(filePath));
     let imageIndex = 0;
     const result = await mammoth.convertToHtml(
       { path: filePath },

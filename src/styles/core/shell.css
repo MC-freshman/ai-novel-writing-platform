@@ -1,0 +1,246 @@
+.app-shell {
+  height: 100vh;
+  display: grid;
+  grid-template-rows: 48px 1fr 28px;
+  background: var(--bg);
+}
+
+.topbar {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(0, auto) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  z-index: 20;
+}
+
+.brand,
+.menu,
+.top-actions,
+.chat-header > div,
+.section-heading,
+.form-actions,
+.editor-tools,
+.pane-tabs {
+  display: flex;
+  align-items: center;
+}
+
+.brand {
+  gap: 9px;
+  min-width: 0;
+  font-weight: 700;
+}
+
+.brand span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menu,
+.top-actions {
+  gap: 6px;
+}
+
+.menu {
+  min-width: 0;
+  overflow: visible;
+  position: relative;
+}
+
+.menu button,
+.top-actions button,
+.editor-tools button,
+.section-heading button,
+.chat-header button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.menu button {
+  flex: 0 0 auto;
+  min-width: max-content;
+  min-height: 30px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.top-more-actions {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.top-more-actions summary {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  list-style: none;
+}
+
+.top-more-actions summary::-webkit-details-marker {
+  display: none;
+}
+
+.top-more-actions[open] summary,
+.top-more-actions summary:hover {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+}
+
+.top-more-menu {
+  position: absolute;
+  top: calc(100% + 7px);
+  right: 0;
+  z-index: 30;
+  min-width: 168px;
+  display: grid;
+  gap: 5px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.top-more-menu button {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.top-actions button,
+.editor-tools button,
+.section-heading button,
+.chat-header button,
+.chat-input button {
+  width: 36px;
+  padding: 0;
+}
+
+.top-actions .ai-chat-shortcut {
+  width: auto;
+  min-width: max-content;
+  gap: 5px;
+  padding: 0 10px;
+  color: var(--accent-strong);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+}
+
+.ai-chat-shortcut span {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.workspace {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 280px 6px minmax(380px, 1fr) 6px 520px;
+  gap: 0;
+}
+
+.workspace.ai-expanded .center-pane {
+  min-width: 0;
+}
+
+.app-shell.focus .workspace {
+  grid-template-columns: minmax(520px, 1fr);
+}
+
+.left-pane,
+.right-pane,
+.center-pane {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.left-pane {
+  container-type: inline-size;
+  container-name: left-pane;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.pane-resizer {
+  min-width: 6px;
+  background: color-mix(in srgb, var(--line) 45%, transparent);
+  cursor: col-resize;
+  position: relative;
+}
+
+.pane-resizer::after {
+  content: "";
+  position: absolute;
+  inset: 0 2px;
+  background: transparent;
+}
+
+.pane-resizer:hover,
+body.resizing .pane-resizer {
+  background: color-mix(in srgb, var(--accent) 42%, transparent);
+}
+
+.editor-resizer {
+  border-left: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+}
+
+body.resizing {
+  user-select: none;
+  cursor: col-resize;
+}
+
+.pane-tabs {
+  gap: 3px;
+  padding: 7px;
+  border-bottom: 1px solid var(--line);
+}
+
+.pane-tabs button {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+  min-height: 28px;
+  padding: 0 4px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+@container left-pane (max-width: 420px) {
+  .pane-tabs button {
+    gap: 0;
+    font-size: 0;
+  }
+}
+
+.pane-tabs button.active,
+.chapter-item.active,
+.manager-list button.active,
+.editor-tools button.active {
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  border-color: color-mix(in srgb, var(--accent) 34%, transparent);
+  color: var(--accent-strong);
+}
+

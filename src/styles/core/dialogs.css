@@ -1,0 +1,227 @@
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(0 0 0 / 35%);
+}
+
+.settings-modal {
+  width: min(980px, 96vw);
+  max-height: 92vh;
+  display: grid;
+  grid-template-rows: auto 1fr auto auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.quick-panel-modal {
+  width: min(720px, 94vw);
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.quick-panel-modal header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.quick-panel-modal header div,
+.quick-panel-grid button,
+.quick-panel-actions button {
+  display: flex;
+  align-items: center;
+}
+
+.quick-panel-modal header div {
+  gap: 8px;
+}
+
+.quick-panel-modal header button {
+  min-height: 30px;
+  padding: 0 10px;
+}
+
+.quick-panel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: 8px;
+}
+
+.quick-panel-grid button {
+  min-height: 58px;
+  justify-content: center;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px;
+  font-size: 12px;
+}
+
+.story-center-modal {
+  position: relative;
+  width: min(1120px, 94vw);
+  height: min(820px, 90vh);
+  min-width: min(720px, 92vw);
+  min-height: min(520px, 82vh);
+  resize: both;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.story-center-header {
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.story-center-header > div,
+.story-center-summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.story-center-header > button,
+.board-item-actions > button,
+.task-center-drawer > header > button {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+}
+
+.story-center-summary {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.story-center-summary .warning {
+  color: #a66a19;
+}
+
+.story-center-tabs {
+  display: flex;
+  gap: 3px;
+  padding: 6px 10px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 82%, var(--bg));
+}
+
+.story-center-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.story-center-tabs button {
+  min-height: 29px;
+  flex: 0 0 auto;
+  padding: 0 9px;
+  border-color: transparent;
+  background: transparent;
+  font-size: 12px;
+}
+
+.story-center-tabs button.active {
+  border-color: var(--line);
+  color: var(--accent-strong);
+  background: var(--panel);
+}
+
+.story-center-toolbar {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.story-center-toolbar button,
+.story-center-toolbar summary,
+.snapshot-toolbar button,
+.snapshot-toolbar select,
+.board-view > header button {
+  min-height: 29px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.story-center-toolbar > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.story-center-toolbar details {
+  position: relative;
+}
+
+.story-center-toolbar summary {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.story-center-toolbar details > div {
+  position: absolute;
+  z-index: 4;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 150px;
+  display: grid;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.story-center-body {
+  grid-row: 4;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.creative-workspace-view {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  background: var(--bg);
+}
+
+.creative-workspace-tabs,
+.creative-workspace-toolbar,
+.workspace-action-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+

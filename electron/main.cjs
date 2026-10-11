@@ -1,40 +1,40 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, shell } = require("electron");
+const { app, BrowserWindow, Menu, shell } = require("electron");
 const path = require("node:path");
-const fs = require("node:fs/promises");
-const { createWriteStream, existsSync } = require("node:fs");
-const { Readable } = require("node:stream");
-const { pipeline } = require("node:stream/promises");
-const crypto = require("node:crypto");
-const { fileURLToPath, pathToFileURL } = require("node:url");
-const { toUSVString } = require("node:util");
-const AdmZip = require("adm-zip");
-const mammoth = require("./services/word-import.cjs");
-const { parse: parseHtml } = require("node-html-parser");
-const { writeFileAtomic, writeJsonAtomic, withProjectTransaction, writeProjectFiles } = require("./services/project-storage.cjs");
-const { consumeChatStream } = require("./services/chat-stream.cjs");
+require("node:fs/promises");
+require("node:fs");
+require("node:stream");
+require("node:stream/promises");
+require("node:crypto");
+require("node:url");
+require("node:util");
+require("adm-zip");
+require("./services/word-import.cjs");
+require("node-html-parser");
+require("./services/project-storage.cjs");
+require("./services/chat-stream.cjs");
 const storyState = require("./services/story-state.cjs");
-const { PersistentTaskCenter } = require("./services/task-center.cjs");
+require("./services/task-center.cjs");
 const projectSnapshots = require("./services/project-snapshots.cjs");
-const vectorShards = require("./services/vector-shards.cjs");
-const creativeWorkspace = require("./services/creative-workspace.cjs");
-const novelNetworkImport = require("./services/novel-network-import.cjs");
-const { normalizeNetwork } = require("./services/novel-network.cjs");
+require("./services/vector-shards.cjs");
+require("./services/creative-workspace.cjs");
+require("./services/novel-network-import.cjs");
+require("./services/novel-network.cjs");
 const operationJournal = require("./services/operation-journal.cjs");
-const projectMigrations = require("./services/project-migrations.cjs");
-const retrievalPlanner = require("./services/retrieval-planner.cjs");
-const novelAgent = require("./services/novel-agent.cjs");
-const knowledgeFreshness = require("./services/knowledge-freshness.cjs");
-const creativeStatistics = require("./services/creative-statistics.cjs");
-const windowsCredentials = require("./services/windows-credentials.cjs");
-const exchangeSecurity = require("./services/project-exchange-security.cjs");
-const projectArchives = require("./services/project-archives.cjs");
-const { assertTrustedSender, validateIpcArguments } = require("./services/ipc-security.cjs");
-const docxFidelity = require("./services/docx-fidelity.cjs");
-const releasePrivacy = require("./services/release-privacy.cjs");
+require("./services/project-migrations.cjs");
+require("./services/retrieval-planner.cjs");
+require("./services/novel-agent.cjs");
+require("./services/knowledge-freshness.cjs");
+require("./services/creative-statistics.cjs");
+require("./services/windows-credentials.cjs");
+require("./services/project-exchange-security.cjs");
+require("./services/project-archives.cjs");
+require("./services/ipc-security.cjs");
+require("./services/docx-fidelity.cjs");
+require("./services/release-privacy.cjs");
 const { initLogger, log } = require("./services/logger.cjs");
-const { verifyIpcContract } = require("./services/ipc-contract.cjs");
-const { channelsRequiringHandler } = require("../shared/contracts/ipc-channels.cjs");
-const { state, sendRendererEvent } = require("./services/runtime-state.cjs");
+require("./services/ipc-contract.cjs");
+require("../shared/contracts/ipc-channels.cjs");
+const { state } = require("./services/runtime-state.cjs");
 const { getConfigPath, getChapterPath, contentToPlainText, loadCharacters, loadWorldDocs, loadChapterContent, defaultConfig, getKnowledgeRole } = require("./services/project-files.cjs");
 const { getDefaultProjectPath, assertExpectedChapterRevision, inspectProjectHealth, activateProjectSession, finishProjectSessions } = require("./services/project-config.cjs");
 const { getKnowledgeSyncStatus, repairKnowledgeSync, getMaintenanceDiagnostics, repairMaintenance, chunkText, compatibleVectorScore, loadVectorStore, loadKnowledgeSummaries, indexSource, rebuildIndex, searchRelevantChunks } = require("./services/knowledge-index.cjs");
@@ -47,24 +47,7 @@ const { buildCreativeStatistics, executeBackgroundTask } = require("./services/t
 const { exportChapterToDocx, exportBookDocumentsToDirectory, exportBookToDocx } = require("./services/docx-export.cjs");
 const { ensureProjectStructure, loadConfig, saveConfig, buildAppState, importDocumentIntoProject, applySafeRevision, applySafeRevisionPart, buildProjectExchangeArchive, createBackup, indexSources, updateKnowledgeSummaries } = require("./services/project-ops.cjs");
 const { registerIpcHandlers } = require("./ipc/handlers.cjs");
-const {
-  AlignmentType,
-  CommentRangeEnd,
-  CommentRangeStart,
-  CommentReference,
-  DeletedTextRun,
-  Document,
-  HeadingLevel,
-  ImageRun,
-  InsertedTextRun,
-  Packer,
-  Paragraph,
-  Table,
-  TableCell,
-  TableRow,
-  TextRun,
-  WidthType,
-} = require("docx");
+require("docx");
 
 process.on("uncaughtException", (error) => {
   log("process", "error", "uncaughtException", { error });

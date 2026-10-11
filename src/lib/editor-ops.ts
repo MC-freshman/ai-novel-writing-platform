@@ -174,7 +174,7 @@ export const CollapsibleHeadings = Extension.create<Record<string, never>, { fol
   },
 
   addProseMirrorPlugins() {
-    const extension = this;
+    const storage = this.storage;
     return [
       new Plugin({
         key: new PluginKey("collapsibleHeadings"),
@@ -193,7 +193,7 @@ export const CollapsibleHeadings = Extension.create<Record<string, never>, { fol
 
             const ranges: Array<{ from: number; to: number; key: string }> = [];
             headings.forEach((heading, index) => {
-              if (!extension.storage.folded.has(heading.key)) return;
+              if (!storage.folded.has(heading.key)) return;
               const nextPeer = headings.slice(index + 1).find((item) => item.level <= heading.level);
               const from = heading.pos + heading.size;
               const to = nextPeer ? nextPeer.pos : state.doc.content.size;
@@ -203,7 +203,7 @@ export const CollapsibleHeadings = Extension.create<Record<string, never>, { fol
             const isHidden = (pos: number) => ranges.some((range) => pos >= range.from && pos < range.to);
             const decorations = headings.flatMap((heading) => {
               if (isHidden(heading.pos)) return [];
-              const folded = extension.storage.folded.has(heading.key);
+              const folded = storage.folded.has(heading.key);
               const button = Decoration.widget(
                 heading.pos + 1,
                 () => {
@@ -238,10 +238,10 @@ export const CollapsibleHeadings = Extension.create<Record<string, never>, { fol
               event.preventDefault();
               const key = button.dataset.foldKey;
               if (!key) return true;
-              if (extension.storage.folded.has(key)) {
-                extension.storage.folded.delete(key);
+              if (storage.folded.has(key)) {
+                storage.folded.delete(key);
               } else {
-                extension.storage.folded.add(key);
+                storage.folded.add(key);
               }
               view.dispatch(view.state.tr.setMeta("collapsibleHeadings", Date.now()));
               return true;

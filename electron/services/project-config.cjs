@@ -1,9 +1,9 @@
-// 本文件由 P2 重构自 electron/main.cjs 机械搬迁（scripts/refactor-split.cjs），逻辑未改动。
+// 本文件源自P2主进程拆分；后续维护与行为修复见Git历史。
 "use strict";
 
-const { app, BrowserWindow, dialog, ipcMain, Menu, shell } = require("electron");
-const { createWriteStream, existsSync } = require("node:fs");
-const { writeFileAtomic, writeJsonAtomic, withProjectTransaction, writeProjectFiles } = require("./project-storage.cjs");
+const { app } = require("electron");
+const { existsSync } = require("node:fs");
+const { writeFileAtomic, writeProjectFiles } = require("./project-storage.cjs");
 const storyState = require("./story-state.cjs");
 const projectSnapshots = require("./project-snapshots.cjs");
 const creativeWorkspace = require("./creative-workspace.cjs");
@@ -11,7 +11,7 @@ const operationJournal = require("./operation-journal.cjs");
 const projectMigrations = require("./project-migrations.cjs");
 const novelAgent = require("./novel-agent.cjs");
 const { DEFAULT_PROJECT_NAME, MAX_CHAT_TOKENS, MAX_RETRIEVAL_TOP_K, MAX_RETRIEVAL_SCAN_K, DEFAULT_RETRIEVAL_SCAN_K } = require("./constants.cjs");
-const { state, sendRendererEvent } = require("./runtime-state.cjs");
+const { state } = require("./runtime-state.cjs");
 const __dep0 = require("./project-files.cjs");
 const __dep1 = require("./credentials.cjs");
 const __dep2 = require("./project-content.cjs");

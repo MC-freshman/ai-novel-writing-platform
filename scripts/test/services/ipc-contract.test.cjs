@@ -2,7 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
-const { spawnSync } = require("node:child_process");
+require("node:child_process");
 
 const workspace = path.resolve(__dirname, "..", "..", "..");
 const contract = require("../../../shared/contracts/ipc-channels.cjs");

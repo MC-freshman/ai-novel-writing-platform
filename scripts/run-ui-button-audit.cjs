@@ -1,10 +1,10 @@
 const fs = require("node:fs");
+const { extractButtonElements } = require("./lib/button-audit.cjs");
 const path = require("node:path");
 
 const WORKSPACE = path.resolve(__dirname, "..");
 const SOURCE_ROOT = path.join(WORKSPACE, "src");
 const PRELOAD_PATH = path.join(WORKSPACE, "electron", "preload.cjs");
-const MAIN_PATH = path.join(WORKSPACE, "electron", "main.cjs");
 const RUN_ID = new Date().toISOString().replace(/[:.]/g, "-");
 const REPORT_DIR = path.join(WORKSPACE, ".test-runs", `ui_button_audit_${RUN_ID}`);
 const REPORT_PATH = path.join(REPORT_DIR, "UI按钮与功能入口审计报告.md");
@@ -50,61 +50,6 @@ function stripLabel(raw) {
     .trim();
 }
 
-function isInsideForm(source, index) {
-  const before = source.slice(0, index);
-  return before.lastIndexOf("<form") > before.lastIndexOf("</form>");
-}
-
-function extractButtonElements(source) {
-  const items = [];
-  const regex = /<button\b/g;
-  let match;
-  while ((match = regex.exec(source))) {
-    const start = match.index;
-    const tagEnd = findTagEnd(source, start);
-    const tag = source.slice(start, tagEnd + 1);
-    regex.lastIndex = tagEnd + 1;
-    const close = source.indexOf("</button>", regex.lastIndex);
-    const body = close >= 0 ? source.slice(regex.lastIndex, close) : "";
-    items.push({
-      tag,
-      body,
-      index: start,
-      line: lineOf(source, start),
-      label: stripLabel(body),
-      insideForm: isInsideForm(source, start),
-    });
-  }
-  return items;
-}
-
-function findTagEnd(source, start) {
-  let braceDepth = 0;
-  let quote = "";
-  for (let index = start; index < source.length; index += 1) {
-    const char = source[index];
-    const previous = source[index - 1];
-    if (quote) {
-      if (char === quote && previous !== "\\") quote = "";
-      continue;
-    }
-    if (char === '"' || char === "'" || char === "`") {
-      quote = char;
-      continue;
-    }
-    if (char === "{") {
-      braceDepth += 1;
-      continue;
-    }
-    if (char === "}") {
-      braceDepth = Math.max(0, braceDepth - 1);
-      continue;
-    }
-    if (char === ">" && braceDepth === 0) return index;
-  }
-  return start;
-}
-
 function extractSummaryElements(source) {
   const items = [];
   const regex = /<summary\b[\s\S]*?>([\s\S]*?)<\/summary>/g;
@@ -135,7 +80,7 @@ function auditButtons() {
 
     const hasTitle = /\btitle=|\baria-label=/.test(button.tag);
     const hasTextLabel = button.label.length > 0;
-    const hasDynamicLabel = /\{\s*(action|prompt|status|item\.label|mode\.label|group\.category|card\.name|doc\.title)\s*\}/.test(button.body) || /\{\s*saving\s*\?/.test(button.body);
+    const hasDynamicLabel = button.dynamicLabel;
     if (!hasTitle && !hasTextLabel && !hasDynamicLabel) {
       missingAccessibleName.push(`${button.file}:${button.line}：${button.tag.slice(0, 120)}`);
     }
@@ -220,7 +165,7 @@ function auditFeatureCoverage() {
 }
 
 function auditDuplicateLabels() {
-  const buttons = sourceFiles.flatMap((item) => extractButtonElements(item.source).map((button) => ({ ...button, file: item.file }))).filter((button) => button.label);
+  const buttons = sourceFiles.flatMap((item) => extractButtonElements(item.source).map((button) => ({ ...button, file: item.file }))).filter((button) => button.label && !button.dynamicLabel);
   const map = new Map();
   for (const button of buttons) {
     const key = button.label.replace(/\s+/g, "");

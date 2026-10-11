@@ -1,4 +1,4 @@
-// 本文件由 P2 重构自 electron/main.cjs 机械搬迁（scripts/refactor-split.cjs），逻辑未改动。
+// 本文件源自P2主进程拆分；后续维护与行为修复见Git历史。
 "use strict";
 
 const storyState = require("./story-state.cjs");
@@ -6,7 +6,7 @@ const creativeWorkspace = require("./creative-workspace.cjs");
 const retrievalPlanner = require("./retrieval-planner.cjs");
 const novelAgent = require("./novel-agent.cjs");
 const { MAX_RETRIEVAL_TOP_K, STRUCTURING_CONTEXT_CHAR_BUDGET } = require("./constants.cjs");
-const { state, sendRendererEvent } = require("./runtime-state.cjs");
+require("./runtime-state.cjs");
 const __dep0 = require("./project-files.cjs");
 const __dep1 = require("./project-config.cjs");
 const __dep2 = require("./knowledge-index.cjs");

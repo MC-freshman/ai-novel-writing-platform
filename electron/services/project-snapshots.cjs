@@ -1,6 +1,6 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
-const { ensureDir, readJson, safeFileSegment, sha256, stableId, writeJsonAtomic, writeFileAtomic, withProjectWriteQueue } = require("./project-storage.cjs");
+const { ensureDir, readJson, safeFileSegment, sha256, stableId, writeJsonAtomic, writeFileAtomic, withProjectWriteQueue, removeProjectFile } = require("./project-storage.cjs");
 
 const MANAGED_ROOTS = ["novel.config.json", "chapters", "characters", "worldbuilding", "materials", "analysis", "assets"];
 
@@ -282,7 +282,7 @@ async function restoreSnapshot(projectPath, snapshotId, options = {}) {
       // Remove post-snapshot files only after all requested writes have succeeded.
       for (const item of mutations.slice(planned.length)) {
         changed.push(item);
-        await fs.rm(item.targetPath, { force: true });
+        await removeProjectFile(projectPath, item.targetPath);
       }
     } catch (error) {
       const rollbackErrors = [];
@@ -293,7 +293,7 @@ async function restoreSnapshot(projectPath, snapshotId, options = {}) {
             throw readError;
           });
           if (item.previousPath === null) {
-            if (current !== null) await fs.rm(item.targetPath, { force: true });
+            if (current !== null) await removeProjectFile(projectPath, item.targetPath);
           } else if (current === null || sha256(current) !== item.previousHash) {
             await writeFileAtomic(item.targetPath, await fs.readFile(item.previousPath));
           }

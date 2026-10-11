@@ -7,6 +7,7 @@ const {
   sha256,
   stableId,
   writeJsonAtomic,
+  removeProjectFile,
 } = require("./project-storage.cjs");
 
 const STORY_STATE_VERSION = 2;
@@ -397,7 +398,7 @@ function mergeEvidence(...groups) {
 }
 
 function foreshadowMergeKey(item) {
-  const title = String(item?.title || "").replace(/[\s，。！？、,.!?：:；;“”"'《》()（）\[\]]/g, "").toLowerCase();
+  const title = String(item?.title || "").replace(/[\s，。！？、,.!?：:；;“”"'《》()（）[\]]/g, "").toLowerCase();
   return title.length >= 4 ? title : `${title}|${String(item?.description || "").slice(0, 28)}`;
 }
 
@@ -468,7 +469,7 @@ async function saveChapterLedger(projectPath, ledger) {
     const data = await readJson(statePath, null);
     if (!data?.states?.some((item) => item.chapterId === ledger.chapterId)) continue;
     const states = data.states.filter((item) => item.chapterId !== ledger.chapterId);
-    if (!states.length) await fs.rm(statePath, { force: true });
+    if (!states.length) await removeProjectFile(projectPath, statePath);
     else await writeJsonAtomic(statePath, { ...data, updatedAt: nowIso(), states });
   }
   for (const state of nextLedger.characterStates || []) {
@@ -506,7 +507,7 @@ async function saveChapterLedger(projectPath, ledger) {
 async function removeChapterLedger(projectPath, chapterId) {
   await ensureStoryState(projectPath);
   const ledger = await readJson(getLedgerPath(projectPath, chapterId), null);
-  await fs.rm(getLedgerPath(projectPath, chapterId), { force: true });
+  await removeProjectFile(projectPath, getLedgerPath(projectPath, chapterId));
   ledgerReadCache.delete(getLedgerPath(projectPath, chapterId));
   const foreshadowData = await readJson(getForeshadowsPath(projectPath), { version: STORY_STATE_VERSION, items: [] });
   const items = (foreshadowData.items || []).filter((item) => item.plantedAt?.[0]?.chapterId !== chapterId);
@@ -535,7 +536,7 @@ async function removeChapterLedger(projectPath, chapterId) {
     const data = await readJson(statePath, null);
     if (!data?.states?.some((item) => item.chapterId === chapterId)) continue;
     const states = data.states.filter((item) => item.chapterId !== chapterId);
-    if (!states.length) await fs.rm(statePath, { force: true });
+    if (!states.length) await removeProjectFile(projectPath, statePath);
     else await writeJsonAtomic(statePath, { ...data, updatedAt: nowIso(), states });
   }
 }

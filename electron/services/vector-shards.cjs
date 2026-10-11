@@ -1,6 +1,6 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
-const { ensureDir, readJson, sha256, writeJsonAtomic, withProjectWriteQueue } = require("./project-storage.cjs");
+const { ensureDir, readJson, sha256, writeJsonAtomic, withProjectWriteQueue, removeProjectFile } = require("./project-storage.cjs");
 
 function nowIso() {
   return new Date().toISOString();
@@ -170,7 +170,7 @@ async function replaceSources(projectPath, entriesBySource) {
   const retainedFiles = new Set(sources.map((item) => item.fileName));
   await Promise.all(previous.sources
     .filter((item) => item.fileName && !retainedFiles.has(item.fileName))
-    .map((item) => fs.rm(path.join(getShardDir(projectPath), item.fileName), { force: true }).catch(() => null)));
+    .map((item) => removeProjectFile(projectPath, path.join(getShardDir(projectPath), item.fileName)).catch(() => null)));
   return next;
 }
 
@@ -199,7 +199,7 @@ async function removeSource(projectPath, sourceId) {
   const target = manifest.sources.find((item) => String(item.sourceId) === String(sourceId));
   const sources = manifest.sources.filter((item) => String(item.sourceId) !== String(sourceId));
   const next = await writeManifest(projectPath, sources);
-  if (target?.fileName) await fs.rm(path.join(getShardDir(projectPath), target.fileName), { force: true }).catch(() => null);
+  if (target?.fileName) await removeProjectFile(projectPath, path.join(getShardDir(projectPath), target.fileName)).catch(() => null);
   return next;
 }
 

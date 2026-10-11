@@ -58,7 +58,7 @@ function appendLine(line) {
 
 async function pruneOldLogs(directory = logDir) {
   if (!directory) return { removed: 0 };
-  let entries = [];
+  let entries;
   try { entries = await fs.readdir(directory); } catch { return { removed: 0 }; }
   const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
   let removed = 0;
