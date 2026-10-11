@@ -159,5 +159,5 @@ export function applyProjectState(stores: AppStores, next: AppState) {
     stores.editor.store.setState(defaults.editor.store.getState(), true);
     stores.navigation.store.setState(defaults.navigation.store.getState(), true);
   }
-  stores.project.store.setState({ state: next, selectedChapter: next.selectedChapter, chapterContent: next.chapterContent, chapterTitle: next.selectedChapter?.title || "", chapterVolume: next.selectedChapter?.volume || "卷一", chapterRevision: next.chapterRevision || "", dirty: false, recoveryDrafts: changedProject ? [] : previous.recoveryDrafts, projectEpoch: previous.projectEpoch + (changedProject ? 1 : 0) });
+  stores.project.store.setState({ state: next, selectedChapter: next.selectedChapter, chapterContent: next.chapterContent, chapterTitle: next.selectedChapter?.title || "", chapterVolume: next.selectedChapter?.volume || "卷一", chapterRevision: next.chapterRevision || "", dirty: false, saving: changedProject ? false : previous.saving, recoveryDrafts: changedProject ? [] : previous.recoveryDrafts, projectEpoch: previous.projectEpoch + (changedProject ? 1 : 0) });
 }

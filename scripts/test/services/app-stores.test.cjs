@@ -38,6 +38,7 @@ test("切项目清空会话和任务，旧项目异步结果失效，布局保�
   stores.chat.setters.chatMessages([{ id: "old", content: "A私有内容" }]);
   stores.tasks.setters.backgroundTasks([{ id: "A-task" }]);
   stores.layout.setters.leftWidth(310);
+  stores.project.setters.saving(true);
   applyProjectState(stores, project("B"));
   assert.equal(isCurrentEpoch(stores, epoch), false);
   assert.deepEqual(stores.chat.store.getState().chatMessages, []);
@@ -45,6 +46,7 @@ test("切项目清空会话和任务，旧项目异步结果失效，布局保�
   assert.deepEqual(stores.tasks.store.getState().backgroundTasks, []);
   assert.equal(stores.layout.store.getState().leftWidth, 310);
   assert.equal(stores.project.store.getState().chapterRevision, "B修订");
+  assert.equal(stores.project.store.getState().saving, false);
 });
 test("同项目刷新不取消会话，切章后的草稿及修订指向新章节", () => {
   const stores = createAppStores();

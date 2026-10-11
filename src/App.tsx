@@ -118,7 +118,10 @@ export default function App() {
   const applyAppState = useCallback((nextState: AppState) => {
     chapterLoadRequestRef.current += 1;
     const oldRequest = stores.chat.store.getState().activeAiRequestId;
-    if (oldRequest && stores.project.store.getState().state?.projectPath !== nextState.projectPath) void window.novelAPI.cancelAI(oldRequest).catch(() => null);
+    if (stores.project.store.getState().state?.projectPath !== nextState.projectPath) {
+      savePromiseRef.current = null;
+      if (oldRequest) void window.novelAPI.cancelAI(oldRequest).catch(() => null);
+    }
     applyProjectState(stores, nextState);
     document.documentElement.dataset.theme = nextState.config.ui.theme;
     setDirty(false);

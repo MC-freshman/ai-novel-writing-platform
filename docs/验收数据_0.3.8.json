@@ -1,10 +1,10 @@
 {
   "version": "0.3.8",
-  "generatedAt": "2026-10-11T09:50:07.983Z",
+  "generatedAt": "2026-10-11T10:00:51.672Z",
   "baseline": "a884acd8028ae7bc63c5d6a6a762bc66ad07c24e",
   "quality": {
-    "generatedAt": "2026-10-11T09:49:29.748Z",
-    "revision": "a884acd8028ae7bc63c5d6a6a762bc66ad07c24e",
+    "generatedAt": "2026-10-11T09:58:36.386Z",
+    "revision": "7004f9eb9ebb02c2e2ea78c538ad700464bb467a",
     "workingTreeDirty": true,
     "errors": 0,
     "warnings": 0,
@@ -321,7 +321,7 @@
         "match": true
       },
       {
-        "file": "dist/assets/index-CpHR5QJI.js",
+        "file": "dist/assets/index-CbwzsRwh.js",
         "match": true
       },
       {
@@ -345,6 +345,7 @@
       "实际Electron流式追加、取消、部分内容保留",
       "取消之后能继续新会话请求，旧内容保留",
       "实际切换两个合成项目：旧成功/失败回包不污染新会话，不清除新请求运行状态（IPC延迟注入）",
+      "旧项目保存已落盘但回包延迟：新项目独立保存可用，旧回包不改变新项目状态",
       "当前写作和对话界面的实际AX树按钮均有名称"
     ]
   },
@@ -364,19 +365,19 @@
   "releaseSha256": [
     {
       "name": "AI-Novel-Writing-Platform-Setup-0.3.8-x64.exe",
-      "sha256": "948b281d664a7f19c6e7241f56862849ba19880a6b85516dca1bc7e5c570770f"
+      "sha256": "c16f3f79c1f1055502ed6074ae9eb4132ad9e01a7ea1554b5e5daa7e4b0c2f97"
     },
     {
       "name": "AI-Novel-Writing-Platform-Portable-0.3.8-x64.exe",
-      "sha256": "6f7b315e72b42525240ae8188b5ee5a0bdeacb55672b09150ed9f510ad68748e"
+      "sha256": "afa164cc1059b3c9195c8cfbf380d8399969ae4e53a62893cbabfe571a3861ed"
     },
     {
       "name": "AI-Novel-Writing-Platform-Setup-0.3.8-x64.exe.blockmap",
-      "sha256": "95a18e14af9251b0b05b0ef41df5e633a712bce3e59dcaaa03961b400a81846a"
+      "sha256": "b2a9f63a85634ed70af4abac20787c15f7a0a1695f78872dad1bff1a69042a03"
     },
     {
       "name": "latest.yml",
-      "sha256": "072b2fa461b9ecf05acd6f8fd1f36aad1a534773b5509802e0e841de40f847a2"
+      "sha256": "e6e7dd6c82d761a6649fc13d679befdb9419d871d24223b64dd7eb8a36182823"
     },
     {
       "name": "README.md",
