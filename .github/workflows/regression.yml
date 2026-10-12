@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   regression:
     runs-on: windows-latest
@@ -15,9 +18,20 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
+      - name: 安装 Electron 运行时
+        shell: pwsh
+        run: |
+          Remove-Item Env:ELECTRON_SKIP_BINARY_DOWNLOAD -ErrorAction SilentlyContinue
+          if (-not (Test-Path node_modules/electron/dist/electron.exe)) {
+            node node_modules/electron/install.js
+            if ($LASTEXITCODE -ne 0) { throw 'Electron 运行时下载失败。' }
+          }
+          if (-not (Test-Path node_modules/electron/dist/electron.exe)) { throw 'Electron 运行时未安装。' }
       - run: npm run test:regression
       - run: npm run typecheck:electron
       - run: npm run check:services
+      - run: npm run check:modules
+      - run: npm audit --omit=dev --audit-level=low
       - run: npm run test:services:coverage
       - run: npm run lint
       - run: npm run check:quality
@@ -32,5 +46,51 @@ jobs:
         with:
           name: regression-evidence
           path: .test-runs/
+          include-hidden-files: true
+          if-no-files-found: error
+  installer:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: 初始化安装验收证据目录
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path .test-runs/installer | Out-Null
+      - name: 安装 Electron 运行时
+        shell: pwsh
+        run: |
+          Remove-Item Env:ELECTRON_SKIP_BINARY_DOWNLOAD -ErrorAction SilentlyContinue
+          if (-not (Test-Path node_modules/electron/dist/electron.exe)) {
+            node node_modules/electron/install.js
+            if ($LASTEXITCODE -ne 0) { throw 'Electron 运行时下载失败。' }
+          }
+          if (-not (Test-Path node_modules/electron/dist/electron.exe)) { throw 'Electron 运行时未安装。' }
+      - run: npm run build
+      - run: npm run scan:privacy
+      - run: npx --no-install electron-builder --win nsis --config.electronDist=node_modules/electron/dist
+      - name: 准备安装器目录并下载0.3.8安装器
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path .test-runs/installer-input | Out-Null
+          gh release download v0.3.8 --repo MC-freshman/ai-novel-writing-platform --pattern '*Setup*0.3.8*x64.exe' --dir .test-runs/installer-input
+      - name: 安装、升级与卸载
+        shell: pwsh
+        run: |
+          $old = (Get-ChildItem .test-runs/installer-input/*Setup*.exe).FullName
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $current = (Get-ChildItem "release/*Setup*$version*x64.exe").FullName
+          ./scripts/test-installer.ps1 -PreviousInstaller $old -CurrentInstaller $current
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: installer-evidence
+          path: .test-runs/installer/
           include-hidden-files: true
           if-no-files-found: error

@@ -23,6 +23,17 @@ const preloadSource = fs.readFileSync(PRELOAD_PATH, "utf8");
 const mainSource = ["main.cjs", path.join("ipc", "handlers.cjs")]
   .map((relative) => fs.readFileSync(path.join(WORKSPACE, "electron", relative), "utf8"))
   .join("\n");
+function collectIpcDomains(directory) {
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const file = path.join(directory, entry.name);
+    return entry.isDirectory()
+      ? collectIpcDomains(file)
+      : entry.name.endsWith(".cjs")
+        ? [fs.readFileSync(file, "utf8")]
+        : [];
+  });
+}
+const registeredDomainSource = collectIpcDomains(path.join(WORKSPACE, "electron", "ipc", "domains")).join("\n");
 
 const results = [];
 
@@ -110,7 +121,7 @@ function auditApiBindings() {
     name: match[1],
     channel: match[2],
   }));
-  const handledChannels = new Set([...mainSource.matchAll(/(?:ipcMain\.handle|registerIpcHandler)\(["']([^"']+)["']/g)].map((match) => match[1]));
+  const handledChannels = new Set([...`${mainSource}\n${registeredDomainSource}`.matchAll(/(?:ipcMain\.handle|registerIpcHandler)\(\s*["']([^"']+)["']/g)].map((match) => match[1]));
 
   const exposedSet = new Set(exposedApiNames);
   const missingPreload = usedApiNames.filter((name) => !exposedSet.has(name));
