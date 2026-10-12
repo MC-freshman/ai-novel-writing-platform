@@ -4,6 +4,7 @@
     "scripts/test-core-regression.cjs"
   ],
   "analysis-tools.cjs": [
+    "scripts/test/services/analysis-behavior.test.cjs",
     "scripts/test-core-regression.cjs",
     "scripts/test-agent-platform.cjs"
   ],
@@ -140,6 +141,7 @@
     "scripts/test-plan-regression.cjs"
   ],
   "story-state.cjs": [
+    "scripts/test/services/story-behavior.test.cjs",
     "scripts/test-agent-platform.cjs"
   ],
   "task-center.cjs": [
@@ -147,6 +149,7 @@
     "scripts/test-agent-platform.cjs"
   ],
   "task-runtime.cjs": [
+    "scripts/test/services/task-runtime.test.cjs",
     "scripts/test-agent-platform.cjs",
     "scripts/test-plan-regression.cjs"
   ],
@@ -158,7 +161,59 @@
     "scripts/test/services/domain-behavior.test.cjs"
   ],
   "word-import.cjs": [
+    "scripts/test/services/word-dependency.test.cjs",
     "scripts/test-core-regression.cjs",
     "scripts/test-batch-docx-export.cjs"
+  ],
+  "analysis/consistency.cjs": [
+    "scripts/test/services/analysis-behavior.test.cjs"
+  ],
+  "analysis/dependencies.cjs": [
+    "scripts/test/services/analysis-behavior.test.cjs"
+  ],
+  "analysis/relationships.cjs": [
+    "scripts/test/services/analysis-behavior.test.cjs"
+  ],
+  "analysis/search.cjs": [
+    "scripts/test/services/analysis-behavior.test.cjs"
+  ],
+  "analysis/state.cjs": [
+    "scripts/test/services/analysis-behavior.test.cjs"
+  ],
+  "analysis/story-analysis.cjs": [
+    "scripts/test/services/analysis-behavior.test.cjs"
+  ],
+  "analysis/timeline.cjs": [
+    "scripts/test/services/analysis-behavior.test.cjs"
+  ],
+  "analysis/world-cards.cjs": [
+    "scripts/test/services/analysis-behavior.test.cjs"
+  ],
+  "story/boards.cjs": [
+    "scripts/test/services/story-behavior.test.cjs"
+  ],
+  "story/dependencies.cjs": [
+    "scripts/test/services/story-behavior.test.cjs"
+  ],
+  "story/extraction.cjs": [
+    "scripts/test/services/story-behavior.test.cjs"
+  ],
+  "story/facts.cjs": [
+    "scripts/test/services/story-behavior.test.cjs"
+  ],
+  "story/ledger.cjs": [
+    "scripts/test/services/story-behavior.test.cjs"
+  ],
+  "tasks/center.cjs": [
+    "scripts/test/services/task-runtime.test.cjs"
+  ],
+  "tasks/dependencies.cjs": [
+    "scripts/test/services/task-runtime.test.cjs"
+  ],
+  "tasks/execution.cjs": [
+    "scripts/test/services/task-runtime.test.cjs"
+  ],
+  "tasks/statistics.cjs": [
+    "scripts/test/services/task-runtime.test.cjs"
   ]
 }

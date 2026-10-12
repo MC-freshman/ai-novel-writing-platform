@@ -12,13 +12,6 @@ function readWorkspace(relative) {
   return fs.readFileSync(path.join(workspace, relative), "utf8");
 }
 
-function extractRegisteredChannels(mainText) {
-  const channels = new Set();
-  for (const m of mainText.matchAll(/registerIpcHandler\("([^"]+)"/g)) channels.add(m[1]);
-  for (const m of mainText.matchAll(/ipcMain\.on\("([^"]+)"/g)) channels.add(m[1]);
-  return channels;
-}
-
 function extractPreloadMappings(preloadText) {
   const methods = new Map();
   for (const m of preloadText.matchAll(/(\w+): \((\w*)\) => ipcRenderer\.invoke\("([^"]+)"(, (\w+))?\)/g)) {
@@ -42,16 +35,27 @@ test("契约自检函数：一致通过 / 缺失与未登记分别报告", () =>
   assert.throws(() => verifyIpcContract({ registered: [], contractChannels: ["x"], testMode: true }), /IPC 契约不一致/);
 });
 
-test("main/handlers 注册通道与契约精确一致（双向差集为零）", () => {
-  const registered = new Set([
-    ...[...extractRegisteredChannels(readWorkspace("electron/ipc/handlers.cjs"))],
-    ...[...extractRegisteredChannels(readWorkspace("electron/main.cjs"))],
-  ]);
+test("领域处理器实际注册与契约一致，无重复；每个invoke均拒绝不可信来源", async (t) => {
+  const { electron } = require("../helpers/service-fixture.cjs");
+  const { state } = require("../../../electron/services/runtime-state.cjs");
+  const oldHandle = electron.ipcMain.handle, oldOn = electron.ipcMain.on;
+  const previous = new Set(state.registeredIpcChannels);
+  const handlers = new Map(), registered = new Set();
+  state.registeredIpcChannels.clear();
+  t.after(() => {
+    electron.ipcMain.handle = oldHandle; electron.ipcMain.on = oldOn;
+    state.registeredIpcChannels.clear(); for (const channel of previous) state.registeredIpcChannels.add(channel);
+  });
+  const collect = (channel) => { assert.ok(!registered.has(channel), `重复注册: ${channel}`); registered.add(channel); };
+  electron.ipcMain.handle = (channel, callback) => { collect(channel); handlers.set(channel, callback); };
+  electron.ipcMain.on = (channel) => collect(channel);
+  require("../../../electron/ipc/handlers.cjs").registerIpcHandlers();
   const required = new Set(contract.channelsRequiringHandler());
   const missing = [...required].filter((c) => !registered.has(c));
   const unregistered = [...registered].filter((c) => !required.has(c));
   assert.deepEqual(missing, [], "契约要求但 main 未注册");
   assert.deepEqual(unregistered, [], "main 注册但契约未登记");
+  for (const [channel, callback] of handlers) await assert.rejects(callback({}), /IPC|来源|窗口/, `${channel}不得绕过来源检查`);
 });
 
 test("preload.cjs 与契约逐项一致（方法/通道/类型）", () => {
