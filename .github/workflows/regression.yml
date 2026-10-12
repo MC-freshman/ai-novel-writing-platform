@@ -72,7 +72,7 @@ jobs:
           if (-not (Test-Path node_modules/electron/dist/electron.exe)) { throw 'Electron 运行时未安装。' }
       - run: npm run build
       - run: npm run scan:privacy
-      - run: npx --no-install electron-builder --win nsis --config.electronDist=node_modules/electron/dist
+      - run: npx --no-install electron-builder --win nsis --config.electronDist=node_modules/electron/dist --publish never
       - name: 准备安装器目录并下载0.3.8安装器
         env:
           GH_TOKEN: ${{ github.token }}
