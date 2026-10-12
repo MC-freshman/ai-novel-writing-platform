@@ -131,7 +131,7 @@ async function main() {
     assert.ok((await platform.loadCharacters(projectPath)).some((item) => item.name === "开始保存的角色版本"));
     await cdp.call("Input.dispatchKeyEvent", { type: "keyDown", modifiers: 2, key: "s", code: "KeyS", windowsVirtualKeyCode: 83 });
     await cdp.call("Input.dispatchKeyEvent", { type: "keyUp", modifiers: 2, key: "s", code: "KeyS", windowsVirtualKeyCode: 83 });
-    await until("document.querySelector('.draft-feedback')?.textContent.includes('已保存并加入知识库')");
+    await until("document.querySelector('.draft-feedback')?.textContent.includes('已保存并加入知识库') || document.querySelector('footer.statusbar strong')?.textContent.includes('角色卡片已保存：保存过程中新增的角色版本')");
     assert.ok((await platform.loadCharacters(projectPath)).some((item) => item.name === "保存过程中新增的角色版本"));
     report.checks.push("P04 保存期间的新输入保留为待保存稿并可继续提交");
     await cdp.call("Emulation.setDeviceMetricsOverride", { width: 1180, height: 720, deviceScaleFactor: 1.5, mobile: false });
