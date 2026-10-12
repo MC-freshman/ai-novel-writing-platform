@@ -27,6 +27,15 @@ async function waitForTask(center, taskId, statuses, timeoutMs = 5000) {
   throw new Error(`等待任务状态超时：${[...expected].join("、")}`);
 }
 
+async function waitForTaskCenterIdle(center, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!center.running && center.controllers.size === 0) return;
+    await delay(10);
+  }
+  throw new Error("等待任务中心完成最后一次持久化超时。");
+}
+
 async function testStoryState(projectPath) {
   const chapter = { id: "chapter_1", title: "第一章", volume: "卷一", order: 0 };
   const characters = [{ id: "character_li", name: "李明" }];
@@ -129,9 +138,11 @@ async function testTaskCenter(projectPath) {
   const retried = await center.retry(original.id);
   const completed = await waitForTask(center, retried.id, ["已完成"]);
   assert.deepEqual(completed.result, { retried: true }, "重试应沿用原任务参数并保存结果");
+  await waitForTaskCenterIdle(center);
   const cleared = await center.clearHistory();
   assert.ok(cleared.removed >= 2, "任务中心应能批量清理已结束记录");
   assert.equal(cleared.tasks.length, 0, "批量清理后不得残留已结束任务");
+  await waitForTaskCenterIdle(center);
 
   const interruptedPath = path.join(projectPath, "interrupted", "analysis");
   await fs.mkdir(interruptedPath, { recursive: true });
