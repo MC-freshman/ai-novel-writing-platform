@@ -18,6 +18,15 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
+      - name: 安装 Electron 运行时
+        shell: pwsh
+        run: |
+          Remove-Item Env:ELECTRON_SKIP_BINARY_DOWNLOAD -ErrorAction SilentlyContinue
+          if (-not (Test-Path node_modules/electron/dist/electron.exe)) {
+            node node_modules/electron/install.js
+            if ($LASTEXITCODE -ne 0) { throw 'Electron 运行时下载失败。' }
+          }
+          if (-not (Test-Path node_modules/electron/dist/electron.exe)) { throw 'Electron 运行时未安装。' }
       - run: npm run test:regression
       - run: npm run typecheck:electron
       - run: npm run check:services
@@ -49,6 +58,18 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
+      - name: 初始化安装验收证据目录
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path .test-runs/installer | Out-Null
+      - name: 安装 Electron 运行时
+        shell: pwsh
+        run: |
+          Remove-Item Env:ELECTRON_SKIP_BINARY_DOWNLOAD -ErrorAction SilentlyContinue
+          if (-not (Test-Path node_modules/electron/dist/electron.exe)) {
+            node node_modules/electron/install.js
+            if ($LASTEXITCODE -ne 0) { throw 'Electron 运行时下载失败。' }
+          }
+          if (-not (Test-Path node_modules/electron/dist/electron.exe)) { throw 'Electron 运行时未安装。' }
       - run: npm run build
       - run: npm run scan:privacy
       - run: npx --no-install electron-builder --win nsis --config.electronDist=node_modules/electron/dist
