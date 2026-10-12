@@ -58,7 +58,13 @@ try {
   if ($uninstaller.Count -ne 1) { throw '无法唯一确定本次安装的卸载器。' }
   $uninstall = Start-Process -FilePath $uninstaller[0].FullName -ArgumentList @('/S', '/currentuser') -WindowStyle Hidden -PassThru
   if (-not $uninstall.WaitForExit(120000) -or $uninstall.ExitCode -ne 0) { throw '卸载失败或超时。' }
-  for ($attempt=0; $attempt -lt 60 -and (Test-Path -LiteralPath $newExecutable); $attempt++) { Start-Sleep -Milliseconds 250 }
+  for ($attempt=0; $attempt -lt 60; $attempt++) {
+    $executableRemains = Test-Path -LiteralPath $newExecutable
+    $registrationRemains = (Get-ProductRegistration).Count -gt 0
+    $shortcutRemains = (Test-Path -LiteralPath $desktopShortcut) -or (Test-Path -LiteralPath $startShortcut)
+    if (-not $executableRemains -and -not $registrationRemains -and -not $shortcutRemains) { break }
+    Start-Sleep -Milliseconds 250
+  }
   if (Test-Path -LiteralPath $newExecutable) { throw '卸载后仍有应用可执行文件。' }
   if ((Get-ProductRegistration).Count) { throw '卸载登记未移除。' }
   foreach ($shortcut in @($desktopShortcut, $startShortcut)) { if (Test-Path -LiteralPath $shortcut) { throw '卸载后快捷方式仍在。' } }
