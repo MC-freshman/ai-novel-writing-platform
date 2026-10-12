@@ -7,7 +7,7 @@ import { useDialogFocus } from "../hooks/useDialogFocus";
 import { CreativeWorkspace } from "../components/CreativeWorkspace";
 import type { CreativeWorkspaceTab } from "../components/CreativeWorkspace";
 
-type StoryCenterTab = "facts" | "characters" | "foreshadows" | "board" | "snapshots" | "workspace";
+export type StoryCenterTab = "facts" | "characters" | "foreshadows" | "board" | "snapshots" | "workspace";
 
 export function StoryCenterModal({
   state,

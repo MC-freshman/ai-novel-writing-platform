@@ -6,6 +6,18 @@ import type {
 } from "../../types";
 import type { AnalysisBindings } from "./bindings";
 import type { AnalysisPanelProps } from "./props";
+import { useAnalysisBindings } from "./bindings";
+import { useAnalysisNavigation } from "./navigation";
+import { useAnalysisPersistence } from "./persistence";
+import { useAnalysisSearch } from "./search";
+import { useAnalysisTimeline } from "./timeline";
+import { useAnalysisRelations } from "./relations";
+import { useAnalysisConsistency } from "./consistency";
+import { useAnalysisVersions } from "./versions";
+import { useAnalysisExtraction } from "./extraction";
+import { useAnalysisExperiments } from "./experiments";
+import { useAnalysisGraph } from "./graph";
+import { useAnalysisEffects } from "./effects";
 
 export type AnalysisContext = AnalysisBindings &
   AnalysisPanelProps & {
@@ -64,3 +76,113 @@ export type AnalysisContext = AnalysisBindings &
       nodeId: string,
     ) => void;
   };
+
+export function useAnalysisContext(props: AnalysisPanelProps): AnalysisContext {
+  const bindings = useAnalysisBindings({ ...props });
+  const navigation = useAnalysisNavigation({ ...props, ...bindings });
+  const persistence = useAnalysisPersistence();
+  const search = useAnalysisSearch({
+    ...props,
+    ...bindings,
+    ...navigation,
+    ...persistence,
+  });
+  const timeline = useAnalysisTimeline({
+    ...props,
+    ...bindings,
+    ...navigation,
+    ...persistence,
+    ...search,
+  });
+  const relations = useAnalysisRelations({
+    ...props,
+    ...bindings,
+    ...navigation,
+    ...persistence,
+    ...search,
+    ...timeline,
+  });
+  const consistency = useAnalysisConsistency({
+    ...props,
+    ...bindings,
+    ...navigation,
+    ...persistence,
+    ...search,
+    ...timeline,
+    ...relations,
+  });
+  const versions = useAnalysisVersions({
+    ...props,
+    ...bindings,
+    ...navigation,
+    ...persistence,
+    ...search,
+    ...timeline,
+    ...relations,
+    ...consistency,
+  });
+  const extraction = useAnalysisExtraction({
+    ...props,
+    ...bindings,
+    ...navigation,
+    ...persistence,
+    ...search,
+    ...timeline,
+    ...relations,
+    ...consistency,
+    ...versions,
+  });
+  const experiments = useAnalysisExperiments({
+    ...props,
+    ...bindings,
+    ...navigation,
+    ...persistence,
+    ...search,
+    ...timeline,
+    ...relations,
+    ...consistency,
+    ...versions,
+    ...extraction,
+  });
+  const graph = useAnalysisGraph({
+    ...props,
+    ...bindings,
+    ...navigation,
+    ...persistence,
+    ...search,
+    ...timeline,
+    ...relations,
+    ...consistency,
+    ...versions,
+    ...extraction,
+    ...experiments,
+  });
+  useAnalysisEffects({
+    ...props,
+    ...bindings,
+    ...navigation,
+    ...persistence,
+    ...search,
+    ...timeline,
+    ...relations,
+    ...consistency,
+    ...versions,
+    ...extraction,
+    ...experiments,
+    ...graph,
+  });
+  return {
+    ...props,
+    ...bindings,
+    ...navigation,
+    ...persistence,
+    ...search,
+    ...timeline,
+    ...relations,
+    ...consistency,
+    ...versions,
+    ...extraction,
+    ...experiments,
+    ...graph,
+  };
+}

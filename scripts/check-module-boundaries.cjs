@@ -6,8 +6,8 @@ function source(file) {
   return fs.readFileSync(path.join(root, file), "utf8");
 }
 const limits = {
-  "src/App.tsx": 1150,
-  "src/components/AnalysisPanel.tsx": 250,
+  "src/App.tsx": 650,
+  "src/components/AnalysisPanel.tsx": 150,
   "src/types.ts": 30,
   "electron/ipc/handlers.cjs": 120,
   "electron/services/analysis-tools.cjs": 80,
