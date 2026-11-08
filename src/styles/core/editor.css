@@ -81,6 +81,7 @@
   padding: 34px clamp(24px, 5vw, 76px);
   background: var(--bg);
   color: var(--text);
+  caret-color: var(--accent-strong);
   font-family:
     "LXGW WenKai",
     "Microsoft YaHei UI",
@@ -233,6 +234,7 @@
   padding: 64px clamp(28px, 7vw, 82px) 120px;
   outline: none;
   color: var(--text);
+  caret-color: var(--accent-strong);
   background: var(--bg);
   border: 1px solid var(--line);
   box-shadow: 0 18px 42px rgba(15, 23, 42, 0.08);

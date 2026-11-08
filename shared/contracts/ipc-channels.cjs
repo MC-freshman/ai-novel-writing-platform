@@ -70,6 +70,7 @@ const channels = [
   { method: "generateChapterBoard", channel: "story:generate-board", kind: "invoke", arg: "payload" },
   { method: "saveChapterBoard", channel: "story:save-board", kind: "invoke", arg: "payload" },
   { method: "getCreativeWorkspace", channel: "workspace:get", kind: "invoke", arg: null },
+  { method: "importXMind", channel: "mind-map:import-xmind", kind: "invoke", arg: null },
   { method: "previewNovelNetworkImport", channel: "novel-network:preview-import", kind: "invoke", arg: "payload" },
   { method: "importNovelNetwork", channel: "novel-network:import", kind: "invoke", arg: "payload" },
   { method: "saveNovelNetwork", channel: "novel-network:save", kind: "invoke", arg: "payload" },

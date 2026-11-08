@@ -1,5 +1,6 @@
 "use strict";
 const { registerIpcHandler } = require("../register.cjs");
+const mindMapImport = require("../../services/mind-map-import.cjs");
 const {
   buildCreativeStatistics,
   creativeWorkspace,
@@ -23,6 +24,20 @@ function registerDomain() {
   registerIpcHandler("workspace:get", async () => {
     const projectPath = await ensureCurrentProject();
     return getCreativeWorkspaceView(projectPath);
+  });
+
+  registerIpcHandler("mind-map:import-xmind", async () => {
+    const selected = await dialog.showOpenDialog(state.mainWindow, {
+      title: "导入 XMind 思维导图",
+      properties: ["openFile"],
+      filters: [{ name: "XMind 思维导图", extensions: ["xmind"] }],
+    });
+    if (selected.canceled || !selected.filePaths.length) return { canceled: true };
+    try {
+      return { canceled: false, ...mindMapImport.readXMindFile(selected.filePaths[0]) };
+    } catch (error) {
+      return { canceled: false, error: error instanceof Error ? error.message : String(error) };
+    }
   });
 
   registerIpcHandler(

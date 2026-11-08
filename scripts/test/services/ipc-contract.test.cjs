@@ -102,5 +102,5 @@ test("契约内部完整性：通道无重复、字段齐备、kind 合法", () 
     if (item.kind === "invoke") assert.ok("arg" in item, `invoke 缺 arg: ${item.method}`);
     if (item.kind === "event") assert.equal(typeof item.payload, "boolean", `event 缺 payload: ${item.method}`);
   }
-  assert.equal(contract.channels.length, 123, "通道总数（新增通道时应有意更新此数）");
+  assert.equal(contract.channels.length, 124, "通道总数（新增通道时应有意更新此数）");
 });

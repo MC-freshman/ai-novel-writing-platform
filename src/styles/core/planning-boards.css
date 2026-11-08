@@ -1,0 +1,94 @@
+/* 规划与进度：思维导图、进度网格 */
+.mind-map-panel,
+.progress-grid-panel { display: flex; flex-direction: column; gap: 12px; min-width: 0; min-height: 0; }
+.mind-map-toolbar,
+.progress-grid-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.mind-map-toolbar label,
+.progress-grid-toolbar label { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.mind-map-toolbar [role="status"],
+.progress-grid-toolbar [role="status"] { font-size: 12px; color: var(--muted); }
+.mind-map-empty,
+.progress-grid-empty { padding: 32px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 8px; }
+
+.mind-map-body,
+.progress-grid-body { display: grid; grid-template-columns: 1fr; gap: 12px; min-height: 0; flex: 1; }
+.progress-workspace.expanded .mind-map-body,
+.progress-workspace.expanded .progress-grid-body { grid-template-columns: 210px minmax(0, 1fr); }
+.mind-map-list,
+.progress-grid-list { display: flex; flex-direction: row; align-items: flex-start; gap: 6px; max-height: 92px; padding: 10px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.progress-workspace.expanded .mind-map-list,
+.progress-workspace.expanded .progress-grid-list { flex-direction: column; max-height: none; }
+.mind-map-list button,
+.progress-grid-list button { min-width: 170px; }
+.mind-map-list header,
+.progress-grid-list header { min-width: 120px; }
+.mind-map-list header,
+.progress-grid-list header { display: flex; justify-content: space-between; gap: 8px; padding: 2px 4px 8px; font-size: 12px; color: var(--muted); }
+.mind-map-list button,
+.progress-grid-list button { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; width: 100%; padding: 8px 10px; text-align: left; border: 1px solid var(--line); border-radius: 6px; background: transparent; }
+.mind-map-list button.active,
+.progress-grid-list button.active { border-color: var(--accent); background: var(--panel-strong); }
+.mind-map-list button span,
+.progress-grid-list button span { font-size: 11px; color: var(--muted); }
+.mind-map-list p,
+.progress-grid-list p { font-size: 12px; color: var(--muted); }
+
+.mind-map-main,
+.progress-grid-main { display: flex; flex-direction: column; gap: 10px; min-width: 0; min-height: 0; }
+.mind-map-canvas { position: relative; flex: 1; min-height: 200px; overflow: hidden; outline: none; cursor: grab; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.progress-workspace.expanded .mind-map-canvas { min-height: 420px; }
+.mind-map-canvas:active { cursor: grabbing; }
+.mind-map-world { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+.mind-map-links { position: absolute; top: 0; left: 0; pointer-events: none; }
+.mind-map-node { position: absolute; display: flex; align-items: center; justify-content: center; box-sizing: border-box; padding: 0 14px; overflow: visible; border: 1px solid var(--line); border-radius: 18px; background: var(--panel-strong); font-size: 13px; color: var(--text); cursor: pointer; user-select: none; }
+.mind-map-node.root { background: var(--accent); border-color: var(--accent); color: var(--panel); }
+.mind-map-node.selected { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
+.mind-map-node > span { overflow: hidden; max-width: 100%; text-overflow: ellipsis; white-space: nowrap; }
+.mind-map-node > input { width: 100%; border: 0; outline: none; background: transparent; color: inherit; text-align: center; }
+.mind-node-fold { position: absolute; top: 50%; right: -12px; width: 22px; height: 22px; padding: 0; transform: translateY(-50%); border-radius: 50%; font-size: 12px; line-height: 1; }
+/* 属性区排在画布之前，窄窗口下也不会被画布挤出可视范围。 */
+.mind-map-inspector { order: -1; display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.mind-map-inspector label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.mind-map-inspector textarea { flex: 1; min-width: 160px; min-height: 46px; }
+.mind-map-inspector-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.mind-map-inspector p { flex-basis: 100%; margin: 0; font-size: 11px; color: var(--muted); }
+
+.progress-grid-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.progress-grid-summary-labels { display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px; color: var(--muted); }
+.progress-grid-bar { flex: 1; min-width: 140px; height: 10px; overflow: hidden; border-radius: 6px; background: var(--panel-strong); }
+.progress-grid-bar i { display: block; height: 100%; background: var(--accent); }
+.progress-grid-percent { font-size: 12px; color: var(--muted); }
+.progress-grid-description { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.progress-grid-description textarea { flex: 1; min-height: 40px; }
+.progress-grid-table-scroll { overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.progress-grid-table { width: 100%; min-width: 820px; border-collapse: collapse; }
+.progress-grid-table th,
+.progress-grid-table td { padding: 6px; text-align: left; vertical-align: top; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.progress-grid-table th { background: var(--panel-strong); font-size: 12px; font-weight: 500; }
+.progress-grid-table th > * { display: block; width: 100%; margin-bottom: 4px; }
+.progress-grid-table input,
+.progress-grid-table select { box-sizing: border-box; width: 100%; min-width: 96px; }
+.progress-grid-table th button { font-size: 11px; padding: 3px 6px; }
+.progress-grid-chapter-cell button,
+.progress-grid-row-actions button { margin-top: 4px; font-size: 11px; padding: 3px 6px; }
+.progress-grid-row-actions { white-space: nowrap; }
+.progress-grid-empty-hint,
+.progress-grid-hint { margin: 0; padding: 10px; font-size: 12px; color: var(--muted); }
+
+.mind-map-import-preview { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--accent); border-radius: 8px; background: var(--panel); }
+.mind-map-import-preview header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--muted); }
+.mind-map-import-preview label { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.mind-map-import-preview ul { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.mind-map-import-preview li { display: flex; flex-direction: column; gap: 2px; min-width: 210px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-strong); font-size: 12px; }
+.mind-map-import-preview li span { font-size: 11px; color: var(--muted); }
+.mind-map-import-actions { display: flex; gap: 8px; }
+.mind-map-import-error { margin: 0; padding: 8px 12px; border: 1px solid var(--danger); border-radius: 6px; font-size: 12px; color: var(--danger); }
+
+@container (max-width: 760px) {
+  .mind-map-body,
+  .progress-grid-body { grid-template-columns: 1fr; }
+  .mind-map-list,
+  .progress-grid-list { flex-direction: row; overflow-x: auto; }
+  .mind-map-list button,
+  .progress-grid-list button { min-width: 170px; }
+}

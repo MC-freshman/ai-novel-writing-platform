@@ -4,7 +4,8 @@ export interface PageSaveHandle {
   save: () => Promise<boolean>;
   protect: () => Promise<boolean>;
 }
-export type PageSaveKind = "character" | "world" | "novel-network";
+export type EntityDraftKind = "character" | "world" | "novel-network";
+export type PageSaveKind = EntityDraftKind | "mind-map" | "progress-grid";
 
 type Entity = { id?: string; name?: string; title?: string; category?: string };
 const entityKey = (value: Entity) => value.id || "new";
@@ -15,7 +16,7 @@ export interface EntityDraftProps<T> {
   onRegisterSave: (kind: PageSaveKind, handle: PageSaveHandle | null) => void;
 }
 
-export function useEntityDraft<T extends Entity>(kind: PageSaveKind, items: T[], blank: T, props: EntityDraftProps<T>) {
+export function useEntityDraft<T extends Entity>(kind: EntityDraftKind, items: T[], blank: T, props: EntityDraftProps<T>) {
   const { onRegisterSave, projectPath, recoveryEnabled } = props;
   const [active, setActive] = useState<T>(items[0] || blank);
   const [dirty, setDirty] = useState(false);

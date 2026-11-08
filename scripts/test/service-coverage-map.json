@@ -64,6 +64,10 @@
   "logger.cjs": [
     "scripts/test/services/logger.test.cjs"
   ],
+  "mind-map-import.cjs": [
+    "scripts/test/services/mind-map-import.test.cjs",
+    "scripts/test-ui-planning-boards.cjs"
+  ],
   "novel-agent.cjs": [
     "scripts/test/services/domain-behavior.test.cjs",
     "scripts/test-agent-platform.cjs"

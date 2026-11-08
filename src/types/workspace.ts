@@ -3,6 +3,8 @@ import type { RetrievalAudit } from "./retrieval";
 import type { AgentPermissionLevel, AgentScopeType } from "./config";
 import type { CreativeStatisticsSnapshot } from "./statistics";
 import type { NovelNetwork } from "./network";
+import type { MindMap } from "./mindmap";
+import type { ProgressGridBoard } from "./grid";
 
 export type CreativeAdviceMode = "next" | "plot" | "foreshadow";
 
@@ -223,4 +225,6 @@ export interface CreativeWorkspaceState {
   agentRuns: CreativeAgentRun[];
   statisticsHistory: CreativeStatisticsSnapshot[];
   novelNetworks: NovelNetwork[];
+  mindMaps: MindMap[];
+  progressGrids: ProgressGridBoard[];
 }

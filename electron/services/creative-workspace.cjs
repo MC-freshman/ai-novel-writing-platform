@@ -14,6 +14,8 @@ const COLLECTION_LIMITS = {
   agentRuns: 80,
   statisticsHistory: 40,
   novelNetworks: 20,
+  mindMaps: 60,
+  progressGrids: 60,
 };
 
 function nowIso() {
@@ -38,6 +40,8 @@ function emptyState() {
     agentRuns: [],
     statisticsHistory: [],
     novelNetworks: [],
+    mindMaps: [],
+    progressGrids: [],
   };
 }
 
@@ -177,6 +181,53 @@ function normalizeItem(collection, payload = {}, index = 0) {
     foreshadowSummary: payload.foreshadowSummary && typeof payload.foreshadowSummary === "object" ? payload.foreshadowSummary : { open: 0, closed: 0, recoveryRate: 0 },
     arcAlerts: Array.isArray(payload.arcAlerts) ? payload.arcAlerts.slice(0, 2000) : [],
   };
+  if (collection === "mindMaps") {
+    const title = cleanText(payload.title || "未命名思维导图", 160);
+    const rootId = cleanText(payload.rootId, 120) || "root";
+    const nodes = (Array.isArray(payload.nodes) ? payload.nodes : []).slice(0, 2000).map((node, index) => ({
+      id: cleanText(node?.id, 120) || stableId("mind-node", `${index}|${updatedAt}`),
+      parentId: cleanText(node?.parentId, 120),
+      text: cleanText(node?.text, 500) || "新主题",
+      note: cleanText(node?.note, 2000),
+      color: cleanText(node?.color, 24),
+      collapsed: Boolean(node?.collapsed),
+      order: Number.isFinite(Number(node?.order)) ? Number(node.order) : index,
+      side: node?.side === "left" ? "left" : "right",
+    }));
+    if (!nodes.some((node) => node.id === rootId)) {
+      nodes.unshift({ id: rootId, parentId: "", text: title, note: "", color: "", collapsed: false, order: -1, side: "right" });
+    }
+    return { ...base, title, rootId, nodes };
+  }
+  if (collection === "progressGrids") {
+    const columns = (Array.isArray(payload.columns) ? payload.columns : []).slice(0, 24).map((column, index) => ({
+      id: cleanText(column?.id, 120) || stableId("grid-column", `${index}|${updatedAt}`),
+      title: cleanText(column?.title || `列 ${index + 1}`, 120),
+      kind: ["text", "status", "chapter"].includes(column?.kind) ? column.kind : "text",
+    }));
+    const columnIds = new Set(columns.map((column) => column.id));
+    const rows = (Array.isArray(payload.rows) ? payload.rows : []).slice(0, 500).map((row, index) => {
+      const cells = {};
+      for (const [key, value] of Object.entries(row?.cells && typeof row.cells === "object" ? row.cells : {}).slice(0, 24)) {
+        if (columnIds.has(key)) cells[key] = cleanText(value, 2000);
+      }
+      return {
+        id: cleanText(row?.id, 120) || stableId("grid-row", `${index}|${updatedAt}`),
+        title: cleanText(row?.title || `第 ${index + 1} 项`, 200),
+        status: ["计划中", "写作中", "已完成", "暂缓"].includes(row?.status) ? row.status : "计划中",
+        note: cleanText(row?.note, 2000),
+        chapterId: cleanText(row?.chapterId, 120),
+        cells,
+      };
+    });
+    return {
+      ...base,
+      title: cleanText(payload.title || "未命名进度网格", 160),
+      description: cleanText(payload.description, 2000),
+      columns,
+      rows,
+    };
+  }
   throw new Error(`不支持的创作工作区集合：${collection}`);
 }
 
@@ -192,7 +243,9 @@ async function loadWorkspace(projectPath) {
   const data = await readJson(workspacePath(projectPath), emptyState());
   const fallback = emptyState();
   for (const key of Object.keys(COLLECTION_LIMITS)) fallback[key] = Array.isArray(data?.[key]) ? data[key] : [];
-  return { ...fallback, ...data, version: WORKSPACE_VERSION };
+  const state = { ...fallback, ...data, version: WORKSPACE_VERSION };
+  for (const key of Object.keys(COLLECTION_LIMITS)) state[key] = Array.isArray(state[key]) ? state[key] : [];
+  return state;
 }
 
 async function mutate(projectPath, mutator) {
@@ -213,6 +266,10 @@ async function upsertItem(projectPath, collection, payload) {
     if (collection === "novelNetworks") {
       if (existingIndex >= 0 && payload.revision !== items[existingIndex].revision) throw new Error("小说网版本已被其他窗口修改，当前草稿仍保留；请重新读取后合并。 ");
       if (existingIndex < 0 && items.length >= COLLECTION_LIMITS.novelNetworks) throw new Error("小说网已达到20套上限，请先导出并整理旧网络。 ");
+    }
+    if ((collection === "mindMaps" || collection === "progressGrids") && existingIndex < 0 && items.length >= COLLECTION_LIMITS[collection]) {
+      const name = collection === "mindMaps" ? "思维导图" : "进度网格";
+      throw new Error(`${name}已达到${COLLECTION_LIMITS[collection]}张上限，请先删除或导出旧的${name}再新建。`);
     }
     const normalized = normalizeItem(collection, existingIndex >= 0 ? { ...items[existingIndex], ...payload } : payload, existingIndex >= 0 ? existingIndex : items.length);
     if (existingIndex >= 0) items[existingIndex] = normalized;
@@ -358,6 +415,10 @@ async function removeChapterReferences(projectPath, chapterId) {
     state.memories = state.memories.filter((item) => item.scope !== "章节" || item.scopeId !== chapterId);
     state.revisions = state.revisions.filter((item) => item.chapterId !== chapterId);
     state.agentRuns = state.agentRuns.filter((item) => item.chapterId !== chapterId);
+    state.progressGrids = (state.progressGrids || []).map((grid) => ({
+      ...grid,
+      rows: (grid.rows || []).map((row) => row.chapterId === chapterId ? { ...row, chapterId: "" } : row),
+    }));
     return state;
   });
 }
@@ -366,8 +427,9 @@ async function mergeImportedWorkspace(projectPath, imported = {}, chapterIdMap =
   return mutate(projectPath, (state) => {
     for (const collection of Object.keys(COLLECTION_LIMITS)) {
       if (!Array.isArray(imported[collection])) continue;
-      if (collection === "novelNetworks" && imported[collection].length + state[collection].length > COLLECTION_LIMITS.novelNetworks) {
-        throw new Error("小说网容量为20个，请先导出并整理已有小说网再交换导入。");
+      const capacityName = { novelNetworks: "小说网", mindMaps: "思维导图", progressGrids: "进度网格" }[collection];
+      if (capacityName && imported[collection].length + state[collection].length > COLLECTION_LIMITS[collection]) {
+        throw new Error(`${capacityName}容量为${COLLECTION_LIMITS[collection]}个，请先导出并整理已有${capacityName}再交换导入。`);
       }
       const existingIds = new Set(state[collection].map((item) => item.id));
       const nextItems = imported[collection].map((item, index) => {
@@ -375,6 +437,7 @@ async function mergeImportedWorkspace(projectPath, imported = {}, chapterIdMap =
         if (remapped.chapterId && chapterIdMap.has(remapped.chapterId)) remapped.chapterId = chapterIdMap.get(remapped.chapterId);
         if (remapped.scope === "章节" && chapterIdMap.has(remapped.scopeId)) remapped.scopeId = chapterIdMap.get(remapped.scopeId);
         if (collection === "novelNetworks") remapped.tables = (remapped.tables || []).map((table) => ({ ...table, rows: table.rows.map((row) => ({ ...row, chapterId: chapterIdMap.get(row.chapterId) || row.chapterId })) }));
+        if (collection === "progressGrids") remapped.rows = (remapped.rows || []).map((row) => ({ ...row, chapterId: chapterIdMap.get(row.chapterId) || row.chapterId }));
         if (existingIds.has(remapped.id)) remapped.id = stableId(`${collection}-import`, `${remapped.id}|${nowIso()}|${index}`);
         return normalizeItem(collection, remapped, index);
       });

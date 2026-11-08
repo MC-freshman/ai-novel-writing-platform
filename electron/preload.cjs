@@ -92,6 +92,7 @@ contextBridge.exposeInMainWorld("novelAPI", {
   generateChapterBoard: (payload) => ipcRenderer.invoke("story:generate-board", payload),
   saveChapterBoard: (payload) => ipcRenderer.invoke("story:save-board", payload),
   getCreativeWorkspace: () => ipcRenderer.invoke("workspace:get"),
+  importXMind: () => ipcRenderer.invoke("mind-map:import-xmind"),
   previewNovelNetworkImport: (payload) => ipcRenderer.invoke("novel-network:preview-import", payload),
   importNovelNetwork: (payload) => ipcRenderer.invoke("novel-network:import", payload),
   saveNovelNetwork: (payload) => ipcRenderer.invoke("novel-network:save", payload),

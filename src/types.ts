@@ -7,6 +7,8 @@ export * from "./types/analysis";
 export * from "./types/workspace";
 export * from "./types/statistics";
 export * from "./types/network";
+export * from "./types/mindmap";
+export * from "./types/grid";
 export * from "./types/maintenance";
 export * from "./types/story";
 export * from "./types/tasks";

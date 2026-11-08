@@ -1,6 +1,7 @@
 /* 顺序保持0.3.7级联；主题和页面职责见styles/core。 */
 @import "./styles/core/tokens.css";
 @import "./styles/core/novel-network.css";
+@import "./styles/core/planning-boards.css";
 @import "./styles/core/base.css";
 @import "./styles/core/shell.css";
 @import "./styles/core/chapter-tree.css";

@@ -34,6 +34,7 @@
     "gen:preload": "node scripts/gen-preload.cjs",
     "test:novel-network": "node --test --test-concurrency=1 scripts/test-novel-network.cjs",
     "test:ui-novel-network": "node scripts/test-ui-novel-network.cjs",
+    "test:ui-planning-boards": "node scripts/test-ui-planning-boards.cjs",
     "check:quality": "node scripts/check-quality.cjs",
     "release:checksums": "node scripts/release-checksums.cjs",
     "bench:capacity": "node scripts/bench-retrieval-capacity.cjs",

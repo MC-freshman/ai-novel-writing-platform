@@ -152,7 +152,9 @@ input, textarea, select { border-radius: 8px; }
 .progress-workspace { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 16px; min-height: 0; overflow: hidden; padding: 16px; }
 .progress-workspace-modes { margin: 0; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
 .progress-workspace > .progress-board { padding: 0 4px 12px 0; }
-.progress-workspace > .novel-network-panel { min-height: 0; overflow: auto; }
+.progress-workspace > .novel-network-panel,
+.progress-workspace > .mind-map-panel,
+.progress-workspace > .progress-grid-panel { min-height: 0; overflow: auto; }
 .progress-board .progress-toolbar { display: block; margin-bottom: 22px; }
 .progress-toolbar-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .progress-toolbar-actions button { max-width: 100%; min-height: 34px; line-height: 1.5; overflow-wrap: anywhere; }

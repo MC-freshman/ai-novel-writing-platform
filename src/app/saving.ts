@@ -158,6 +158,10 @@ export function useAppSaving(
   const saveBeforeLeavingChapter = useCallback(async () => {
     const networkSaver = pageSaversRef.current.get("novel-network");
     if (networkSaver && !(await networkSaver.protect())) return false;
+    for (const boardKind of ["mind-map", "progress-grid"] as const) {
+      const boardSaver = pageSaversRef.current.get(boardKind);
+      if (boardSaver && !(await boardSaver.protect())) return false;
+    }
     const kind =
       view === "characters" ? "character" : view === "world" ? "world" : null;
     if (kind && !(await pageSaversRef.current.get(kind)?.protect()))
@@ -168,6 +172,8 @@ export function useAppSaving(
   const saveCurrentPage = useCallback(async () => {
     const networkSaver = pageSaversRef.current.get("novel-network");
     if (networkSaver) return networkSaver.save();
+    const boardSaver = pageSaversRef.current.get("mind-map") || pageSaversRef.current.get("progress-grid");
+    if (boardSaver) return boardSaver.save();
     const kind =
       view === "characters" ? "character" : view === "world" ? "world" : null;
     if (kind) return (await pageSaversRef.current.get(kind)?.save()) ?? false;
