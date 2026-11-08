@@ -13,11 +13,12 @@ function formatTime(value: string) {
   return Number.isNaN(date.getTime()) ? "" : date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
-export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus }: {
+export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus, fullscreen = false }: {
   workspace: CreativeWorkspaceState;
   onWorkspace: (value: CreativeWorkspaceState) => void;
   onRegisterSave: (kind: PageSaveKind, handle: PageSaveHandle | null) => void;
   onStatus: (message: string) => void;
+  fullscreen?: boolean;
 }) {
   const board = useWorkspaceDraft<MindMap>("mind-map", "mindMaps", workspace, onWorkspace, onRegisterSave, createMindMap);
   const map = board.draft;
@@ -29,6 +30,7 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus }: {
   const [sheetChoice, setSheetChoice] = useState("all");
   const [importError, setImportError] = useState("");
   const [importing, setImporting] = useState(false);
+  const [showInspector, setShowInspector] = useState(true);
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const pan = useRef<{ x: number; y: number; originX: number; originY: number } | null>(null);
   const layout = useMemo(() => map ? layoutMindMap(map) : { nodes: [], edges: [], width: 900, height: 520 }, [map]);
@@ -40,7 +42,7 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus }: {
     const element = canvasRef.current;
     const current = layoutRef.current;
     if (!element || !current.width) return;
-    const next = Math.min(1, Math.max(0.55, Math.min((element.clientWidth - 32) / current.width, (element.clientHeight - 32) / current.height)));
+    const next = Math.min(1, Math.max(0.35, Math.min((element.clientWidth - 32) / current.width, (element.clientHeight - 32) / current.height)));
     setScale(next);
     setOffset({ x: (element.clientWidth - current.width * next) / 2, y: (element.clientHeight - current.height * next) / 2 });
   }, []);
@@ -52,6 +54,23 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus }: {
     const frame = window.requestAnimationFrame(fitView);
     return () => window.cancelAnimationFrame(frame);
   }, [board.activeId, map?.rootId, fitView]);
+
+  // 弹窗打开、属性区精简或窗口缩放后画布尺寸会变，重新适配视图；节点增减不改变容器尺寸，不会打断用户缩放。
+  useEffect(() => {
+    const element = canvasRef.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    let lastWidth = element.clientWidth;
+    let lastHeight = element.clientHeight;
+    const observer = new ResizeObserver((entries) => {
+      const rect = entries[0]?.contentRect;
+      if (!rect || (Math.abs(rect.width - lastWidth) < 2 && Math.abs(rect.height - lastHeight) < 2)) return;
+      lastWidth = rect.width;
+      lastHeight = rect.height;
+      fitView();
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [fitView, board.activeId]);
 
   const mutateNodes = useCallback((change: (nodes: MindMapNode[]) => MindMapNode[]) => {
     board.update((previous) => ({ ...previous, updatedAt: new Date().toISOString(), nodes: change(previous.nodes) }));
@@ -151,6 +170,69 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus }: {
     }
   }
 
+  async function generateFromRelations() {
+    if (importing) return;
+    if (board.items.length >= 60) {
+      setImportError("思维导图已达到 60 张上限，请先整理旧导图再生成。");
+      return;
+    }
+    setImporting(true);
+    setImportError("");
+    try {
+      if (!(await board.flush())) return;
+      const result = await window.novelAPI.buildRelationshipGraph({ refresh: true });
+      const characters = result.nodes || [];
+      const links = result.edges || [];
+      if (!characters.length) {
+        setImportError("没有可用的角色关系数据，请先在「角色」中维护人物卡与关系。");
+        return;
+      }
+      const id = `rel_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+      const rootId = `${id}_root`;
+      const now = new Date().toISOString();
+      const nodes: MindMapNode[] = [{
+        id: rootId, parentId: "", text: "角色关系网",
+        note: `由 ${characters.length} 个角色、${links.length} 条关系生成；可继续在导图中补充思路。`,
+        color: "", collapsed: false, order: 0, side: "right",
+      }];
+      characters.forEach((character, index) => {
+        if (nodes.length >= 1999) return;
+        const side: MindMapSide = index % 2 === 0 ? "left" : "right";
+        const nodeId = `${id}_c${index}`;
+        nodes.push({
+          id: nodeId, parentId: rootId, text: character.name,
+          note: [character.category, character.notes].filter(Boolean).join(" / "),
+          color: "", collapsed: false, order: index, side,
+        });
+        links.filter((edge) => edge.source === character.id || edge.target === character.id).forEach((edge, position) => {
+          if (nodes.length >= 2000) return;
+          const outward = edge.source === character.id;
+          const other = characters.find((item) => item.id === (outward ? edge.target : edge.source));
+          nodes.push({
+            id: `${id}_e${index}_${position}`, parentId: nodeId,
+            text: `${outward ? "→" : "←"} ${other?.name || "未知角色"}${edge.label ? `（${edge.label}）` : ""}`,
+            note: [`强度 ${edge.weight}`, edge.evidence?.length ? `证据 ${edge.evidence.length} 条` : ""].filter(Boolean).join(" · "),
+            color: "", collapsed: false, order: position, side,
+          });
+        });
+      });
+      const nextMap: MindMap = {
+        id, title: `角色关系网 · ${new Date().toLocaleDateString("zh-CN")}`,
+        rootId, nodes: nodes.slice(0, 2000), createdAt: now, updatedAt: now,
+      };
+      const saved = await window.novelAPI.upsertCreativeWorkspaceItem({
+        collection: "mindMaps", item: nextMap as unknown as Record<string, unknown>,
+      });
+      onWorkspace(saved.workspace);
+      await board.adopt(nextMap);
+      onStatus(`已把角色关系并入思维导图：${characters.length} 个角色、${links.length} 条关系`);
+    } catch (error) {
+      setImportError(`生成失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setImporting(false);
+    }
+  }
+
   function onCanvasKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (["INPUT", "TEXTAREA", "SELECT"].includes((event.target as HTMLElement).tagName)) return;
     if (event.key === "Tab") { event.preventDefault(); addChild(); }
@@ -176,7 +258,7 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus }: {
 
   const childCount = map && selectedNode ? map.nodes.filter((node) => node.parentId === selectedNode.id).length : 0;
 
-  return <section className="mind-map-panel" aria-label="思维导图">
+  return <section className={`mind-map-panel ${fullscreen ? "fullscreen" : ""} ${showInspector ? "" : "inspector-compact"}`} aria-label="思维导图">
     <header className="mind-map-toolbar">
       <select aria-label="选择思维导图" value={board.activeId} onChange={(event) => { if (event.target.value) void board.select(event.target.value); }}>
         <option value="">选择已创建的导图</option>
@@ -184,10 +266,12 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus }: {
       </select>
       <button onClick={() => void board.create()}>新建思维导图</button>
       <button onClick={() => void chooseXMind()}>导入 XMind</button>
+      <button disabled={importing} onClick={() => void generateFromRelations()}>从角色关系生成</button>
       <button disabled={!map} onClick={() => void removeBoard()}>删除此导图</button>
       <label>名称<input aria-label="思维导图名称" maxLength={160} value={map?.title || ""} onChange={(event) => board.update((previous) => ({ ...previous, title: event.target.value, updatedAt: new Date().toISOString() }))} /></label>
       <span role="status" aria-live="polite">{board.saveState}</span>
       <button onClick={fitView}>适应画布</button>
+      <button onClick={() => setShowInspector((value) => !value)}>{showInspector ? "精简属性区" : "展开属性区"}</button>
       <button onClick={() => setAllCollapsed(false)}>展开全部</button>
       <button onClick={() => setAllCollapsed(true)}>折叠全部</button>
     </header>

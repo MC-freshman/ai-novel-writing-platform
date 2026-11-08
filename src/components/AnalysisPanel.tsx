@@ -4,7 +4,6 @@ import { AnalysisTabs } from "./analysis/AnalysisTabs";
 import { ProgressPanel } from "./analysis/ProgressPanel";
 import { SearchPanel } from "./analysis/SearchPanel";
 import { TimelinePanel } from "./analysis/TimelinePanel";
-import { RelationsPanel } from "./analysis/RelationsPanel";
 import { ConsistencyPanel } from "./analysis/ConsistencyPanel";
 import { VersionsPanel } from "./analysis/VersionsPanel";
 import { ExportPanel } from "./analysis/ExportPanel";
@@ -20,7 +19,6 @@ export function AnalysisPanel(props: AnalysisPanelProps) {
       {tab === "progress" && <ProgressPanel {...context} />}
       {tab === "search" && <SearchPanel {...context} />}
       {tab === "timeline" && <TimelinePanel {...context} />}
-      {tab === "relations" && <RelationsPanel {...context} />}
       {tab === "consistency" && <ConsistencyPanel {...context} />}
       {tab === "versions" && <VersionsPanel {...context} />}
       {tab === "export" && <ExportPanel {...context} />}

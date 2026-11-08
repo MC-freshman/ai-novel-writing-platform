@@ -122,21 +122,22 @@ export function useAnalysisEffects(
   useEffect(() => {
     let cancelled = false;
     function restoreAnalysisSnapshot(snapshot: AnalysisSnapshot) {
+      // 关系网已并入规划与进度的思维导图，历史草稿回到进度页而不是空白标签。
+      const restoredTab = snapshot.tab === "relations" ? "progress" : snapshot.tab;
       if (
         !userSelectedTab.current &&
         !networkOpenRequestRef.current &&
-        snapshot.tab &&
+        restoredTab &&
         [
           "progress",
           "search",
           "timeline",
-          "relations",
           "consistency",
           "versions",
           "export",
-        ].includes(snapshot.tab)
+        ].includes(restoredTab)
       ) {
-        setTab(snapshot.tab as AnalysisTab);
+        setTab(restoredTab as AnalysisTab);
       }
       if (typeof snapshot.query === "string") setQuery(snapshot.query);
       if (Array.isArray(snapshot.searchResults))

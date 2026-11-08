@@ -163,7 +163,7 @@ function auditFeatureCoverage() {
     ["检索覆盖审计", /分卷与分类覆盖|selectedSourceReasons/],
     ["全局搜索", /全局搜索|globalSearch/],
     ["时间线", /时间线|buildTimeline/],
-    ["关系网", /关系网|buildRelationshipGraph/],
+    ["角色关系生成", /从角色关系生成|buildRelationshipGraph|关系网/],
     ["一致性检查", /一致性|analyzeConsistency/],
     ["历史版本", /历史版本|listChapterVersions|compareChapterVersion/],
     ["导出选项", /includeOutline|includeCharacters|includeWorld/],

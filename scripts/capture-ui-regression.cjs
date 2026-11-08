@@ -433,32 +433,22 @@ async function main() {
     });
     if (!openedAnalysis.result?.value) throw new Error("没有找到分析入口。");
     await wait(450);
-    await cdp.call("Runtime.evaluate", { expression: `(() => { const button = [...document.querySelectorAll('.analysis-tabs button')].find((item) => item.textContent.includes('关系网')); button?.click(); return Boolean(button); })()`, returnByValue: true });
-    await wait(250);
-    await cdp.call("Runtime.evaluate", { expression: `(() => { const button = [...document.querySelectorAll('.analysis-actions button')].find((item) => item.textContent.includes('刷新关系网')); button?.click(); return Boolean(button); })()`, returnByValue: true });
-    await wait(800);
-    const openedEdgeEditor = await cdp.call("Runtime.evaluate", { expression: `(() => { const label = document.querySelector('.relationship-edge-label'); label?.dispatchEvent(new MouseEvent('click', { bubbles: true })); return Boolean(label); })()`, returnByValue: true });
-    if (!openedEdgeEditor.result?.value) throw new Error("关系网没有生成可编辑连线。");
+    await cdp.call("Runtime.evaluate", { expression: `(() => { const button = [...document.querySelectorAll('.analysis-tabs button')].find((item) => item.textContent.trim() === '进度'); button?.click(); return Boolean(button); })()`, returnByValue: true });
+    await wait(400);
+    await cdp.call("Runtime.evaluate", { expression: `(() => { const button = [...document.querySelectorAll('.progress-workspace-modes button')].find((item) => item.textContent.trim() === '思维导图'); button?.click(); return Boolean(button); })()`, returnByValue: true });
+    await wait(450);
+    await cdp.call("Runtime.evaluate", { expression: `(() => { const button = [...document.querySelectorAll('.mind-map-toolbar button')].find((item) => item.textContent.trim() === '新建思维导图'); button?.click(); return Boolean(button); })()`, returnByValue: true });
+    await wait(500);
+    const openedMindmapModal = await cdp.call("Runtime.evaluate", { expression: `(() => { const button = [...document.querySelectorAll('.progress-workspace-modes button')].find((item) => item.textContent.trim() === '弹窗编辑'); button?.click(); return Boolean(button); })()`, returnByValue: true });
+    if (!openedMindmapModal.result?.value) throw new Error("思维导图缺少弹窗编辑入口。");
+    await wait(500);
+    const mindmapAuditExpression = `(() => { const modal = document.querySelector('.mind-map-modal'); const canvas = modal?.querySelector('.mind-map-canvas'); return { missing: !modal || !canvas, canvasHeight: canvas?.clientHeight || 0, modalWidth: modal?.clientWidth || 0, modalScrollWidth: modal?.scrollWidth || 0 }; })()`;
+    const mindmapAudit = await cdp.call("Runtime.evaluate", { expression: mindmapAuditExpression, returnByValue: true });
+    if (mindmapAudit.result?.value?.missing || mindmapAudit.result?.value?.canvasHeight < 380) throw new Error(`思维导图弹窗画布没有放大：${JSON.stringify(mindmapAudit.result?.value)}`);
+    if (mindmapAudit.result?.value?.modalScrollWidth > mindmapAudit.result?.value?.modalWidth + 2) throw new Error("思维导图弹窗出现横向溢出。");
+    const mindmapScreenshot = await capture(cdp, "ui-mindmap-modal.png");
+    await cdp.call("Runtime.evaluate", { expression: `document.querySelector('.mind-map-modal-header button')?.click()`, returnByValue: true });
     await wait(300);
-    const relationScreenshot = await capture(cdp, "ui-relationship-edge-editor.png");
-    const relationAuditExpression = `(() => {
-      const shell = document.querySelector('.relationship-graph-shell');
-      const editor = document.querySelector('.graph-edge-editor');
-      const bounds = editor?.getBoundingClientRect();
-      const controlsOverflow = editor ? [...editor.querySelectorAll('input, select, button')].filter((item) => {
-        const rect = item.getBoundingClientRect();
-        return rect.left < bounds.left - 2 || rect.right > bounds.right + 2 || rect.bottom > bounds.bottom + 2;
-      }).map((item) => item.tagName + ':' + (item.title || item.textContent || item.type)) : [];
-      return { missing: !shell || !editor, shellWidth: shell?.clientWidth || 0, shellScrollWidth: shell?.scrollWidth || 0, editorWidth: editor?.clientWidth || 0, editorScrollWidth: editor?.scrollWidth || 0, controlsOverflow };
-    })()`;
-    const relationAudit = await cdp.call("Runtime.evaluate", { expression: relationAuditExpression, returnByValue: true });
-    if (relationAudit.result?.value?.missing) throw new Error("关系边编辑器没有打开。");
-    if (relationAudit.result?.value?.shellScrollWidth > relationAudit.result?.value?.shellWidth + 2 || relationAudit.result?.value?.editorScrollWidth > relationAudit.result?.value?.editorWidth + 2 || relationAudit.result?.value?.controlsOverflow.length) throw new Error(`关系网或关系边编辑器出现横向溢出：${JSON.stringify(relationAudit.result?.value)}`);
-    await cdp.call("Runtime.evaluate", { expression: `document.querySelector('.relationship-graph-shell').style.maxWidth = '320px'`, returnByValue: true });
-    const narrowRelationScreenshot = await capture(cdp, "ui-relationship-edge-editor-narrow.png");
-    const narrowRelationAudit = await cdp.call("Runtime.evaluate", { expression: relationAuditExpression, returnByValue: true });
-    if (narrowRelationAudit.result?.value?.shellScrollWidth > narrowRelationAudit.result?.value?.shellWidth + 2 || narrowRelationAudit.result?.value?.editorScrollWidth > narrowRelationAudit.result?.value?.editorWidth + 2 || narrowRelationAudit.result?.value?.controlsOverflow.length) throw new Error(`320px 关系边编辑器出现横向溢出：${JSON.stringify(narrowRelationAudit.result?.value)}`);
-    await cdp.call("Runtime.evaluate", { expression: `document.querySelector('.relationship-graph-shell').style.maxWidth = ''`, returnByValue: true });
 
     await cdp.call("Runtime.evaluate", { expression: `document.querySelector('button[title="模型和项目设置"]')?.click()`, returnByValue: true });
     await wait(350);
@@ -497,7 +487,7 @@ async function main() {
     if (narrowAudit.result?.value?.bodyScrollWidth > narrowAudit.result?.value?.bodyWidth + 2) throw new Error("窄窗口弹窗内容出现横向溢出。");
     if (narrowAudit.result?.value?.rowActionsScrollWidth > narrowAudit.result?.value?.rowActionsWidth + 2) throw new Error("窄窗口事实操作按钮出现裁切。");
     await cdp.call("Emulation.clearDeviceMetricsOverride");
-    const report = { mainScreenshot, aiChatRecoveryScreenshot, inlineReviewScreenshot, advisorScreenshot, knowledgeScreenshot, storyScreenshot, workspaceScreenshot, networkScreenshot, snapshotScreenshot, relationScreenshot, narrowRelationScreenshot, settingsScreenshot, narrowStoryScreenshot, audit: audit.result?.value, inlineReviewAudit: inlineReviewAudit.result?.value, advisorAudit: advisorAudit.result?.value, storyAudit: storyAudit.result?.value, workspaceAudit: workspaceAudit.result?.value, networkAudit: networkAudit.result?.value, snapshotAudit: snapshotAudit.result?.value, relationAudit: relationAudit.result?.value, narrowRelationAudit: narrowRelationAudit.result?.value, settingsAudit: settingsAudit.result?.value, narrowAudit: narrowAudit.result?.value };
+    const report = { mainScreenshot, aiChatRecoveryScreenshot, inlineReviewScreenshot, advisorScreenshot, knowledgeScreenshot, storyScreenshot, workspaceScreenshot, networkScreenshot, snapshotScreenshot, mindmapScreenshot, settingsScreenshot, narrowStoryScreenshot, audit: audit.result?.value, inlineReviewAudit: inlineReviewAudit.result?.value, advisorAudit: advisorAudit.result?.value, storyAudit: storyAudit.result?.value, workspaceAudit: workspaceAudit.result?.value, networkAudit: networkAudit.result?.value, snapshotAudit: snapshotAudit.result?.value, mindmapAudit: mindmapAudit.result?.value, settingsAudit: settingsAudit.result?.value, narrowAudit: narrowAudit.result?.value };
     report.status = "pass";
     report.reportPath = path.join(runDirectory, "visual-report.json");
     await fs.writeFile(report.reportPath, JSON.stringify(report, null, 2));

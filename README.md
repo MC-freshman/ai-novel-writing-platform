@@ -117,6 +117,8 @@ AI 功能用于检索相关资料、讨论情节、生成规划和提出修订�
 - 点击「思维导图」→「新建思维导图」，会以中心主题为起点创建一张左右双向展开的导图。列表列出之前创建的全部导图（含主题数与更新时间），点击即可切回继续编辑。选中节点后可在属性区改文字、备注、颜色和分支方向；Tab 加子主题、Enter 加同级、F2 改名、Delete 删除，双击节点也可改名。滚轮缩放、拖动空白处平移，「展开编辑区」可放大到全窗口。
 - 点击「进度网格」→「新建网格」，可创建多张自定义网格：增删行列、改列名与列类型（文字 / 状态 / 关联章节）、填写单元格、调整行顺序并绑定实际章节。顶部按状态统计完成率，「同步章节状态」把已绑定章节的进度写回网格。左侧列表可随时切回之前的网格。
 - 点击「导入 XMind」可把已有的 `.xmind` 文件转成思维导图：新版 `content.json` 和 XMind 8 的 `content.xml` 都支持，先显示文件名、画布数与主题数预览，可选择导入全部画布或指定画布，确认后每个画布生成一张可继续编辑的导图，原有文件不会被改写。单文件上限 16 MB、每张导图最多 2000 个主题，超出会明确提示截断。
+- 原「分析 → 关系网」已并入这里：点击「从角色关系生成」会把角色卡中的人物与关系转成一张可继续编辑的思维导图（分析页不再保留独立的关系网标签，原先写在角色卡里的关系数据不变）。
+- 画布区域较小时点击「弹窗编辑」打开独立弹窗：画布占满窗口、属性区移到右侧，也可用「精简属性区」把属性栏收成一行；按 `Esc` 或「关闭弹窗」返回。改动在弹窗内外同样会自动保存。
 - 改动会在短暂停顿后自动写盘；切换视图、按 `Ctrl+S` 或关闭窗口时也会先保存。数据存放在项目目录 `analysis/creative-workspace/state.json`，随项目快照、备份和项目交换一起保存；每项目最多 60 张导图、60 张网格，达到上限会拒绝新建而不是覆盖旧数据。
 
 ### 7. AI 对话、模型设置与检索
@@ -326,6 +328,8 @@ Limits: 20 networks per project; 80 tables, 10,000 records, 32 columns, 30 impor
 - `进度网格` (Progress grids) creates multiple custom grids: add or remove rows and columns, rename columns, choose a column type (text / status / linked chapter), fill cells, reorder rows, and bind real chapters. The summary bar counts each status and shows a completion rate; `同步章节状态` copies chapter progress back into linked rows. The list switches between previously created grids.
 
 `导入 XMind` (Import XMind) turns an existing `.xmind` file into editable maps. Both the newer `content.json` and XMind 8 `content.xml` formats are supported; a preview shows the file name, sheet count, and topic count, and you can import all sheets or just one. Each sheet becomes one editable map and the source file is never modified. Files are limited to 16 MB and each map to 2,000 topics, with an explicit truncation warning.
+
+The former `关系网` (relationship graph) tab has been merged into mind maps: `从角色关系生成` turns characters and their relations from character cards into an editable map. The standalone tab is gone; relationship data stored in character cards is untouched. `弹窗编辑` opens a large modal with a full-height canvas and a side inspector; `精简属性区` collapses the inspector to a single row, and `Esc` closes the modal.
 
 Edits are saved automatically after a short pause, and are flushed when switching views, pressing `Ctrl+S`, or closing the window. Both are stored in `analysis/creative-workspace/state.json` inside the project directory and are included in snapshots, backups, and project exchange. Each project holds up to 60 maps and 60 grids; exceeding the limit rejects the new item instead of overwriting older ones.
 

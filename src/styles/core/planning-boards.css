@@ -84,6 +84,30 @@
 .mind-map-import-actions { display: flex; gap: 8px; }
 .mind-map-import-error { margin: 0; padding: 8px 12px; border: 1px solid var(--danger); border-radius: 6px; font-size: 12px; color: var(--danger); }
 
+/* 独立弹窗：画布占满窗口，属性区移到右侧并可精简 */
+.mind-map-modal { position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr); width: min(1500px, 96vw); height: min(920px, 94vh); min-width: min(720px, 94vw); min-height: min(520px, 88vh); overflow: hidden; resize: both; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); }
+.mind-map-modal-header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+.mind-map-modal-header strong { font-size: 14px; color: var(--text); }
+.mind-map-modal-header span { flex: 1; }
+.mind-map-modal-body { min-width: 0; min-height: 0; overflow: auto; padding: 12px; }
+.mind-map-modal .mind-map-panel { height: 100%; }
+.mind-map-panel.fullscreen .mind-map-body { grid-template-rows: auto minmax(0, 1fr); }
+.mind-map-panel.fullscreen .mind-map-list { max-height: 78px; }
+.mind-map-panel.fullscreen .mind-map-main { display: grid; grid-template-columns: minmax(0, 1fr) 268px; grid-template-rows: minmax(0, 1fr); min-height: 0; }
+.mind-map-panel.fullscreen .mind-map-canvas { grid-column: 1; grid-row: 1; height: 100%; min-height: 0; }
+.mind-map-panel.fullscreen .mind-map-inspector { grid-column: 2; grid-row: 1; order: 0; flex-direction: column; flex-wrap: nowrap; align-items: stretch; align-content: start; overflow: auto; }
+.mind-map-panel.fullscreen .mind-map-inspector label { width: 100%; }
+.mind-map-panel.fullscreen .mind-map-inspector textarea { min-height: 90px; }
+.mind-map-panel.inspector-compact .mind-map-inspector > label,
+.mind-map-panel.inspector-compact .mind-map-inspector > p { display: none; }
+.mind-map-panel.inspector-compact .mind-map-inspector { padding: 6px 8px; gap: 6px; }
+.mind-map-panel.fullscreen.inspector-compact .mind-map-main { grid-template-columns: minmax(0, 1fr) 176px; }
+@media (max-width: 900px) {
+  .mind-map-panel.fullscreen .mind-map-main { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) auto; }
+  .mind-map-panel.fullscreen .mind-map-canvas { grid-row: 1; }
+  .mind-map-panel.fullscreen .mind-map-inspector { grid-column: 1; grid-row: 2; flex-direction: row; flex-wrap: wrap; }
+}
+
 @container (max-width: 760px) {
   .mind-map-body,
   .progress-grid-body { grid-template-columns: 1fr; }
