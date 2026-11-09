@@ -45,6 +45,9 @@
 .mind-map-relation-line { transition: stroke-width 120ms ease, filter 120ms ease; }
 .mind-map-relation.selected .mind-map-relation-line { filter: drop-shadow(0 0 3px var(--accent-strong)); }
 .mind-map-relation-hit { pointer-events: stroke; cursor: pointer; }
+/* 连线层压在节点 div 之上，终点三角箭头才不会被不透明的节点背景吞掉。 */
+.mind-map-links { z-index: 2; }
+.mind-map-node { z-index: 1; }
 .mind-map-relation-chip { fill: var(--panel); fill-opacity: 0.96; stroke: var(--line); stroke-width: 1px; }
 .mind-map-relation.selected .mind-map-relation-chip { stroke: var(--accent-strong); stroke-width: 1.5px; }
 .mind-map-relation-label { font-size: 13px; font-weight: 500; paint-order: stroke; stroke: var(--panel); stroke-width: 3px; stroke-linejoin: round; }
@@ -107,12 +110,30 @@
 .mind-map-import-error { margin: 0; padding: 8px 12px; border: 1px solid var(--danger); border-radius: 6px; font-size: 12px; color: var(--danger); }
 
 /* 独立弹窗：画布占满窗口，属性区移到右侧并可精简 */
-.mind-map-modal { position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr); width: min(1500px, 96vw); height: min(920px, 94vh); min-width: min(720px, 94vw); min-height: min(520px, 88vh); overflow: hidden; resize: both; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); }
-.mind-map-modal-header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); }
-.mind-map-modal-header strong { font-size: 14px; color: var(--text); }
+.mind-map-modal { position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr); width: 100vw; height: 100vh; min-width: 0; min-height: 0; overflow: hidden; resize: none; border: 0; border-radius: 0; background: var(--panel); box-shadow: none; }
+.mind-map-modal-header { display: flex; flex-wrap: nowrap; align-items: center; gap: 10px; padding: 4px 10px; border-bottom: 1px solid var(--line); font-size: 11px; color: var(--muted); }
+.mind-map-modal-header strong { font-size: 12px; color: var(--text); }
 .mind-map-modal-header span { flex: 1; }
-.mind-map-modal-body { min-width: 0; min-height: 0; overflow: auto; padding: 12px; }
-.mind-map-modal .mind-map-panel { height: 100%; }
+.mind-map-modal-header button { font-size: 11px; padding: 2px 8px; }
+.mind-map-modal-body { min-width: 0; min-height: 0; overflow: hidden; padding: 0; }
+.mind-map-modal .mind-map-panel { height: 100%; gap: 0; }
+/* 弹窗内工具栏压成紧凑单行：去边框、缩小字号，尽量把高度让给画布。按钮文案全部保留以兼容 UI 断言。 */
+.mind-map-modal .mind-map-toolbar { flex-wrap: nowrap; gap: 4px; padding: 4px 8px; overflow-x: auto; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; }
+.mind-map-modal .mind-map-toolbar button { flex: none; font-size: 11px; padding: 3px 7px; border: 0; background: transparent; }
+.mind-map-modal .mind-map-toolbar button:hover:not(:disabled) { background: var(--panel-strong); }
+.mind-map-modal .mind-map-toolbar select, .mind-map-modal .mind-map-toolbar input { font-size: 11px; padding: 2px 4px; }
+.mind-map-modal .mind-map-toolbar label { flex: none; font-size: 11px; }
+.mind-map-modal .mind-map-toolbar [role="status"] { flex: none; font-size: 11px; }
+/* 左侧导图列表压成细带；工具栏已有下拉选择，这里只做快速切换。 */
+.mind-map-modal .mind-map-panel.fullscreen .mind-map-list { max-height: 34px; flex-direction: row; align-items: center; gap: 4px; padding: 2px 8px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; overflow-x: auto; }
+.mind-map-modal .mind-map-panel.fullscreen .mind-map-list header { min-width: auto; padding: 0; flex: none; }
+.mind-map-modal .mind-map-panel.fullscreen .mind-map-list button { min-width: 132px; width: auto; flex: none; flex-direction: row; align-items: center; gap: 6px; padding: 2px 8px; }
+.mind-map-modal .mind-map-panel.fullscreen .mind-map-main { position: relative; grid-template-columns: minmax(0, 1fr) 220px; gap: 0; }
+.mind-map-modal .mind-map-toolbar button[aria-pressed="true"] { border-color: var(--accent); background: var(--panel-strong); }
+/* 精简属性区时画布占满整行，属性区按钮浮在右下角：不占画布宽度，功能也不消失。 */
+.mind-map-modal .mind-map-panel.fullscreen.inspector-compact .mind-map-main { grid-template-columns: minmax(0, 1fr); }
+.mind-map-modal .mind-map-panel.fullscreen.inspector-compact .mind-map-inspector { position: absolute; right: 8px; bottom: 8px; z-index: 5; width: auto; max-width: 320px; padding: 6px 8px; box-shadow: var(--shadow); }
+.mind-map-modal .mind-map-canvas { border: 0; border-radius: 0; }
 .mind-map-panel.fullscreen .mind-map-body { grid-template-rows: auto minmax(0, 1fr); }
 .mind-map-panel.fullscreen .mind-map-list { max-height: 78px; }
 .mind-map-panel.fullscreen .mind-map-main { display: grid; grid-template-columns: minmax(0, 1fr) 268px; grid-template-rows: minmax(0, 1fr); min-height: 0; }

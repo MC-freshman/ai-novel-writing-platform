@@ -239,17 +239,8 @@ export function descendants(map: MindMap, nodeId: string): string[] {
   return result;
 }
 
-/** 计算 XMind 风格的左右双向树布局；只保留从根可达的节点，避免脏数据成环。 */
-export function layoutMindMap(map: MindMap): MindMapLayout {
-  const byId = new Map(map.nodes.map((node) => [node.id, node]));
-  const byParent = new Map<string, MindMapNode[]>();
-  for (const node of map.nodes) {
-    byParent.set(node.parentId, [...(byParent.get(node.parentId) || []), node]);
-  }
-  for (const list of byParent.values()) list.sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
-  const root = byId.get(map.rootId) || map.nodes[0];
-  if (!root) return { nodes: [], edges: [], width: 900, height: 520 };
-
+/** 单棵树的左右双向布局；坐标原点在中心主题，返回已平移到非负坐标的结果。 */
+function layoutTree(root: MindMapNode, byParent: Map<string, MindMapNode[]>): MindMapLayout {
   const children = new Map<string, MindMapNode[]>();
   const seen = new Set<string>();
   const build = (node: MindMapNode) => {
@@ -325,4 +316,42 @@ export function layoutMindMap(map: MindMap): MindMapLayout {
     width: extentX * 2,
     height: extentY * 2,
   };
+}
+
+/**
+ * 计算 XMind 风格的左右双向树布局。
+ * 单根时走原逻辑，输出与历史版本完全一致；存在多个 parentId 为空的独立中心时，
+ * 每棵树单独布局后垂直堆叠，块与块之间不生成树边，也不会互相连线。
+ */
+export function layoutMindMap(map: MindMap): MindMapLayout {
+  const byId = new Map(map.nodes.map((node) => [node.id, node]));
+  const byParent = new Map<string, MindMapNode[]>();
+  for (const node of map.nodes) {
+    byParent.set(node.parentId, [...(byParent.get(node.parentId) || []), node]);
+  }
+  for (const list of byParent.values()) list.sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
+  const root = byId.get(map.rootId) || map.nodes[0];
+  if (!root) return { nodes: [], edges: [], width: 900, height: 520 };
+
+  // parentId 指向不存在 id 的脏节点仍按历史语义忽略，不误判为独立中心。
+  const roots = map.nodes.filter((node) => !node.parentId || node.parentId === node.id);
+  roots.sort((a, b) => (a.id === root.id ? -1 : b.id === root.id ? 1 : a.order - b.order || a.id.localeCompare(b.id)));
+  if (!roots.length) roots.push(root);
+  if (!roots.some((item) => item.id === root.id)) roots.unshift(root);
+  if (roots.length === 1) return layoutTree(roots[0], byParent);
+
+  const blocks = roots.map((item) => layoutTree(item, byParent));
+  const maxWidth = Math.max(...blocks.map((block) => block.width));
+  const gap = 72;
+  const nodes: LaidMindNode[] = [];
+  const edges: LaidMindEdge[] = [];
+  let cursorY = PADDING;
+  for (const block of blocks) {
+    const tx = PADDING + (maxWidth - block.width) / 2;
+    const ty = cursorY;
+    for (const item of block.nodes) nodes.push({ ...item, x: item.x + tx, y: item.y + ty });
+    for (const edge of block.edges) edges.push({ ...edge, x1: edge.x1 + tx, x2: edge.x2 + tx, y1: edge.y1 + ty, y2: edge.y2 + ty });
+    cursorY += block.height + gap;
+  }
+  return { nodes, edges, width: maxWidth + PADDING * 2, height: cursorY - gap + PADDING };
 }

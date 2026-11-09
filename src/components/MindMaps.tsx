@@ -12,7 +12,7 @@ import {
   applyPositions, createMindMap, createMindMapNode, layoutMindMap, layoutRelations,
   MIND_NODE_HEIGHT, MIND_NODE_WIDTH, newId,
 } from "../lib/mind-map";
-import { mergePositions, nodesInRect, removeMindMapNodes } from "../lib/mind-map-commands";
+import { mergePositions, nodesInRect, removeMindMapNodes, subtreeIds } from "../lib/mind-map-commands";
 import { useMindMapCommands } from "./mind-map/useMindMapCommands";
 
 /** 关系线默认色：绿色虚线，与父子树边的实线形成视觉区分。 */
@@ -138,7 +138,8 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus, ful
     const element = canvasRef.current;
     const current = layoutRef.current;
     if (!element || !current.width) return;
-    const next = Math.min(1, Math.max(0.35, Math.min((element.clientWidth - 32) / current.width, (element.clientHeight - 32) / current.height)));
+    // 允许放大到 1.6 倍：节点较少的导图也能铺满画布，而不是缩在中间一小块。
+    const next = Math.min(1.6, Math.max(0.35, Math.min((element.clientWidth - 32) / current.width, (element.clientHeight - 32) / current.height)));
     setScale(next);
     setOffset({ x: (element.clientWidth - current.width * next) / 2, y: (element.clientHeight - current.height * next) / 2 });
   }, []);
@@ -644,6 +645,40 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus, ful
     onStatus(`已复制 ${ids.length} 个主题（含子树）到内部剪贴板。`);
   }
 
+  /** 新建独立中心主题：parentId 为空，与其它中心之间不生成树边。 */
+  function addCenterTopic() {
+    if (!map) return;
+    const count = map.nodes.filter((node) => !node.parentId).length;
+    const node: MindMapNode = {
+      id: newId("node"), parentId: "", text: `中心主题 ${count + 1}`, note: "", color: "",
+      collapsed: false, order: Math.max(-1, ...map.nodes.map((item) => item.order)) + 1, side: "right",
+    };
+    commit((previous) => ({ ...previous, updatedAt: new Date().toISOString(), nodes: [...previous.nodes, node] }));
+    setSelectedId(node.id);
+    setSelectedIds([node.id]);
+    setSelectedRelationId("");
+    setEditingId(node.id);
+    onStatus("已新建独立中心主题：它与其它中心之间不会生成连线。");
+  }
+
+  /** 把主题从父主题断开：parentId 置空，并清掉跨越边界的关系线，使它独立成一块。 */
+  function detachFromParent(targetId: string) {
+    if (!map) return;
+    const target = map.nodes.find((node) => node.id === targetId);
+    if (!target || !target.parentId || target.id === map.rootId) return;
+    const inside = new Set(subtreeIds(map, targetId));
+    commit((previous) => ({
+      ...previous,
+      updatedAt: new Date().toISOString(),
+      nodes: previous.nodes.map((node) => node.id === targetId ? { ...node, parentId: "", side: "right" } : node),
+      relations: relationsOf(previous).filter((item) => inside.has(item.sourceId) === inside.has(item.targetId)),
+    }));
+    setSelectedId(targetId);
+    setSelectedIds([targetId]);
+    setSelectedRelationId("");
+    onStatus("已断开：该主题及其子主题独立成块，不再与原来的树连线。");
+  }
+
   function onCanvasWheel(event: ReactWheelEvent<HTMLDivElement>) {
     event.preventDefault();
     setScale((value) => Math.max(0.3, Math.min(2.2, value * (event.deltaY < 0 ? 1.1 : 0.9))));
@@ -731,7 +766,8 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus, ful
                       caption.secondary ? relationTextWidth(caption.secondary, 11.5) : 0,
                     ) + 20);
                     const chipHeight = caption.secondary ? 34 : 22;
-                    const chipY = item.ly - chipHeight / 2;
+                    // 标签整体移到连线上方：底板不再盖住关系线，避免视觉上「线被截断」。
+                    const chipY = item.ly - 10 - chipHeight;
                     const labelY = caption.secondary ? chipY + 14 : chipY + 15;
                     return <g key={`${current.id}-${index}`} className={`mind-map-relation ${selected ? "selected" : ""}`}>
                       <path className="mind-map-relation-line" d={item.d} fill="none" stroke={color}
@@ -868,6 +904,8 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus, ful
         <button onClick={() => runMenu(() => (selectedIds.length > 1 ? removeSelectedNodes() : removeNode()))}>删除此主题</button>
         <button onClick={() => runMenu(() => copyFromMenu(contextMenu.targetId))}>复制主题及子树</button>
         <button disabled={!clipboardCount} onClick={() => runMenu(() => pasteClipboard(contextMenu.targetId))}>粘贴到此主题</button>
+        <button disabled={contextMenu.targetId === map.rootId || !map.nodes.find((node) => node.id === contextMenu.targetId)?.parentId}
+          onClick={() => runMenu(() => detachFromParent(contextMenu.targetId))}>从父主题断开，独立成块</button>
         <button onClick={() => runMenu(() => {
           setRelationMode(true);
           setRelationSourceId(contextMenu.targetId);
@@ -884,6 +922,7 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus, ful
         <button onClick={() => runMenu(() => removeRelation())}>删除此连线</button>
       </>}
       {contextMenu.kind === "canvas" && <>
+        <button onClick={() => runMenu(() => addCenterTopic())}>新建独立中心主题</button>
         <button disabled={!clipboardCount} onClick={() => runMenu(() => pasteClipboard(map.rootId))}>粘贴到中心主题</button>
         <button onClick={() => runMenu(() => setSelectedIds(map.nodes.map((node) => node.id)))}>全选主题</button>
       </>}

@@ -149,3 +149,30 @@ test("mergePositions：拖拽临时偏移覆盖已落盘值，空拖拽保持原
   });
   assert.deepEqual(commands.mergePositions(undefined, null), {});
 });
+
+test("layoutMindMap：单根布局保持历史输出（根节点居中、节点与树边数量不变）", () => {
+  const layout = layoutLib.layoutMindMap(makeMap());
+  const root = layout.nodes.find((item) => item.id === "root");
+  assert.ok(root, "根节点缺失");
+  assert.equal(root.x, layout.width / 2);
+  assert.equal(root.y, layout.height / 2);
+  assert.equal(layout.nodes.length, 4);
+  assert.equal(layout.edges.length, 3);
+});
+
+test("layoutMindMap：多个独立中心各自成块、互不连线、坐标不重叠", () => {
+  const map = makeMap();
+  // 把 a 及其子树从 root 断开，形成第二个独立中心。
+  map.nodes = map.nodes.map((node) => node.id === "a" ? { ...node, parentId: "" } : node);
+  const layout = layoutLib.layoutMindMap(map);
+  const ids = layout.nodes.map((item) => item.id);
+  assert.ok(["root", "a", "a1", "b"].every((id) => ids.includes(id)), "断开后丢失节点");
+  assert.equal(new Set(ids).size, ids.length, "同一节点被重复布局");
+  assert.ok(!layout.edges.some((edge) => edge.id === "root>a"), "断开后仍保留父子树边");
+  const root = layout.nodes.find((item) => item.id === "root");
+  const detached = layout.nodes.find((item) => item.id === "a");
+  assert.ok(root && detached && Math.abs(detached.y - root.y) > 100, "两个中心未垂直分开");
+  assert.ok(layout.nodes.every((item) => Number.isFinite(item.x) && Number.isFinite(item.y)), "出现非有限坐标");
+  assert.ok(layout.nodes.every((item) => item.x >= 0 && item.y >= 0), "出现负坐标");
+  assert.ok(layout.width > 0 && layout.height > 0, "画布尺寸非法");
+});
