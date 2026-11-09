@@ -17,8 +17,8 @@ import { useMindMapCommands } from "./mind-map/useMindMapCommands";
 
 /** 关系线默认色：绿色虚线，与父子树边的实线形成视觉区分。 */
 const RELATION_DEFAULT_COLOR = "#2f8f6b";
-/** 关系线标签默认色：斜体灰字。 */
-const RELATION_DEFAULT_LABEL_COLOR = "#6b7280";
+/** 关系线标签默认色：深灰蓝，保证在连线上清晰可读。 */
+const RELATION_DEFAULT_LABEL_COLOR = "#243447";
 /** 关系线数量上限，与 creative-workspace.cjs 的白名单保持一致。 */
 const RELATION_LIMIT = 2000;
 /** positions 偏移上限，与 creative-workspace.cjs 白名单一致。 */
@@ -41,6 +41,26 @@ function relationDashArray(pattern: MindMapRelationLinePattern | undefined): str
   if (pattern === "dash") return "8 5";
   if (pattern === "dot") return "2 4";
   return undefined;
+}
+
+/** 估算 SVG 文本宽度：CJK/全角按 1em、其余按 0.55em，用于关系线标签底板。 */
+function relationTextWidth(text: string, fontSize: number): number {
+  let units = 0;
+  for (const char of Array.from(text)) units += /[\u2e80-\uffef]/.test(char) ? 1 : 0.55;
+  return units * fontSize;
+}
+
+/** 关系标签文案：主行显示连线文字，副行显示备注；都为空时给出占位提示。 */
+function relationCaption(relation: MindMapRelation): { primary: string; secondary: string; placeholder: boolean; full: string } {
+  const label = String(relation.label ?? "").trim();
+  const note = String(relation.note ?? "").trim();
+  const clip = (value: string, max: number) => (value.length > max ? `${value.slice(0, max)}…` : value);
+  return {
+    primary: clip(label || note || "未命名关系", 28),
+    secondary: label && note ? clip(note, 36) : "",
+    placeholder: !label && !note,
+    full: [label, note].filter(Boolean).join("\n"),
+  };
 }
 
 function formatTime(value: string) {
@@ -339,7 +359,7 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus, ful
       lineWidth: 2,
       arrowBegin: "none",
       arrowEnd: "triangle",
-      labelFontStyle: "italic",
+      labelFontStyle: "normal",
       labelColor: "",
     };
     commit((previous) => ({
@@ -352,7 +372,7 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus, ful
     setSelectedRelationId(item.id);
     setSelectedId("");
     setSelectedIds([]);
-    onStatus("关系线已创建，可在属性区编辑文字、备注与样式。");
+    onStatus("关系线已创建：画布上已显示标签，右侧「连线文字」可直接输入，文字与备注会立刻显示在线上。");
   }
 
   async function removeBoard() {
@@ -705,15 +725,33 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus, ful
                     const color = current.lineColor || RELATION_DEFAULT_COLOR;
                     const markerId = relationMarkerIds.get(color) || "";
                     const selected = current.id === selectedRelationId;
+                    const caption = relationCaption(current);
+                    const chipWidth = Math.min(280, Math.max(
+                      relationTextWidth(caption.primary, 13),
+                      caption.secondary ? relationTextWidth(caption.secondary, 11.5) : 0,
+                    ) + 20);
+                    const chipHeight = caption.secondary ? 34 : 22;
+                    const chipY = item.ly - chipHeight / 2;
+                    const labelY = caption.secondary ? chipY + 14 : chipY + 15;
                     return <g key={`${current.id}-${index}`} className={`mind-map-relation ${selected ? "selected" : ""}`}>
                       <path className="mind-map-relation-line" d={item.d} fill="none" stroke={color}
                         strokeWidth={(current.lineWidth ?? 2) + (selected ? 1 : 0)}
                         strokeDasharray={relationDashArray(current.linePattern)} strokeLinecap="round"
                         markerStart={current.arrowBegin === "triangle" && markerId ? `url(#${markerId})` : undefined}
                         markerEnd={(current.arrowEnd ?? "triangle") === "triangle" && markerId ? `url(#${markerId})` : undefined} />
-                      {current.label && <text className="mind-map-relation-label" x={item.lx} y={item.ly - 6}
-                        textAnchor="middle" fontStyle={current.labelFontStyle === "normal" ? "normal" : "italic"}
-                        fill={current.labelColor || RELATION_DEFAULT_LABEL_COLOR}>{current.label}</text>}
+                      <g className="mind-map-relation-caption-group">
+                        <rect className="mind-map-relation-chip" x={item.lx - chipWidth / 2} y={chipY}
+                          width={chipWidth} height={chipHeight} rx={6}>
+                          {caption.full.length > 28 && <title>{caption.full}</title>}
+                        </rect>
+                        <text className={caption.placeholder ? "mind-map-relation-placeholder" : "mind-map-relation-label"}
+                          x={item.lx} y={labelY} textAnchor="middle"
+                          fontStyle={caption.placeholder ? undefined : (current.labelFontStyle === "normal" ? "normal" : "italic")}
+                          fill={caption.placeholder ? "var(--muted)" : (current.labelColor || RELATION_DEFAULT_LABEL_COLOR)}
+                        >{caption.primary}</text>
+                        {caption.secondary && <text className="mind-map-relation-note" x={item.lx} y={chipY + 28}
+                          textAnchor="middle">{caption.secondary}</text>}
+                      </g>
                       <path className="mind-map-relation-hit" d={item.d} fill="none" stroke="transparent" strokeWidth={16}
                         data-relation-id={current.id}
                         onClick={(event) => {
@@ -772,7 +810,7 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus, ful
               <button onClick={() => setSelectedIds([])}>取消多选</button>
             </div>
           </div> : selectedRelation ? <div className="mind-map-inspector mind-map-relation-inspector">
-            <label>连线文字<input aria-label="连线文字" maxLength={500} value={selectedRelation.label || ""} onChange={(event) => patchRelation(selectedRelation.id, { label: event.target.value })} /></label>
+            <label>连线文字<input autoFocus aria-label="连线文字" maxLength={500} value={selectedRelation.label || ""} onChange={(event) => patchRelation(selectedRelation.id, { label: event.target.value })} /></label>
             <label>连线备注<textarea aria-label="连线备注" maxLength={2000} value={selectedRelation.note || ""} onChange={(event) => patchRelation(selectedRelation.id, { note: event.target.value })} placeholder="补充这条关系的说明" /></label>
             <label>颜色<input type="color" aria-label="连线颜色" value={selectedRelation.lineColor || RELATION_DEFAULT_COLOR} onChange={(event) => patchRelation(selectedRelation.id, { lineColor: event.target.value })} /></label>
             <label>标签颜色<input type="color" aria-label="连线标签颜色" value={selectedRelation.labelColor || RELATION_DEFAULT_LABEL_COLOR} onChange={(event) => patchRelation(selectedRelation.id, { labelColor: event.target.value })} /></label>

@@ -45,7 +45,11 @@
 .mind-map-relation-line { transition: stroke-width 120ms ease, filter 120ms ease; }
 .mind-map-relation.selected .mind-map-relation-line { filter: drop-shadow(0 0 3px var(--accent-strong)); }
 .mind-map-relation-hit { pointer-events: stroke; cursor: pointer; }
-.mind-map-relation-label { font-size: 12px; paint-order: stroke; stroke: var(--panel); stroke-width: 3px; stroke-linejoin: round; }
+.mind-map-relation-chip { fill: var(--panel); fill-opacity: 0.96; stroke: var(--line); stroke-width: 1px; }
+.mind-map-relation.selected .mind-map-relation-chip { stroke: var(--accent-strong); stroke-width: 1.5px; }
+.mind-map-relation-label { font-size: 13px; font-weight: 500; paint-order: stroke; stroke: var(--panel); stroke-width: 3px; stroke-linejoin: round; }
+.mind-map-relation-placeholder { font-size: 13px; font-weight: 400; font-style: italic; fill: var(--muted); opacity: 0.8; paint-order: stroke; stroke: var(--panel); stroke-width: 3px; stroke-linejoin: round; }
+.mind-map-relation-note { font-size: 11.5px; font-weight: 400; fill: var(--text); opacity: 0.86; paint-order: stroke; stroke: var(--panel); stroke-width: 3px; stroke-linejoin: round; }
 .mind-map-node.relation-source { outline: 2px dashed var(--accent-strong); outline-offset: 3px; }
 .mind-map-relation-inspector { border-color: var(--accent); }
 .mind-map-toolbar button[aria-pressed="true"] { border-color: var(--accent); background: var(--panel-strong); }
