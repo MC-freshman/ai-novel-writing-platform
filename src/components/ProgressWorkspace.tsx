@@ -22,6 +22,8 @@ export function ProgressWorkspace({ state, selectedChapterId, onSelectChapter, o
   const [reload, setReload] = useState(0);
   const saver = useRef<PageSaveHandle | null>(null);
   const closeModalRef = useRef<() => void>(() => {});
+  // 弹窗内的连线模式由 MindMaps 同步过来：激活时 Esc 先用于取消连线，不再关闭整个弹窗。
+  const relationModeRef = useRef(false);
   const register = useCallback((kind: PageSaveKind, handle: PageSaveHandle | null) => {
     saver.current = handle; onRegisterSave(kind, handle);
   }, [onRegisterSave]);
@@ -73,6 +75,7 @@ export function ProgressWorkspace({ state, selectedChapterId, onSelectChapter, o
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       if (["INPUT", "TEXTAREA", "SELECT"].includes((event.target as HTMLElement)?.tagName || "")) return;
+      if (relationModeRef.current) return;
       closeModalRef.current();
     };
     window.addEventListener("keydown", onKey);
@@ -81,9 +84,10 @@ export function ProgressWorkspace({ state, selectedChapterId, onSelectChapter, o
 
   const canExpand = mode !== "chapters" && !mindmapModal;
   const boardProps = workspace ? { workspace, onWorkspace: setWorkspace, onRegisterSave: register, onStatus } : null;
-  const mindMaps = (fullscreen: boolean) => boardProps && <MindMaps
+  const mindMaps = (fullscreen: boolean, onRelationModeChange?: (active: boolean) => void) => boardProps && <MindMaps
     workspace={boardProps.workspace} onWorkspace={boardProps.onWorkspace}
-    onRegisterSave={register} onStatus={onStatus} fullscreen={fullscreen} />;
+    onRegisterSave={register} onStatus={onStatus} fullscreen={fullscreen}
+    onRelationModeChange={onRelationModeChange} />;
 
   return <div className={`progress-workspace ${expanded ? "expanded" : ""}`}>
     <div className="progress-workspace-modes">
@@ -108,7 +112,7 @@ export function ProgressWorkspace({ state, selectedChapterId, onSelectChapter, o
           <span>画布已放大；可拖动空白处平移、滚轮缩放，按 Esc 返回</span>
           <button aria-label="关闭思维导图弹窗" onClick={() => void closeMindmapModal()}>关闭弹窗</button>
         </header>
-        <div className="mind-map-modal-body">{mindMaps(true)}</div>
+        <div className="mind-map-modal-body">{mindMaps(true, (active) => { relationModeRef.current = active; })}</div>
       </section>
     </div>}
   </div>;

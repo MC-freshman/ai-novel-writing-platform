@@ -197,7 +197,58 @@ function normalizeItem(collection, payload = {}, index = 0) {
     if (!nodes.some((node) => node.id === rootId)) {
       nodes.unshift({ id: rootId, parentId: "", text: title, note: "", color: "", collapsed: false, order: -1, side: "right" });
     }
-    return { ...base, title, rootId, nodes };
+    // relations / positions 是新增顶层字段：必须显式白名单 + 值域校验，不能依赖 {...base} 直通落盘。
+    // 悬空边校验必须在 nodes 组装完成之后进行；先过滤再截断，避免前面的脏数据吞掉后面的合法边。
+    const nodeIds = new Set(nodes.map((node) => node.id));
+    const relations = [];
+    const seenRelationIds = new Set();
+    const rawRelations = Array.isArray(payload.relations) ? payload.relations : [];
+    for (const raw of rawRelations) {
+      const sourceId = cleanText(raw?.sourceId, 120);
+      const targetId = cleanText(raw?.targetId, 120);
+      // 丢弃悬空边与自环，避免画布渲染出指向不存在节点或自身的连线。
+      if (!nodeIds.has(sourceId) || !nodeIds.has(targetId) || sourceId === targetId) continue;
+      const id = cleanText(raw?.id, 120) || stableId("mind-relation", `${sourceId}|${targetId}|${relations.length}|${updatedAt}`);
+      // 按 id 去重，保留第一条，避免 React key 冲突与按 id 编辑时误伤。
+      if (seenRelationIds.has(id)) continue;
+      seenRelationIds.add(id);
+      const rawLineColor = cleanText(raw?.lineColor, 24);
+      const rawLabelColor = cleanText(raw?.labelColor, 24);
+      const width = raw?.lineWidth;
+      // 控制点四项既要有限也要限制量级，极大有限值会在渲染时溢出成 NaN / Infinity。
+      const controlPoints = (Array.isArray(raw?.controlPoints) ? raw.controlPoints : [])
+        .filter((point) => ["amount", "angle", "x", "y"].every((key) =>
+          Number.isFinite(point?.[key]) && Math.abs(point[key]) <= 8))
+        .slice(0, 2)
+        .map((point) => ({ amount: point.amount, angle: point.angle, x: point.x, y: point.y }));
+      relations.push({
+        id,
+        sourceId,
+        targetId,
+        label: cleanText(raw?.label, 500),
+        note: cleanText(raw?.note, 2000),
+        shape: ["curved", "straight", "elbow"].includes(raw?.shape) ? raw.shape : "curved",
+        linePattern: ["solid", "dash", "dot"].includes(raw?.linePattern) ? raw.linePattern : "dash",
+        lineColor: /^#[0-9a-fA-F]{6}$/.test(rawLineColor) ? rawLineColor : "",
+        lineWidth: Number.isFinite(width) && width >= 1 && width <= 8 ? width : 2,
+        arrowBegin: raw?.arrowBegin === "triangle" ? "triangle" : "none",
+        arrowEnd: raw?.arrowEnd === "none" ? "none" : "triangle",
+        labelFontStyle: raw?.labelFontStyle === "normal" ? "normal" : "italic",
+        labelColor: /^#[0-9a-fA-F]{6}$/.test(rawLabelColor) ? rawLabelColor : "",
+        controlPoints,
+      });
+      if (relations.length >= 2000) break;
+    }
+    const positions = {};
+    const rawPositions = payload.positions && typeof payload.positions === "object" && !Array.isArray(payload.positions) ? payload.positions : {};
+    for (const [key, value] of Object.entries(rawPositions)) {
+      // key 必须是现存节点 id，并跳过可能污染对象原型的键名。
+      if (!nodeIds.has(key) || ["__proto__", "constructor", "prototype"].includes(key)) continue;
+      if (!Number.isFinite(value?.dx) || !Number.isFinite(value?.dy)) continue;
+      if (Math.abs(value.dx) > 10000 || Math.abs(value.dy) > 10000) continue;
+      positions[key] = { dx: value.dx, dy: value.dy };
+    }
+    return { ...base, title, rootId, nodes, relations, positions };
   }
   if (collection === "progressGrids") {
     const columns = (Array.isArray(payload.columns) ? payload.columns : []).slice(0, 24).map((column, index) => ({

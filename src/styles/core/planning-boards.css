@@ -40,6 +40,24 @@
 .mind-map-canvas:active { cursor: grabbing; }
 .mind-map-world { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
 .mind-map-links { position: absolute; top: 0; left: 0; pointer-events: none; }
+/* 关系线：只有透明的命中路径接收点击，树边与空白处仍交给画布平移，既有交互不受影响。 */
+.mind-map-relations { pointer-events: none; }
+.mind-map-relation-line { transition: stroke-width 120ms ease, filter 120ms ease; }
+.mind-map-relation.selected .mind-map-relation-line { filter: drop-shadow(0 0 3px var(--accent-strong)); }
+.mind-map-relation-hit { pointer-events: stroke; cursor: pointer; }
+.mind-map-relation-label { font-size: 12px; paint-order: stroke; stroke: var(--panel); stroke-width: 3px; stroke-linejoin: round; }
+.mind-map-node.relation-source { outline: 2px dashed var(--accent-strong); outline-offset: 3px; }
+.mind-map-relation-inspector { border-color: var(--accent); }
+.mind-map-toolbar button[aria-pressed="true"] { border-color: var(--accent); background: var(--panel-strong); }
+/* T03/T04：框选、右键菜单、批量属性区与导入口径说明 */
+.mind-map-selection-box { position: absolute; box-sizing: border-box; border: 1px dashed var(--accent-strong); background: var(--panel-strong); background: color-mix(in srgb, var(--accent) 14%, transparent); pointer-events: none; }
+.mind-map-context-menu { position: fixed; z-index: 1000; display: flex; flex-direction: column; min-width: 132px; padding: 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: var(--shadow); }
+.mind-map-context-menu button { padding: 6px 10px; text-align: left; border: 0; border-radius: 4px; background: transparent; font-size: 12px; color: var(--text); cursor: pointer; }
+.mind-map-context-menu button:hover:not(:disabled) { background: var(--panel-strong); }
+.mind-map-context-menu button:disabled { color: var(--muted); cursor: default; }
+.mind-map-batch-inspector { border-color: var(--accent); }
+.mind-map-batch-inspector p { flex-basis: 100%; }
+.mind-map-import-relation-note { font-size: 11px; color: var(--muted); }
 .mind-map-node { position: absolute; display: flex; align-items: center; justify-content: center; box-sizing: border-box; padding: 0 14px; overflow: visible; border: 1px solid var(--line); border-radius: 18px; background: var(--panel-strong); font-size: 13px; color: var(--text); cursor: pointer; user-select: none; }
 .mind-map-node.root { background: var(--accent); border-color: var(--accent); color: var(--panel); }
 .mind-map-node.selected { outline: 2px solid var(--accent-strong); outline-offset: 2px; }

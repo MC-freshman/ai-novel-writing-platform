@@ -31,7 +31,8 @@
     "scripts/test-core-regression.cjs",
     "scripts/test-agent-platform.cjs",
     "scripts/test-novel-network.cjs",
-    "scripts/test-plan-regression.cjs"
+    "scripts/test-plan-regression.cjs",
+    "scripts/test/services/creative-workspace-relations.test.cjs"
   ],
   "credentials.cjs": [
     "scripts/test/services/domain-behavior.test.cjs",

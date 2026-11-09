@@ -116,7 +116,9 @@ AI 功能用于检索相关资料、讨论情节、生成规划和提出修订�
 
 - 点击「思维导图」→「新建思维导图」，会以中心主题为起点创建一张左右双向展开的导图。列表列出之前创建的全部导图（含主题数与更新时间），点击即可切回继续编辑。选中节点后可在属性区改文字、备注、颜色和分支方向；Tab 加子主题、Enter 加同级、F2 改名、Delete 删除，双击节点也可改名。滚轮缩放、拖动空白处平移，「展开编辑区」可放大到全窗口。
 - 点击「进度网格」→「新建网格」，可创建多张自定义网格：增删行列、改列名与列类型（文字 / 状态 / 关联章节）、填写单元格、调整行顺序并绑定实际章节。顶部按状态统计完成率，「同步章节状态」把已绑定章节的进度写回网格。左侧列表可随时切回之前的网格。
-- 点击「导入 XMind」可把已有的 `.xmind` 文件转成思维导图：新版 `content.json` 和 XMind 8 的 `content.xml` 都支持，先显示文件名、画布数与主题数预览，可选择导入全部画布或指定画布，确认后每个画布生成一张可继续编辑的导图，原有文件不会被改写。单文件上限 16 MB、每张导图最多 2000 个主题，超出会明确提示截断。
+- 点击「导入 XMind」可把已有的 `.xmind` 文件转成思维导图：新版 `content.json` 和 XMind 8 的 `content.xml` 都支持，先显示文件名、画布数与主题数预览，可选择导入全部画布或指定画布，确认后每个画布生成一张可继续编辑的导图，原有文件不会被改写。单文件上限 16 MB、每张导图最多 2000 个主题，超出会明确提示截断。XMind 8 的自由连线（relationship）会一并转成可编辑的关系线；导入预览会标注绝对像素控制点不导入。
+- **关系线可编辑：**选中节点后点「添加关系线」再点目标节点，即可在任意两节点之间连线（跨分支、跨层、指向中心主题都可以）。连线可单独设置文字、备注、颜色、虚实线、箭头方向、线宽与字型，点选后可改可删，与父子树边在视觉上区分。XMind 8 导入的关系线同样可编辑。
+- **常用编辑操作：**`Ctrl+Z` / `Ctrl+Y` 撤销重做（最多 50 步）、`Ctrl+A` 全选、按住 `Shift` 拖动框选、批量删除与改色、节点/连线/空白处三类右键菜单、`Ctrl+C` / `Ctrl+V` 复制粘贴子树；直接拖动节点可自由摆放，「重置位置」复原。单图最多 2000 个节点与 2000 条关系线。
 - 原「分析 → 关系网」已并入这里：点击「从角色关系生成」会把角色卡中的人物与关系转成一张可继续编辑的思维导图（分析页不再保留独立的关系网标签，原先写在角色卡里的关系数据不变）。
 - 画布区域较小时点击「弹窗编辑」打开独立弹窗：画布占满窗口、属性区移到右侧，也可用「精简属性区」把属性栏收成一行；按 `Esc` 或「关闭弹窗」返回。改动在弹窗内外同样会自动保存。
 - 改动会在短暂停顿后自动写盘；切换视图、按 `Ctrl+S` 或关闭窗口时也会先保存。数据存放在项目目录 `analysis/creative-workspace/state.json`，随项目快照、备份和项目交换一起保存；每项目最多 60 张导图、60 张网格，达到上限会拒绝新建而不是覆盖旧数据。
@@ -327,7 +329,11 @@ Limits: 20 networks per project; 80 tables, 10,000 records, 32 columns, 30 impor
 - `思维导图` (Mind maps) creates a two-sided map from a central topic. A list shows every map created earlier with its topic count and last update, so you can switch back and keep editing. Select a node to edit its text, notes, colour, and branch side; `Tab` adds a child, `Enter` adds a sibling, `F2` renames, `Delete` removes, and double-click also renames. Use the wheel to zoom, drag empty space to pan, and `展开编辑区` to enlarge the canvas.
 - `进度网格` (Progress grids) creates multiple custom grids: add or remove rows and columns, rename columns, choose a column type (text / status / linked chapter), fill cells, reorder rows, and bind real chapters. The summary bar counts each status and shows a completion rate; `同步章节状态` copies chapter progress back into linked rows. The list switches between previously created grids.
 
-`导入 XMind` (Import XMind) turns an existing `.xmind` file into editable maps. Both the newer `content.json` and XMind 8 `content.xml` formats are supported; a preview shows the file name, sheet count, and topic count, and you can import all sheets or just one. Each sheet becomes one editable map and the source file is never modified. Files are limited to 16 MB and each map to 2,000 topics, with an explicit truncation warning.
+`导入 XMind` (Import XMind) turns an existing `.xmind` file into editable maps. Both the newer `content.json` and XMind 8 `content.xml` formats are supported; a preview shows the file name, sheet count, and topic count, and you can import all sheets or just one. Each sheet becomes one editable map and the source file is never modified. Files are limited to 16 MB and each map to 2,000 topics, with an explicit truncation warning. Free relationships from XMind 8 become editable relations; the preview notes that absolute-pixel control points are not imported.
+
+**Editable relations:** select a node, click `添加关系线` (Add relation), then click a target node to draw a line between any two nodes — across branches, levels, or back to the centre. Each relation has its own label, note, colour, dash pattern, arrow direction, width, and label style, and can be selected, edited, or deleted independently of the tree edges. Imported relations are editable too.
+
+**Editing shortcuts:** `Ctrl+Z` / `Ctrl+Y` undo and redo (50 steps), `Ctrl+A` select all, `Shift` + drag for box selection, bulk delete and recolour, three context menus (node / relation / blank canvas), `Ctrl+C` / `Ctrl+V` to copy and paste a subtree, and drag a node to place it freely with `重置位置` to reset. Each map holds up to 2,000 nodes and 2,000 relations.
 
 The former `关系网` (relationship graph) tab has been merged into mind maps: `从角色关系生成` turns characters and their relations from character cards into an editable map. The standalone tab is gone; relationship data stored in character cards is untouched. `弹窗编辑` opens a large modal with a full-height canvas and a side inspector; `精简属性区` collapses the inspector to a single row, and `Esc` closes the modal.
 

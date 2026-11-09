@@ -1,28 +1,67 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, WheelEvent as ReactWheelEvent } from "react";
-import type { CreativeWorkspaceState, MindMap, MindMapNode, MindMapSide, XMindImportSheet } from "../types";
+import type {
+  CreativeWorkspaceState, MindMap, MindMapNode, MindMapRelation,
+  MindMapRelationArrow, MindMapRelationFontStyle, MindMapRelationLinePattern,
+  MindMapRelationShape, MindMapSide, XMindImportSheet,
+} from "../types";
+import type { LaidMindRelation, MindMapLayout } from "../lib/mind-map";
 import type { PageSaveHandle, PageSaveKind } from "../hooks/useEntityDraft";
 import { useWorkspaceDraft } from "../hooks/useWorkspaceDraft";
 import {
-  createMindMap, createMindMapNode, descendants, layoutMindMap,
-  MIND_NODE_HEIGHT, MIND_NODE_WIDTH,
+  applyPositions, createMindMap, createMindMapNode, layoutMindMap, layoutRelations,
+  MIND_NODE_HEIGHT, MIND_NODE_WIDTH, newId,
 } from "../lib/mind-map";
+import { mergePositions, nodesInRect, removeMindMapNodes } from "../lib/mind-map-commands";
+import { useMindMapCommands } from "./mind-map/useMindMapCommands";
+
+/** 关系线默认色：绿色虚线，与父子树边的实线形成视觉区分。 */
+const RELATION_DEFAULT_COLOR = "#2f8f6b";
+/** 关系线标签默认色：斜体灰字。 */
+const RELATION_DEFAULT_LABEL_COLOR = "#6b7280";
+/** 关系线数量上限，与 creative-workspace.cjs 的白名单保持一致。 */
+const RELATION_LIMIT = 2000;
+/** positions 偏移上限，与 creative-workspace.cjs 白名单一致。 */
+const POSITION_LIMIT = 10000;
+
+type ContextMenuState = {
+  x: number;
+  y: number;
+  kind: "node" | "relation" | "canvas";
+  targetId: string;
+};
+type SelectionRect = { x1: number; y1: number; x2: number; y2: number };
+
+/** loadWorkspace 不经 normalizeItem，外部 / MCP 写入的脏字段也按空集合安全降级。 */
+function relationsOf(value: MindMap | null): MindMapRelation[] {
+  return Array.isArray(value?.relations) ? (value?.relations ?? []) : [];
+}
+
+function relationDashArray(pattern: MindMapRelationLinePattern | undefined): string | undefined {
+  if (pattern === "dash") return "8 5";
+  if (pattern === "dot") return "2 4";
+  return undefined;
+}
 
 function formatTime(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "" : date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
-export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus, fullscreen = false }: {
+export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus, fullscreen = false, onRelationModeChange }: {
   workspace: CreativeWorkspaceState;
   onWorkspace: (value: CreativeWorkspaceState) => void;
   onRegisterSave: (kind: PageSaveKind, handle: PageSaveHandle | null) => void;
   onStatus: (message: string) => void;
   fullscreen?: boolean;
+  onRelationModeChange?: (active: boolean) => void;
 }) {
   const board = useWorkspaceDraft<MindMap>("mind-map", "mindMaps", workspace, onWorkspace, onRegisterSave, createMindMap);
   const map = board.draft;
   const [selectedId, setSelectedId] = useState("");
+  const [selectedRelationId, setSelectedRelationId] = useState("");
+  const [relationMode, setRelationMode] = useState(false);
+  const [relationSourceId, setRelationSourceId] = useState("");
   const [editingId, setEditingId] = useState("");
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 24, y: 24 });
@@ -31,12 +70,49 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus, ful
   const [importError, setImportError] = useState("");
   const [importing, setImporting] = useState(false);
   const [showInspector, setShowInspector] = useState(true);
+  const [dragOffsets, setDragOffsets] = useState<Record<string, { dx: number; dy: number }> | null>(null);
+  const [selectionBox, setSelectionBox] = useState<SelectionRect | null>(null);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const pan = useRef<{ x: number; y: number; originX: number; originY: number } | null>(null);
-  const layout = useMemo(() => map ? layoutMindMap(map) : { nodes: [], edges: [], width: 900, height: 520 }, [map]);
+  const dragRef = useRef<{
+    id: string; startX: number; startY: number; originDx: number; originDy: number;
+    scale: number; dx: number; dy: number; moved: boolean;
+  } | null>(null);
+  const marqueeRef = useRef<SelectionRect | null>(null);
+  const relationModeCallback = useRef(onRelationModeChange);
+  relationModeCallback.current = onRelationModeChange;
+
+  const commands = useMindMapCommands(map, board.update, (next) => {
+    if (selectedId && !next.nodes.some((node) => node.id === selectedId)) setSelectedId(next.rootId);
+    if (selectedRelationId && !relationsOf(next).some((item) => item.id === selectedRelationId)) setSelectedRelationId("");
+  });
+  const {
+    commit, undo, redo, resetHistory, canUndo, canRedo,
+    selectedIds, setSelectedIds, toggleSelected, clipboardCount, copySelection, pasteInto,
+  } = commands;
+
+  // 自由摆放：把已落盘 positions 与拖拽中的临时偏移合并后叠加到布局上，
+  // 节点与树边统一用这个 layout 渲染，关系线也用同一个 layout 计算 → 端点自动跟随。
+  const effectivePositions = useMemo(() => mergePositions(map?.positions, dragOffsets), [map?.positions, dragOffsets]);
+  const layout = useMemo<MindMapLayout>(
+    () => map ? applyPositions(layoutMindMap(map), effectivePositions) : { nodes: [], edges: [], width: 900, height: 520 },
+    [map, effectivePositions],
+  );
+  const laidRelations = useMemo<LaidMindRelation[]>(() => map ? layoutRelations(map, layout) : [], [map, layout]);
+  // 每种线色生成一对三角箭头 marker，避免为每条线重复定义且保持箭头与线同色。
+  const relationColors = useMemo(
+    () => Array.from(new Set(laidRelations.map((item) => item.relation.lineColor || RELATION_DEFAULT_COLOR))),
+    [laidRelations],
+  );
+  const relationMarkerIds = useMemo(
+    () => new Map<string, string>(relationColors.map((color, index): [string, string] => [color, `mind-relation-arrow-${index}`])),
+    [relationColors],
+  );
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
   const selectedNode = map?.nodes.find((node) => node.id === selectedId) || null;
+  const selectedRelation = relationsOf(map).find((item) => item.id === selectedRelationId) || null;
 
   const fitView = useCallback(() => {
     const element = canvasRef.current;
@@ -50,10 +126,81 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus, ful
   useEffect(() => {
     setSelectedId(map?.rootId || "");
     setEditingId("");
+    setSelectedRelationId("");
+    setRelationSourceId("");
+    setRelationMode(false);
+    setDragOffsets(null);
+    setSelectionBox(null);
+    setContextMenu(null);
+    dragRef.current = null;
+    marqueeRef.current = null;
+    // 切换 / 新建 / 导入导图后清空撤销与重做栈，避免跨导图回退。
+    resetHistory();
+    setSelectedIds(map?.rootId ? [map.rootId] : []);
     // 等布局稳定后再测量画布，避免属性区撑开时按旧高度计算居中偏移。
     const frame = window.requestAnimationFrame(fitView);
     return () => window.cancelAnimationFrame(frame);
-  }, [board.activeId, map?.rootId, fitView]);
+  }, [board.activeId, map?.rootId, fitView, resetHistory, setSelectedIds]);
+
+  // 把连线模式同步给宿主（弹窗）：宿主的 Esc 在连线模式激活时短路关窗。
+  useEffect(() => {
+    relationModeCallback.current?.(relationMode);
+    return () => relationModeCallback.current?.(false);
+  }, [relationMode]);
+
+  // 连线模式用窗口级 Esc 取消：点击节点不一定把焦点留在画布上。
+  useEffect(() => {
+    if (!relationMode) return;
+    const handle = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (["INPUT", "TEXTAREA", "SELECT"].includes((event.target as HTMLElement)?.tagName || "")) return;
+      setRelationMode(false);
+      setRelationSourceId("");
+      onStatus("已取消添加关系线。");
+    };
+    window.addEventListener("keydown", handle);
+    return () => window.removeEventListener("keydown", handle);
+  }, [relationMode, onStatus]);
+
+  // 全局编辑快捷键：Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y / Ctrl+C / Ctrl+V / Ctrl+A。
+  // 输入框聚焦时跳过，交给浏览器原生编辑；不与 Tab/Enter/F2/Delete/Esc 冲突。
+  useEffect(() => {
+    const handle = (event: KeyboardEvent) => {
+      if (["INPUT", "TEXTAREA", "SELECT"].includes((event.target as HTMLElement)?.tagName || "")) return;
+      if (!(event.ctrlKey || event.metaKey)) return;
+      const key = event.key.toLowerCase();
+      if (key === "z" && !event.shiftKey) { event.preventDefault(); undo(); }
+      else if ((key === "z" && event.shiftKey) || key === "y") { event.preventDefault(); redo(); }
+      else if (key === "c") {
+        event.preventDefault();
+        if (!map) return;
+        const ids = selectedIds.length ? selectedIds : (selectedId ? [selectedId] : []);
+        if (!ids.length) return;
+        copySelection(map, ids, () => newId("node"));
+        onStatus(`已复制 ${ids.length} 个主题（含子树）到内部剪贴板。`);
+      } else if (key === "v") {
+        event.preventDefault();
+        if (!map) return;
+        const next = pasteInto(map, selectedId || map.rootId, () => newId("node"));
+        if (!next) { onStatus("内部剪贴板为空，请先复制主题。"); return; }
+        commit({ ...next, updatedAt: new Date().toISOString() });
+        onStatus("已把剪贴板主题粘贴到当前选中节点下。");
+      } else if (key === "a") {
+        event.preventDefault();
+        if (map) setSelectedIds(map.nodes.map((node) => node.id));
+      }
+    };
+    window.addEventListener("keydown", handle);
+    return () => window.removeEventListener("keydown", handle);
+  }, [undo, redo, copySelection, pasteInto, commit, setSelectedIds, map, selectedIds, selectedId, onStatus]);
+
+  // 右键菜单：点击菜单之外任意位置关闭。
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    window.addEventListener("mousedown", close);
+    return () => window.removeEventListener("mousedown", close);
+  }, [contextMenu]);
 
   // 弹窗打开、属性区精简或窗口缩放后画布尺寸会变，重新适配视图；节点增减不改变容器尺寸，不会打断用户缩放。
   useEffect(() => {
@@ -72,12 +219,14 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus, ful
     return () => observer.disconnect();
   }, [fitView, board.activeId]);
 
-  const mutateNodes = useCallback((change: (nodes: MindMapNode[]) => MindMapNode[]) => {
-    board.update((previous) => ({ ...previous, updatedAt: new Date().toISOString(), nodes: change(previous.nodes) }));
-  }, [board]);
+  const mutateNodes = useCallback((change: (nodes: MindMapNode[]) => MindMapNode[], mergeKey?: string) => {
+    commit((previous) => ({ ...previous, updatedAt: new Date().toISOString(), nodes: change(previous.nodes) }), mergeKey);
+  }, [commit]);
 
   const patchNode = useCallback((id: string, patch: Partial<MindMapNode>) => {
-    mutateNodes((nodes) => nodes.map((node) => node.id === id ? { ...node, ...patch } : node));
+    const keys = Object.keys(patch);
+    const mergeKey = keys.length === 1 ? `node:${id}:${keys[0]}` : undefined;
+    mutateNodes((nodes) => nodes.map((node) => node.id === id ? { ...node, ...patch } : node), mergeKey);
   }, [mutateNodes]);
 
   const addChild = useCallback((parentId?: string) => {
@@ -91,11 +240,20 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus, ful
       side = leftCount <= siblings.length - leftCount ? "left" : "right";
     }
     const node = createMindMapNode(parent, side, Math.max(-1, ...siblings.map((item) => item.order)) + 1);
-    mutateNodes((nodes) => [...nodes, { ...node, parentId: parent.id, collapsed: false }]);
-    if (parent.collapsed) patchNode(parent.id, { collapsed: false });
+    // 一次提交同时完成新增与展开父节点，历史栈只记录一步。
+    commit((previous) => {
+      const nodes = [...previous.nodes, { ...node, parentId: parent.id, collapsed: false }];
+      return {
+        ...previous,
+        updatedAt: new Date().toISOString(),
+        nodes: parent.collapsed ? nodes.map((item) => item.id === parent.id ? { ...item, collapsed: false } : item) : nodes,
+      };
+    });
     setSelectedId(node.id);
+    setSelectedIds([node.id]);
+    setSelectedRelationId("");
     setEditingId(node.id);
-  }, [map, selectedId, mutateNodes, patchNode]);
+  }, [map, selectedId, commit, setSelectedIds]);
 
   const addSibling = useCallback(() => {
     if (!map || !selectedNode || selectedNode.id === map.rootId) return;
@@ -104,11 +262,33 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus, ful
 
   const removeNode = useCallback(() => {
     if (!map || !selectedNode || selectedNode.id === map.rootId) return;
-    const removed = new Set([selectedNode.id, ...descendants(map, selectedNode.id)]);
-    mutateNodes((nodes) => nodes.filter((node) => !removed.has(node.id)));
+    commit((previous) => ({ ...removeMindMapNodes(previous, [selectedNode.id]), updatedAt: new Date().toISOString() }));
     setSelectedId(map.rootId);
+    setSelectedIds([]);
     setEditingId("");
-  }, [map, selectedNode, mutateNodes]);
+    setSelectedRelationId("");
+  }, [map, selectedNode, commit, setSelectedIds]);
+
+  const patchRelation = useCallback((id: string, patch: Partial<MindMapRelation>) => {
+    const keys = Object.keys(patch);
+    const mergeKey = keys.length === 1 ? `relation:${id}:${keys[0]}` : undefined;
+    commit((previous) => ({
+      ...previous,
+      updatedAt: new Date().toISOString(),
+      relations: relationsOf(previous).map((item) => item.id === id ? { ...item, ...patch } : item),
+    }), mergeKey);
+  }, [commit]);
+
+  const removeRelation = useCallback(() => {
+    if (!selectedRelationId) return;
+    commit((previous) => ({
+      ...previous,
+      updatedAt: new Date().toISOString(),
+      relations: relationsOf(previous).filter((item) => item.id !== selectedRelationId),
+    }));
+    setSelectedRelationId("");
+    onStatus("关系线已删除。");
+  }, [commit, selectedRelationId, onStatus]);
 
   const toggleCollapse = useCallback((id: string) => {
     const node = map?.nodes.find((item) => item.id === id);
@@ -119,6 +299,61 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus, ful
     if (!map) return;
     mutateNodes((nodes) => nodes.map((node) => node.id === map.rootId || node.parentId === map.rootId ? node : { ...node, collapsed }));
   }, [map, mutateNodes]);
+
+  function toggleRelationMode() {
+    setRelationMode((value) => !value);
+    setRelationSourceId("");
+    setSelectedRelationId("");
+    onStatus(relationMode ? "已退出连线模式。" : "连线模式：请依次点击起点与终点节点，按 Esc 取消。");
+  }
+
+  /** 连线模式下依次点击两个节点创建关系线；重复点击同一节点不创建。 */
+  function handleRelationNodeClick(nodeId: string) {
+    if (!map) return;
+    if (!relationSourceId) {
+      setRelationSourceId(nodeId);
+      setSelectedId(nodeId);
+      setSelectedRelationId("");
+      onStatus("已选择起点，请点击终点节点；按 Esc 可取消。");
+      return;
+    }
+    if (relationSourceId === nodeId) {
+      onStatus("起点与终点不能是同一个节点，请另选一个节点。");
+      return;
+    }
+    if (relationsOf(map).length >= RELATION_LIMIT) {
+      onStatus(`关系线已达到 ${RELATION_LIMIT} 条上限，请先删除部分关系线。`);
+      setRelationMode(false);
+      setRelationSourceId("");
+      return;
+    }
+    const item: MindMapRelation = {
+      id: newId("relation"),
+      sourceId: relationSourceId,
+      targetId: nodeId,
+      label: "",
+      note: "",
+      shape: "curved",
+      linePattern: "dash",
+      lineColor: "",
+      lineWidth: 2,
+      arrowBegin: "none",
+      arrowEnd: "triangle",
+      labelFontStyle: "italic",
+      labelColor: "",
+    };
+    commit((previous) => ({
+      ...previous,
+      updatedAt: new Date().toISOString(),
+      relations: [...relationsOf(previous), item],
+    }));
+    setRelationMode(false);
+    setRelationSourceId("");
+    setSelectedRelationId(item.id);
+    setSelectedId("");
+    setSelectedIds([]);
+    onStatus("关系线已创建，可在属性区编辑文字、备注与样式。");
+  }
 
   async function removeBoard() {
     if (!map || !window.confirm(`删除「${map.title}」及其全部主题？此操作不可撤销。`)) return;
@@ -233,30 +468,169 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus, ful
     }
   }
 
+  function removeSelectedNodes() {
+    if (!map || !selectedIds.length) return;
+    commit((previous) => ({ ...removeMindMapNodes(previous, selectedIds), updatedAt: new Date().toISOString() }));
+    setSelectedIds([]);
+    setSelectedId(map.rootId);
+    setSelectedRelationId("");
+    setContextMenu(null);
+    onStatus("已删除选中的主题及其子树，关联关系线已级联删除。");
+  }
+
+  function colorSelectedNodes(color: string) {
+    if (!selectedIds.length) return;
+    const ids = new Set(selectedIds);
+    commit((previous) => ({
+      ...previous,
+      updatedAt: new Date().toISOString(),
+      nodes: previous.nodes.map((node) => ids.has(node.id) ? { ...node, color } : node),
+    }));
+  }
+
+  function resetPositions() {
+    commit((previous) => ({ ...previous, updatedAt: new Date().toISOString(), positions: {} }));
+    setDragOffsets(null);
+    onStatus("已重置所有主题的自由摆放位置。");
+  }
+
+  function canvasPoint(event: ReactMouseEvent<HTMLDivElement>) {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return { x: 0, y: 0 };
+    return {
+      x: (event.clientX - rect.left - offset.x) / scale,
+      y: (event.clientY - rect.top - offset.y) / scale,
+    };
+  }
+
   function onCanvasKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (["INPUT", "TEXTAREA", "SELECT"].includes((event.target as HTMLElement).tagName)) return;
     if (event.key === "Tab") { event.preventDefault(); addChild(); }
     else if (event.key === "Enter") { event.preventDefault(); addSibling(); }
-    else if (event.key === "Delete" || event.key === "Backspace") { event.preventDefault(); removeNode(); }
+    else if (event.key === "Delete" || event.key === "Backspace") {
+      event.preventDefault();
+      if (selectedIds.length > 1) removeSelectedNodes();
+      else if (selectedRelationId) removeRelation();
+      else if (!relationMode) removeNode();
+    }
     else if (event.key === "F2") { event.preventDefault(); if (selectedId) setEditingId(selectedId); }
   }
 
   function onCanvasMouseDown(event: ReactMouseEvent<HTMLDivElement>) {
     if (event.button !== 0) return;
     const target = event.target as HTMLElement;
-    if (target.closest(".mind-map-node") || target.closest("button") || target.closest("input")) return;
+    if (target.closest(".mind-map-node") || target.closest(".mind-map-relation-hit") || target.closest("button") || target.closest("input")) return;
+    if (event.shiftKey) {
+      // Shift + 拖空白 = 框选；普通拖空白仍然平移画布。
+      const point = canvasPoint(event);
+      marqueeRef.current = { x1: point.x, y1: point.y, x2: point.x, y2: point.y };
+      setSelectionBox(marqueeRef.current);
+      return;
+    }
     pan.current = { x: event.clientX, y: event.clientY, originX: offset.x, originY: offset.y };
   }
+
   function onCanvasMouseMove(event: ReactMouseEvent<HTMLDivElement>) {
-    if (!pan.current) return;
-    setOffset({ x: pan.current.originX + event.clientX - pan.current.x, y: pan.current.originY + event.clientY - pan.current.y });
+    const drag = dragRef.current;
+    if (drag) {
+      const deltaX = (event.clientX - drag.startX) / drag.scale;
+      const deltaY = (event.clientY - drag.startY) / drag.scale;
+      if (Math.abs(deltaX) + Math.abs(deltaY) > 1) drag.moved = true;
+      drag.dx = drag.originDx + deltaX;
+      drag.dy = drag.originDy + deltaY;
+      // 拖拽中只更新临时偏移，不写草稿、不入历史栈；松手时一次性 commit。
+      setDragOffsets({ [drag.id]: { dx: drag.dx, dy: drag.dy } });
+      return;
+    }
+    if (marqueeRef.current) {
+      const point = canvasPoint(event);
+      marqueeRef.current = { ...marqueeRef.current, x2: point.x, y2: point.y };
+      setSelectionBox(marqueeRef.current);
+      return;
+    }
+    if (pan.current) {
+      setOffset({ x: pan.current.originX + event.clientX - pan.current.x, y: pan.current.originY + event.clientY - pan.current.y });
+    }
   }
+
+  function onCanvasMouseUp() {
+    const drag = dragRef.current;
+    if (drag) {
+      if (drag.moved) {
+        const dx = Math.max(-POSITION_LIMIT, Math.min(POSITION_LIMIT, drag.dx));
+        const dy = Math.max(-POSITION_LIMIT, Math.min(POSITION_LIMIT, drag.dy));
+        commit((previous) => ({
+          ...previous,
+          updatedAt: new Date().toISOString(),
+          positions: { ...(previous.positions || {}), [drag.id]: { dx, dy } },
+        }));
+      }
+      dragRef.current = null;
+      setDragOffsets(null);
+    }
+    const marquee = marqueeRef.current;
+    if (marquee) {
+      const ids = nodesInRect(layout, marquee, MIND_NODE_WIDTH / 2, MIND_NODE_HEIGHT / 2);
+      setSelectedIds(ids);
+      if (ids.length) { setSelectedId(ids[ids.length - 1]); setSelectedRelationId(""); }
+      marqueeRef.current = null;
+      setSelectionBox(null);
+    }
+    pan.current = null;
+  }
+
+  function onCanvasContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const target = event.target as HTMLElement;
+    const base = { x: event.clientX, y: event.clientY };
+    const relationHit = target.closest(".mind-map-relation-hit");
+    if (relationHit) {
+      const id = relationHit.getAttribute("data-relation-id") || "";
+      setSelectedRelationId(id);
+      setSelectedId("");
+      setSelectedIds([]);
+      setContextMenu({ ...base, kind: "relation", targetId: id });
+      return;
+    }
+    const nodeEl = target.closest(".mind-map-node");
+    if (nodeEl) {
+      const id = nodeEl.getAttribute("data-node-id") || "";
+      if (!selectedIds.includes(id)) setSelectedIds([id]);
+      setSelectedId(id);
+      setSelectedRelationId("");
+      setContextMenu({ ...base, kind: "node", targetId: id });
+      return;
+    }
+    setContextMenu({ ...base, kind: "canvas", targetId: "" });
+  }
+
+  function runMenu(action: () => void) {
+    action();
+    setContextMenu(null);
+  }
+
+  function pasteClipboard(parentId: string) {
+    if (!map) return;
+    const next = pasteInto(map, parentId, () => newId("node"));
+    if (!next) { onStatus("内部剪贴板为空，请先复制主题。"); return; }
+    commit({ ...next, updatedAt: new Date().toISOString() });
+    onStatus("已粘贴剪贴板主题。");
+  }
+
+  function copyFromMenu(targetId: string) {
+    if (!map) return;
+    const ids = selectedIds.length ? selectedIds : [targetId];
+    copySelection(map, ids, () => newId("node"));
+    onStatus(`已复制 ${ids.length} 个主题（含子树）到内部剪贴板。`);
+  }
+
   function onCanvasWheel(event: ReactWheelEvent<HTMLDivElement>) {
     event.preventDefault();
     setScale((value) => Math.max(0.3, Math.min(2.2, value * (event.deltaY < 0 ? 1.1 : 0.9))));
   }
 
   const childCount = map && selectedNode ? map.nodes.filter((node) => node.parentId === selectedNode.id).length : 0;
+  const hasPositions = Object.keys(effectivePositions || {}).length > 0;
 
   return <section className={`mind-map-panel ${fullscreen ? "fullscreen" : ""} ${showInspector ? "" : "inspector-compact"}`} aria-label="思维导图">
     <header className="mind-map-toolbar">
@@ -268,7 +642,11 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus, ful
       <button onClick={() => void chooseXMind()}>导入 XMind</button>
       <button disabled={importing} onClick={() => void generateFromRelations()}>从角色关系生成</button>
       <button disabled={!map} onClick={() => void removeBoard()}>删除此导图</button>
-      <label>名称<input aria-label="思维导图名称" maxLength={160} value={map?.title || ""} onChange={(event) => board.update((previous) => ({ ...previous, title: event.target.value, updatedAt: new Date().toISOString() }))} /></label>
+      <button disabled={!map} aria-pressed={relationMode} onClick={toggleRelationMode}>添加关系线</button>
+      <button disabled={!canUndo} onClick={undo}>撤销</button>
+      <button disabled={!canRedo} onClick={redo}>重做</button>
+      <button disabled={!map || !hasPositions} onClick={resetPositions}>重置位置</button>
+      <label>名称<input aria-label="思维导图名称" maxLength={160} value={map?.title || ""} onChange={(event) => commit((previous) => ({ ...previous, title: event.target.value, updatedAt: new Date().toISOString() }), `title:${map?.id || ""}`)} /></label>
       <span role="status" aria-live="polite">{board.saveState}</span>
       <button onClick={fitView}>适应画布</button>
       <button onClick={() => setShowInspector((value) => !value)}>{showInspector ? "精简属性区" : "展开属性区"}</button>
@@ -284,7 +662,8 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus, ful
         {xmindPreview.sheets.map((sheet, index) => <option key={`${sheet.title}-${index}`} value={String(index)}>{sheet.title}</option>)}
       </select></label>
       <ul>{xmindPreview.sheets.map((sheet, index) => <li key={`${sheet.title}-${index}`}>
-        <strong>{sheet.title}</strong><span>中心：{sheet.rootText} · {sheet.nodeCount} 个主题{sheet.truncated ? " · 已按上限截断" : ""}</span>
+        <strong>{sheet.title}</strong><span>中心：{sheet.rootText} · {sheet.nodeCount} 个主题{sheet.relationCount ? ` · ${sheet.relationCount} 条关系线` : ""}{sheet.truncated ? " · 已按上限截断" : ""}</span>
+        {sheet.relationNote && <span className="mind-map-import-relation-note">{sheet.relationNote}</span>}
       </li>)}</ul>
       <div className="mind-map-import-actions">
         <button onClick={() => setXmindPreview(null)}>放弃 XMind 导入</button>
@@ -306,29 +685,128 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus, ful
         <div className="mind-map-main">
           <div ref={canvasRef} className="mind-map-canvas" tabIndex={0} role="application" aria-label="思维导图画布"
             onKeyDown={onCanvasKeyDown} onMouseDown={onCanvasMouseDown} onMouseMove={onCanvasMouseMove}
-            onMouseUp={() => { pan.current = null; }} onMouseLeave={() => { pan.current = null; }} onWheel={onCanvasWheel}>
+            onMouseUp={onCanvasMouseUp} onMouseLeave={onCanvasMouseUp} onWheel={onCanvasWheel}
+            onContextMenu={onCanvasContextMenu}>
             <div className="mind-map-world" style={{ width: layout.width, height: layout.height, transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})` }}>
               <svg className="mind-map-links" width={layout.width} height={layout.height} viewBox={`0 0 ${layout.width} ${layout.height}`} aria-hidden="true">
+                <defs>
+                  {relationColors.map((color, index) => <marker key={`mind-relation-arrow-${index}`}
+                    id={`mind-relation-arrow-${index}`} viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="8" markerHeight="8" orient="auto-start-reverse" fill={color}>
+                    <path d="M 0 0 L 10 5 L 0 10 z" />
+                  </marker>)}
+                </defs>
                 {layout.edges.map((edge) => <path key={edge.id} fill="none" strokeWidth={2}
                   stroke={edge.color || "var(--line)"}
                   d={`M ${edge.x1} ${edge.y1} C ${(edge.x1 + edge.x2) / 2} ${edge.y1}, ${(edge.x1 + edge.x2) / 2} ${edge.y2}, ${edge.x2} ${edge.y2}`} />)}
+                <g className="mind-map-relations">
+                  {laidRelations.map((item, index) => {
+                    const current = item.relation;
+                    const color = current.lineColor || RELATION_DEFAULT_COLOR;
+                    const markerId = relationMarkerIds.get(color) || "";
+                    const selected = current.id === selectedRelationId;
+                    return <g key={`${current.id}-${index}`} className={`mind-map-relation ${selected ? "selected" : ""}`}>
+                      <path className="mind-map-relation-line" d={item.d} fill="none" stroke={color}
+                        strokeWidth={(current.lineWidth ?? 2) + (selected ? 1 : 0)}
+                        strokeDasharray={relationDashArray(current.linePattern)} strokeLinecap="round"
+                        markerStart={current.arrowBegin === "triangle" && markerId ? `url(#${markerId})` : undefined}
+                        markerEnd={(current.arrowEnd ?? "triangle") === "triangle" && markerId ? `url(#${markerId})` : undefined} />
+                      {current.label && <text className="mind-map-relation-label" x={item.lx} y={item.ly - 6}
+                        textAnchor="middle" fontStyle={current.labelFontStyle === "normal" ? "normal" : "italic"}
+                        fill={current.labelColor || RELATION_DEFAULT_LABEL_COLOR}>{current.label}</text>}
+                      <path className="mind-map-relation-hit" d={item.d} fill="none" stroke="transparent" strokeWidth={16}
+                        data-relation-id={current.id}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setSelectedRelationId(current.id);
+                          setSelectedId("");
+                          setSelectedIds([]);
+                        }} />
+                    </g>;
+                  })}
+                </g>
               </svg>
-              {layout.nodes.map((item) => <div key={item.id}
-                className={`mind-map-node ${item.side === "center" ? "root" : ""} ${item.id === selectedId ? "selected" : ""}`}
+              {selectionBox && <div className="mind-map-selection-box" style={{
+                left: Math.min(selectionBox.x1, selectionBox.x2),
+                top: Math.min(selectionBox.y1, selectionBox.y2),
+                width: Math.abs(selectionBox.x2 - selectionBox.x1),
+                height: Math.abs(selectionBox.y2 - selectionBox.y1),
+              }} />}
+              {layout.nodes.map((item) => <div key={item.id} data-node-id={item.id}
+                className={`mind-map-node ${item.side === "center" ? "root" : ""} ${selectedIds.includes(item.id) ? "selected" : ""} ${relationMode && relationSourceId === item.id ? "relation-source" : ""}`}
                 style={{ left: item.x - MIND_NODE_WIDTH / 2, top: item.y - MIND_NODE_HEIGHT / 2, width: MIND_NODE_WIDTH, height: MIND_NODE_HEIGHT, ...(item.node.color ? { backgroundColor: item.node.color } : {}) }}
-                onClick={() => setSelectedId(item.id)} onDoubleClick={() => setEditingId(item.id)}>
+                onMouseDown={(event) => {
+                  if (relationMode || editingId === item.id || event.button !== 0) return;
+                  const target = event.target as HTMLElement;
+                  if (target.closest(".mind-node-fold") || target.closest("input") || target.closest("button")) return;
+                  const origin = effectivePositions?.[item.id] || { dx: 0, dy: 0 };
+                  dragRef.current = {
+                    id: item.id, startX: event.clientX, startY: event.clientY,
+                    originDx: origin.dx, originDy: origin.dy, scale,
+                    dx: origin.dx, dy: origin.dy, moved: false,
+                  };
+                }}
+                onClick={(event) => {
+                  if (relationMode) { handleRelationNodeClick(item.id); return; }
+                  toggleSelected(item.id, event.ctrlKey || event.shiftKey || event.metaKey);
+                  setSelectedId(item.id);
+                  setSelectedRelationId("");
+                }}
+                onDoubleClick={() => { if (!relationMode) setEditingId(item.id); }}>
                 {editingId === item.id ? <input autoFocus aria-label="编辑主题文字" value={item.node.text}
                   onChange={(event) => patchNode(item.id, { text: event.target.value })}
                   onBlur={() => setEditingId("")}
                   onKeyDown={(event) => { event.stopPropagation(); if (event.key === "Enter" || event.key === "Escape") setEditingId(""); }} /> :
                   <span title={item.node.note || item.node.text}>{item.node.text}</span>}
                 {item.childCount > 0 && <button className="mind-node-fold" aria-label={`${item.node.collapsed ? "展开" : "折叠"}主题：${item.node.text}`}
-                  onClick={(event) => { event.stopPropagation(); toggleCollapse(item.id); }}>{item.node.collapsed ? "+" : "−"}</button>}
+                  onClick={(event) => { event.stopPropagation(); if (relationMode) return; toggleCollapse(item.id); }}>{item.node.collapsed ? "+" : "−"}</button>}
               </div>)}
             </div>
           </div>
 
-          {selectedNode && <div className="mind-map-inspector">
+          {selectedIds.length > 1 ? <div className="mind-map-inspector mind-map-batch-inspector">
+            <p>已选中 {selectedIds.length} 个主题；可批量改色或删除（含子树，关联关系线级联删除）。</p>
+            <label>批量颜色<input type="color" aria-label="批量主题颜色" value={selectedNode?.color || "#dce9f5"} onChange={(event) => colorSelectedNodes(event.target.value)} /></label>
+            <div className="mind-map-inspector-actions">
+              <button onClick={removeSelectedNodes}>删除选中主题</button>
+              <button onClick={() => setSelectedIds([])}>取消多选</button>
+            </div>
+          </div> : selectedRelation ? <div className="mind-map-inspector mind-map-relation-inspector">
+            <label>连线文字<input aria-label="连线文字" maxLength={500} value={selectedRelation.label || ""} onChange={(event) => patchRelation(selectedRelation.id, { label: event.target.value })} /></label>
+            <label>连线备注<textarea aria-label="连线备注" maxLength={2000} value={selectedRelation.note || ""} onChange={(event) => patchRelation(selectedRelation.id, { note: event.target.value })} placeholder="补充这条关系的说明" /></label>
+            <label>颜色<input type="color" aria-label="连线颜色" value={selectedRelation.lineColor || RELATION_DEFAULT_COLOR} onChange={(event) => patchRelation(selectedRelation.id, { lineColor: event.target.value })} /></label>
+            <label>标签颜色<input type="color" aria-label="连线标签颜色" value={selectedRelation.labelColor || RELATION_DEFAULT_LABEL_COLOR} onChange={(event) => patchRelation(selectedRelation.id, { labelColor: event.target.value })} /></label>
+            <label>线型<select aria-label="连线线型" value={selectedRelation.linePattern ?? "dash"} onChange={(event) => patchRelation(selectedRelation.id, { linePattern: event.target.value as MindMapRelationLinePattern })}>
+              <option value="solid">实线</option><option value="dash">虚线</option><option value="dot">点线</option>
+            </select></label>
+            <label>形状<select aria-label="连线形状" value={selectedRelation.shape ?? "curved"} onChange={(event) => patchRelation(selectedRelation.id, { shape: event.target.value as MindMapRelationShape })}>
+              <option value="curved">曲线</option><option value="straight">直线</option><option value="elbow">折线</option>
+            </select></label>
+            <label>箭头<select aria-label="连线箭头" value={`${selectedRelation.arrowBegin ?? "none"}-${selectedRelation.arrowEnd ?? "triangle"}`} onChange={(event) => {
+              const value = event.target.value;
+              const arrowBegin: MindMapRelationArrow = value === "triangle-none" || value === "triangle-triangle" ? "triangle" : "none";
+              const arrowEnd: MindMapRelationArrow = value === "none-triangle" || value === "triangle-triangle" ? "triangle" : "none";
+              patchRelation(selectedRelation.id, { arrowBegin, arrowEnd });
+            }}>
+              <option value="none-none">无箭头</option>
+              <option value="none-triangle">终点箭头（单向）</option>
+              <option value="triangle-none">起点箭头（单向）</option>
+              <option value="triangle-triangle">双向箭头</option>
+            </select></label>
+            <label>线宽<select aria-label="连线线宽" value={String(selectedRelation.lineWidth ?? 2)} onChange={(event) => patchRelation(selectedRelation.id, { lineWidth: Number(event.target.value) })}>
+              {[1, 2, 3, 4, 5, 6, 7, 8].map((width) => <option key={width} value={String(width)}>{width} px</option>)}
+            </select></label>
+            <label>文字样式<select aria-label="连线文字样式" value={selectedRelation.labelFontStyle ?? "italic"} onChange={(event) => patchRelation(selectedRelation.id, { labelFontStyle: event.target.value as MindMapRelationFontStyle })}>
+              <option value="normal">常规</option><option value="italic">斜体</option>
+            </select></label>
+            <div className="mind-map-inspector-actions">
+              <button onClick={removeRelation}>删除关系线</button>
+              <button onClick={() => setSelectedRelationId("")}>取消选中</button>
+            </div>
+            <p>当前选中的是「关系线」（任意两节点间的连线），与父子主题之间的实线树边不同；改动会自动保存。</p>
+          </div> : relationMode ? <div className="mind-map-inspector">
+            <p>连线模式：{relationSourceId ? "已选起点，请点击终点节点；重复点击起点不会创建连线。" : "请点击起点节点，再点击终点节点。"} 按 Esc 取消。</p>
+          </div> : selectedNode && <div className="mind-map-inspector">
             <label>主题文字<input aria-label="选中主题文字" value={selectedNode.text} onChange={(event) => patchNode(selectedNode.id, { text: event.target.value })} /></label>
             <label>备注<textarea aria-label="主题备注" value={selectedNode.note} onChange={(event) => patchNode(selectedNode.id, { note: event.target.value })} placeholder="补充设定、线索或待接上的思路" /></label>
             <label>颜色<input type="color" aria-label="主题颜色" value={selectedNode.color || "#dce9f5"} onChange={(event) => patchNode(selectedNode.id, { color: event.target.value })} /></label>
@@ -339,9 +817,39 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus, ful
               <button disabled={!childCount} onClick={() => toggleCollapse(selectedNode.id)}>{selectedNode.collapsed ? "展开分支" : "折叠分支"}</button>
               <button disabled={selectedNode.id === map.rootId} onClick={removeNode}>删除主题</button>
             </div>
-            <p>快捷键：Tab 子主题 · Enter 同级 · F2 改名 · Delete 删除；双击节点改名，滚轮缩放，拖动空白处移动画布。改动会自动保存。</p>
+            <p>快捷键：Tab 子主题 · Enter 同级 · F2 改名 · Delete 删除 · Ctrl+Z/Y 撤销重做 · Ctrl+C/V 复制粘贴 · Ctrl+A 全选；Shift 拖空白框选、右键打开菜单、拖动节点自由摆放。改动会自动保存。</p>
           </div>}
         </div>
       </div>}
+
+    {contextMenu && map && <div className="mind-map-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }}
+      onMouseDown={(event) => event.stopPropagation()}>
+      {contextMenu.kind === "node" && <>
+        <button onClick={() => runMenu(() => addChild(contextMenu.targetId))}>在此添加子主题</button>
+        <button disabled={contextMenu.targetId === map.rootId} onClick={() => runMenu(() => addSibling())}>在此添加同级</button>
+        <button onClick={() => runMenu(() => (selectedIds.length > 1 ? removeSelectedNodes() : removeNode()))}>删除此主题</button>
+        <button onClick={() => runMenu(() => copyFromMenu(contextMenu.targetId))}>复制主题及子树</button>
+        <button disabled={!clipboardCount} onClick={() => runMenu(() => pasteClipboard(contextMenu.targetId))}>粘贴到此主题</button>
+        <button onClick={() => runMenu(() => {
+          setRelationMode(true);
+          setRelationSourceId(contextMenu.targetId);
+          setSelectedRelationId("");
+          onStatus("已以该主题为起点进入连线模式，请点击终点节点。");
+        })}>从此主题连线</button>
+      </>}
+      {contextMenu.kind === "relation" && <>
+        <button onClick={() => runMenu(() => {
+          setSelectedRelationId(contextMenu.targetId);
+          setSelectedId("");
+          window.setTimeout(() => document.querySelector<HTMLInputElement>('input[aria-label="连线文字"]')?.focus(), 0);
+        })}>编辑连线文字</button>
+        <button onClick={() => runMenu(() => removeRelation())}>删除此连线</button>
+      </>}
+      {contextMenu.kind === "canvas" && <>
+        <button disabled={!clipboardCount} onClick={() => runMenu(() => pasteClipboard(map.rootId))}>粘贴到中心主题</button>
+        <button onClick={() => runMenu(() => setSelectedIds(map.nodes.map((node) => node.id)))}>全选主题</button>
+      </>}
+    </div>}
   </section>;
 }
+

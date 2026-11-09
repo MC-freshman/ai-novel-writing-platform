@@ -1,4 +1,4 @@
-import type { MindMap, MindMapNode, MindMapSide } from "../types";
+import type { MindMap, MindMapNode, MindMapRelation, MindMapSide } from "../types";
 
 export const MIND_NODE_WIDTH = 168;
 export const MIND_NODE_HEIGHT = 40;
@@ -28,6 +28,171 @@ export interface MindMapLayout {
   edges: LaidMindEdge[];
   width: number;
   height: number;
+}
+/** 关系线布局结果：d 是可直接绘制的 SVG 路径，(lx, ly) 是标签锚点。 */
+export interface LaidMindRelation {
+  id: string;
+  sourceId: string;
+  targetId: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  d: string;
+  lx: number;
+  ly: number;
+  relation: MindMapRelation;
+}
+
+/** 关系线默认三次贝塞尔控制点：与父子树边保持同一视觉风格。 */
+function defaultControlPoints(x1: number, y1: number, x2: number, y2: number) {
+  const middleX = (x1 + x2) / 2;
+  return { c1x: middleX, c1y: y1, c2x: middleX, c2y: y2 };
+}
+
+/**
+ * 把关系线的相对控制点换算成当前布局下的绝对坐标。
+ * amount / x 沿「源 → 目标」方向偏移，angle / y 沿垂直于连线的方向偏移；
+ * 四个值统一按连线长度缩放（都是相对量），因此折叠、重新布局或缩放后曲线形状保持一致。
+ */
+function resolveControlPoints(relation: MindMapRelation, x1: number, y1: number, x2: number, y2: number) {
+  const fallback = defaultControlPoints(x1, y1, x2, y2);
+  const rawPoints = Array.isArray(relation.controlPoints) ? relation.controlPoints : [];
+  const points = rawPoints.filter((point) => point
+    && Number.isFinite(point.amount) && Number.isFinite(point.angle)
+    && Number.isFinite(point.x) && Number.isFinite(point.y));
+  if (!points.length) return fallback;
+  const deltaX = x2 - x1;
+  const deltaY = y2 - y1;
+  const distance = Math.hypot(deltaX, deltaY);
+  const length = Number.isFinite(distance) && distance > 0 ? distance : 1;
+  const unitX = deltaX / length;
+  const unitY = deltaY / length;
+  const perpendicularX = -unitY;
+  const perpendicularY = unitX;
+  const adjust = (baseX: number, baseY: number, point: { amount: number; angle: number; x: number; y: number }) => {
+    const along = (point.amount + point.x) * length * 0.25;
+    const across = (point.angle + point.y) * length * 0.25;
+    return {
+      x: baseX + along * unitX + across * perpendicularX,
+      y: baseY + along * unitY + across * perpendicularY,
+    };
+  };
+  const first = adjust(fallback.c1x, fallback.c1y, points[0]);
+  const second = points[1]
+    ? adjust(fallback.c2x, fallback.c2y, points[1])
+    : { x: fallback.c2x, y: fallback.c2y };
+  const resolved = { c1x: first.x, c1y: first.y, c2x: second.x, c2y: second.y };
+  // 仅「有限」不足以保证曲线可见：合法但极端的相对量会算出有限却飞出画布的坐标。
+  // 控制点必须落在两端点包围盒（各方向外扩一个 span）内，否则整体回落默认控制点。
+  const span = Math.max(Math.abs(x2 - x1), Math.abs(y2 - y1), 1);
+  const minX = Math.min(x1, x2) - span;
+  const maxX = Math.max(x1, x2) + span;
+  const minY = Math.min(y1, y2) - span;
+  const maxY = Math.max(y1, y2) + span;
+  const inRange = [resolved.c1x, resolved.c2x].every((value) => Number.isFinite(value) && value >= minX && value <= maxX)
+    && [resolved.c1y, resolved.c2y].every((value) => Number.isFinite(value) && value >= minY && value <= maxY);
+  return inRange ? resolved : fallback;
+}
+
+/**
+ * 把 relations 按当前布局坐标换算成可绘制的 SVG 连线。
+ * 任一端点不在 layout.nodes（被折叠 / 隐藏或数据悬空）时跳过，避免画出孤立坐标；
+ * 端点取节点矩形边界交点而非中心，避免箭头被后绘制的节点矩形覆盖。
+ * 本函数不改动 layoutMindMap 的主体与 LaidMindEdge，只消费其输出。
+ */
+export function layoutRelations(map: MindMap, layout: MindMapLayout): LaidMindRelation[] {
+  // 公开纯函数：layout 可能来自自定义调用方，非数组节点集合按空集合安全降级。
+  const nodes = Array.isArray(layout.nodes) ? layout.nodes : [];
+  const coordinates = new Map(nodes.map((item) => [item.id, { x: item.x, y: item.y }]));
+  const relations = Array.isArray(map.relations) ? map.relations : [];
+  const result: LaidMindRelation[] = [];
+  const halfWidth = MIND_NODE_WIDTH / 2;
+  const halfHeight = MIND_NODE_HEIGHT / 2;
+  for (const relation of relations) {
+    if (!relation || typeof relation !== "object") continue;
+    const source = coordinates.get(relation.sourceId);
+    const target = coordinates.get(relation.targetId);
+    if (!source || !target) continue;
+    if (![source.x, source.y, target.x, target.y].every(Number.isFinite)) continue;
+    const deltaX = target.x - source.x;
+    const deltaY = target.y - source.y;
+    // 自环 / 端点重合时方向向量退化，跳过以免产出 NaN 坐标。
+    if (deltaX === 0 && deltaY === 0) continue;
+    // 射线与 168×40 节点矩形的交点：取沿方向向量最先触达的边界比例。
+    const ratioX = deltaX === 0 ? Infinity : halfWidth / Math.abs(deltaX);
+    const ratioY = deltaY === 0 ? Infinity : halfHeight / Math.abs(deltaY);
+    // 上限 0.5：节点中心距过小时避免两端点越过中点交叉（自定义 layout / 重叠节点）。
+    const ratio = Math.min(0.5, ratioX, ratioY);
+    if (!Number.isFinite(ratio) || ratio <= 0) continue;
+    const x1 = source.x + deltaX * ratio;
+    const y1 = source.y + deltaY * ratio;
+    const x2 = target.x - deltaX * ratio;
+    const y2 = target.y - deltaY * ratio;
+    if (![x1, y1, x2, y2].every(Number.isFinite)) continue;
+    const shape = relation.shape ?? "curved";
+    const middleX = (x1 + x2) / 2;
+    const middleY = (y1 + y2) / 2;
+    let d: string;
+    let lx = middleX;
+    let ly = middleY;
+    if (shape === "straight") {
+      d = `M ${x1} ${y1} L ${x2} ${y2}`;
+    } else if (shape === "elbow") {
+      d = `M ${x1} ${y1} L ${middleX} ${y1} L ${middleX} ${y2} L ${x2} ${y2}`;
+    } else {
+      const control = resolveControlPoints(relation, x1, y1, x2, y2);
+      d = `M ${x1} ${y1} C ${control.c1x} ${control.c1y}, ${control.c2x} ${control.c2y}, ${x2} ${y2}`;
+      // 三次贝塞尔在 t = 0.5 处的点：(P0 + 3P1 + 3P2 + P3) / 8。
+      lx = (x1 + 3 * control.c1x + 3 * control.c2x + x2) / 8;
+      ly = (y1 + 3 * control.c1y + 3 * control.c2y + y2) / 8;
+    }
+    result.push({
+      id: relation.id, sourceId: relation.sourceId, targetId: relation.targetId,
+      x1, y1, x2, y2, d, lx, ly, relation,
+    });
+  }
+  return result;
+}
+
+/**
+ * 把 positions 偏移叠加到布局结果上，供自由摆放使用。
+ * 节点叠加自身偏移；树边的 x1/y1 与 x2/y2 按端点所属节点各自叠加
+ * （LaidMindEdge.id 形如 `${parentId}>${childId}`）。
+ * 不改动 layoutMindMap 主体：本函数只消费其输出。
+ */
+export function applyPositions(
+  layout: MindMapLayout,
+  positions?: Record<string, { dx: number; dy: number }>,
+): MindMapLayout {
+  const source = positions && typeof positions === "object" && !Array.isArray(positions) ? positions : {};
+  const offsets = new Map<string, { dx: number; dy: number }>();
+  for (const [key, value] of Object.entries(source)) {
+    if (!Number.isFinite(value?.dx) || !Number.isFinite(value?.dy)) continue;
+    offsets.set(key, { dx: value.dx, dy: value.dy });
+  }
+  if (!offsets.size) return layout;
+  const shift = (id: string) => offsets.get(id) || { dx: 0, dy: 0 };
+  const nodes = layout.nodes.map((item) => {
+    const delta = shift(item.id);
+    return { ...item, x: item.x + delta.dx, y: item.y + delta.dy };
+  });
+  const edges = layout.edges.map((edge) => {
+    // 子节点 id 由 newId() 生成，不含 ">"；父节点 id 可能来自外部数据而含 ">"，
+    // 因此用 lastIndexOf 从末尾切分，避免把父 id 截断（N2）。
+    const rawId = String(edge.id);
+    const cut = rawId.lastIndexOf(">");
+    const parentId = cut > 0 ? rawId.slice(0, cut) : "";
+    const childId = cut >= 0 ? rawId.slice(cut + 1) : rawId;
+    const from = shift(parentId);
+    const to = shift(childId);
+    return {
+      ...edge,
+      x1: edge.x1 + from.dx, y1: edge.y1 + from.dy,
+      x2: edge.x2 + to.dx, y2: edge.y2 + to.dy,
+    };
+  });
+  return { ...layout, nodes, edges };
 }
 
 export function newId(prefix: string) {

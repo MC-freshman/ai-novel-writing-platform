@@ -85,7 +85,10 @@ function main(argv = []) {
   const rendered = renderPreload();
   if (argv.includes("--verify")) {
     const current = fs.readFileSync(preloadPath, "utf8");
-    if (current !== rendered) {
+    // Windows 检出会把生成物转成 CRLF，而生成器始终输出 LF；仅归一化换行符，
+    // 不掩盖真实的契约内容差异（方法、通道、参数不同仍会判定 FAIL）。
+    const normalize = (text) => text.replace(/\r\n/g, "\n");
+    if (normalize(current) !== normalize(rendered)) {
       console.error("FAIL: electron/preload.cjs 与契约不一致——请运行 npm run gen:preload 重新生成。");
       process.exit(1);
     }
