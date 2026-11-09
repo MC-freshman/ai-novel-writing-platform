@@ -195,6 +195,38 @@ export function applyPositions(
   return { ...layout, nodes, edges };
 }
 
+/**
+ * 画布显示边界：把节点矩形、树边端点、关系线端点、标签底板与箭头余量全部纳入，四周再留 padding。
+ * 组件把返回的 x/y 同时用作 SVG 的 left/top 与 viewBox 的 x/y，保持 1:1 坐标映射：
+ * 所有节点与连线坐标数值不变，只是渲染范围随内容动态扩大，避免超界连线被裁剪。
+ */
+export function mindMapCanvasBounds(
+  layout: MindMapLayout,
+  relations: LaidMindRelation[],
+  padding = 160,
+): { x: number; y: number; width: number; height: number } {
+  const xs = [0, layout.width];
+  const ys = [0, layout.height];
+  const nodes = Array.isArray(layout.nodes) ? layout.nodes : [];
+  const edges = Array.isArray(layout.edges) ? layout.edges : [];
+  const links = Array.isArray(relations) ? relations : [];
+  for (const node of nodes) {
+    xs.push(node.x - MIND_NODE_WIDTH / 2, node.x + MIND_NODE_WIDTH / 2);
+    ys.push(node.y - MIND_NODE_HEIGHT / 2, node.y + MIND_NODE_HEIGHT / 2);
+  }
+  for (const edge of edges) { xs.push(edge.x1, edge.x2); ys.push(edge.y1, edge.y2); }
+  for (const item of links) {
+    // 标签底板最宽 280、位于连线上方约 44px；箭头 marker 再外扩 16px。
+    xs.push(item.x1, item.x2, item.lx - 150, item.lx + 150);
+    ys.push(item.y1, item.y2, item.ly - 70, item.ly + 20);
+  }
+  const minX = xs.reduce((value, item) => Math.min(value, item), Infinity) - padding;
+  const minY = ys.reduce((value, item) => Math.min(value, item), Infinity) - padding;
+  const maxX = xs.reduce((value, item) => Math.max(value, item), -Infinity) + padding;
+  const maxY = ys.reduce((value, item) => Math.max(value, item), -Infinity) + padding;
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
+
 export function newId(prefix: string) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }

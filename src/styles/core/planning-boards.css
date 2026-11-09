@@ -110,8 +110,9 @@
 .mind-map-import-error { margin: 0; padding: 8px 12px; border: 1px solid var(--danger); border-radius: 6px; font-size: 12px; color: var(--danger); }
 
 /* 独立弹窗：画布占满窗口，属性区移到右侧并可精简 */
-.mind-map-modal { position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr); width: 100vw; height: 100vh; min-width: 0; min-height: 0; overflow: hidden; resize: none; border: 0; border-radius: 0; background: var(--panel); box-shadow: none; }
-.mind-map-modal-header { display: flex; flex-wrap: nowrap; align-items: center; gap: 10px; padding: 4px 10px; border-bottom: 1px solid var(--line); font-size: 11px; color: var(--muted); }
+/* 独立弹窗：恢复历史可调整尺寸的浮动窗口；标题栏可拖动，右上角可切换最大化。 */
+.mind-map-modal { position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr); width: min(1500px, 96vw); height: min(920px, 94vh); min-width: min(720px, 94vw); min-height: min(520px, 88vh); overflow: hidden; resize: both; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); }
+.mind-map-modal-header { display: flex; flex-wrap: nowrap; align-items: center; gap: 10px; padding: 4px 10px; border-bottom: 1px solid var(--line); font-size: 11px; color: var(--muted); cursor: move; user-select: none; }
 .mind-map-modal-header strong { font-size: 12px; color: var(--text); }
 .mind-map-modal-header span { flex: 1; }
 .mind-map-modal-header button { font-size: 11px; padding: 2px 8px; }
@@ -159,3 +160,43 @@
   .mind-map-list button,
   .progress-grid-list button { min-width: 170px; }
 }
+
+/* ===== 显示边界：连线层不裁剪超出自动布局范围的端点 ===== */
+.mind-map-links { overflow: visible; }
+
+/* ===== 弹窗窗口：最大化与标题栏按钮顺序 ===== */
+.mind-map-modal.maximized { width: 100%; height: 100%; min-width: 0; min-height: 0; resize: none; border-radius: 0; }
+.modal-backdrop.modal-maximized { padding: 0; }
+/* DOM 里「关闭弹窗」必须是第一个 button（capture-ui-regression.cjs:450），这里只用 order 调整视觉顺序。 */
+.mind-map-modal-header .mind-map-modal-maximize { order: 2; }
+.mind-map-modal-header .mind-map-modal-close { order: 3; }
+
+/* ===== 主界面：工具栏与模式栏统一紧凑、无方框 ===== */
+.mind-map-toolbar { flex-wrap: nowrap; gap: 4px; padding: 4px 8px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; position: relative; overflow: visible; }
+.mind-map-toolbar button { flex: none; min-height: 0; padding: 3px 7px; font-size: 11px; border: 0; background: transparent; border-radius: 4px; }
+.mind-map-toolbar button:hover:not(:disabled) { background: var(--panel-strong); }
+.mind-map-toolbar button[aria-pressed="true"] { background: var(--panel-strong); color: var(--accent); }
+.mind-map-toolbar select, .mind-map-toolbar input { max-width: 190px; padding: 2px 4px; font-size: 11px; }
+.mind-map-toolbar label, .mind-map-toolbar [role="status"] { flex: none; font-size: 11px; }
+/* 次要操作常驻 DOM（UI 断言按文字查找），仅用 CSS 折叠成下拉浮层，不占行高。 */
+.mind-map-toolbar-more { position: absolute; top: calc(100% + 3px); right: 8px; z-index: 40; display: none; flex-direction: column; align-items: stretch; gap: 2px; min-width: 220px; padding: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: var(--shadow); }
+.mind-map-toolbar-more.open { display: flex; }
+.mind-map-toolbar-more button { text-align: left; font-size: 12px; padding: 5px 8px; }
+.mind-map-toolbar-more label { flex-direction: row; align-items: center; gap: 6px; font-size: 11px; }
+.mind-map-modal .mind-map-toolbar { overflow: visible; }
+.progress-workspace .progress-workspace-modes { flex-wrap: nowrap; gap: 4px; padding: 4px 8px; overflow-x: auto; }
+.progress-workspace .progress-workspace-modes button { min-height: 0; padding: 4px 10px; font-size: 11px; border: 0; background: transparent; border-radius: 4px; }
+.progress-workspace .progress-workspace-modes button.active { background: var(--panel-strong); color: var(--accent); }
+
+/* ===== 思维导图列表：搜索过滤 + 折叠，标题始终留在 DOM 内 ===== */
+.mind-map-list { flex-wrap: wrap; max-height: 132px; }
+.mind-map-list .mind-map-list-tools { display: flex; align-items: center; gap: 6px; width: 100%; padding: 0 2px 6px; font-size: 12px; color: var(--muted); }
+.mind-map-list .mind-map-list-tools strong { color: var(--text); }
+.mind-map-list .mind-map-list-tools input { flex: 1; min-width: 120px; max-width: 260px; padding: 3px 8px; font-size: 12px; }
+.mind-map-list .mind-map-list-tools button { min-height: 0; padding: 3px 8px; font-size: 11px; border: 0; background: transparent; }
+.mind-map-list .mind-map-list-items { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px; width: 100%; }
+.mind-map-list.collapsed .mind-map-list-items { display: none; }
+.mind-map-list .mind-map-list-items > button { min-width: 0; padding: 4px 8px; font-size: 11px; border: 0; background: transparent; border-radius: 4px; }
+.mind-map-list .mind-map-list-items > button.active { background: var(--panel-strong); color: var(--accent); }
+.mind-map-list p { font-size: 12px; color: var(--muted); }
+.mind-map-modal .mind-map-panel.fullscreen .mind-map-list { max-height: 64px; flex-wrap: wrap; align-content: flex-start; }

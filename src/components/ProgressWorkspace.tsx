@@ -17,6 +17,9 @@ export function ProgressWorkspace({ state, selectedChapterId, onSelectChapter, o
   const [mode, setMode] = useState<ProgressMode>(networkOpenRequest ? "network" : "chapters");
   const [expanded, setExpanded] = useState(false);
   const [mindmapModal, setMindmapModal] = useState(false);
+  // 弹窗窗口：最大化状态与标题栏拖动偏移。默认由 .modal-backdrop 居中，transform 只做相对位移。
+  const [maximized, setMaximized] = useState(false);
+  const [modalShift, setModalShift] = useState({ x: 0, y: 0 });
   const [workspace, setWorkspace] = useState<CreativeWorkspaceState | null>(null);
   const [loadError, setLoadError] = useState("");
   const [reload, setReload] = useState(0);
@@ -24,6 +27,7 @@ export function ProgressWorkspace({ state, selectedChapterId, onSelectChapter, o
   const closeModalRef = useRef<() => void>(() => {});
   // 弹窗内的连线模式由 MindMaps 同步过来：激活时 Esc 先用于取消连线，不再关闭整个弹窗。
   const relationModeRef = useRef(false);
+  const modalDrag = useRef<{ startX: number; startY: number; originX: number; originY: number } | null>(null);
   const register = useCallback((kind: PageSaveKind, handle: PageSaveHandle | null) => {
     saver.current = handle; onRegisterSave(kind, handle);
   }, [onRegisterSave]);
@@ -60,12 +64,16 @@ export function ProgressWorkspace({ state, selectedChapterId, onSelectChapter, o
   async function openMindmapModal() {
     if (!(await protectCurrent())) return;
     setExpanded(false);
+    setMaximized(false);
+    setModalShift({ x: 0, y: 0 });
     setMindmapModal(true);
   }
 
   async function closeMindmapModal() {
     if (!(await protectCurrent())) return;
     setMindmapModal(false);
+    setMaximized(false);
+    setModalShift({ x: 0, y: 0 });
   }
 
   closeModalRef.current = () => { void closeMindmapModal(); };
@@ -81,6 +89,28 @@ export function ProgressWorkspace({ state, selectedChapterId, onSelectChapter, o
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [mindmapModal]);
+
+  // 标题栏拖动：起点 + 鼠标位移换算成窗口偏移，限制在视口内，避免窗口被拖出屏幕找不回来。
+  useEffect(() => {
+    if (!mindmapModal || maximized) return;
+    const onMove = (event: MouseEvent) => {
+      const drag = modalDrag.current;
+      if (!drag) return;
+      const limitX = Math.max(120, window.innerWidth / 2 - 160);
+      const limitY = Math.max(120, window.innerHeight / 2 - 160);
+      setModalShift({
+        x: Math.max(-limitX, Math.min(limitX, drag.originX + event.clientX - drag.startX)),
+        y: Math.max(-limitY, Math.min(limitY, drag.originY + event.clientY - drag.startY)),
+      });
+    };
+    const onUp = () => { modalDrag.current = null; };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [mindmapModal, maximized]);
 
   const canExpand = mode !== "chapters" && !mindmapModal;
   const boardProps = workspace ? { workspace, onWorkspace: setWorkspace, onRegisterSave: register, onStatus } : null;
@@ -105,12 +135,21 @@ export function ProgressWorkspace({ state, selectedChapterId, onSelectChapter, o
           mode === "mindmap" ? (mindmapModal ? null : mindMaps(false)) :
             <ProgressGrids state={state} workspace={boardProps.workspace} onWorkspace={boardProps.onWorkspace} onRegisterSave={register} onOpenChapter={onSelectChapter} onStatus={onStatus} />}
 
-    {mindmapModal && boardProps && <div className="modal-backdrop" onClick={() => void closeMindmapModal()}>
-      <section className="mind-map-modal" role="dialog" aria-modal="true" aria-label="思维导图弹窗编辑" onClick={(event) => event.stopPropagation()}>
-        <header className="mind-map-modal-header">
+    {mindmapModal && boardProps && <div className={`modal-backdrop ${maximized ? "modal-maximized" : ""}`} onClick={() => void closeMindmapModal()}>
+      <section className={`mind-map-modal ${maximized ? "maximized" : ""}`} role="dialog" aria-modal="true" aria-label="思维导图弹窗编辑"
+        style={maximized ? undefined : { transform: `translate(${modalShift.x}px, ${modalShift.y}px)` }}
+        onClick={(event) => event.stopPropagation()}>
+        <header className="mind-map-modal-header"
+          onMouseDown={(event) => {
+            if (maximized) return;
+            if ((event.target as HTMLElement).closest("button, input, select, textarea")) return;
+            modalDrag.current = { startX: event.clientX, startY: event.clientY, originX: modalShift.x, originY: modalShift.y };
+          }}>
           <strong>思维导图 · 弹窗编辑</strong>
-          <span>画布已放大；可拖动空白处平移、滚轮缩放，按 Esc 返回</span>
-          <button aria-label="关闭思维导图弹窗" onClick={() => void closeMindmapModal()}>关闭弹窗</button>
+          <span>拖动标题栏移动 · 右下角调整尺寸 · 可切换全屏 · 按 Esc 返回</span>
+          <button className="mind-map-modal-close" aria-label="关闭思维导图弹窗" onClick={() => void closeMindmapModal()}>关闭弹窗</button>
+          <button className="mind-map-modal-maximize" aria-label={maximized ? "还原窗口" : "最大化窗口"}
+            onClick={() => { setMaximized((value) => !value); setModalShift({ x: 0, y: 0 }); }}>{maximized ? "还原窗口" : "全屏显示"}</button>
         </header>
         <div className="mind-map-modal-body">{mindMaps(true, (active) => { relationModeRef.current = active; })}</div>
       </section>

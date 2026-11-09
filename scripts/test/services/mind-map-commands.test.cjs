@@ -176,3 +176,29 @@ test("layoutMindMap：多个独立中心各自成块、互不连线、坐标不�
   assert.ok(layout.nodes.every((item) => item.x >= 0 && item.y >= 0), "出现负坐标");
   assert.ok(layout.width > 0 && layout.height > 0, "画布尺寸非法");
 });
+
+test("mindMapCanvasBounds：节点拖出自动布局范围后，边界仍覆盖全部节点与连线端点", () => {
+  const map = makeMap();
+  // 模拟自由摆放把两个节点分别拖到左下与右上，远超自动布局的 width/height。
+  const positions = { a1: { dx: 900, dy: -700 }, b: { dx: -800, dy: 700 } };
+  const layout = layoutLib.applyPositions(layoutLib.layoutMindMap(map), positions);
+  const relations = layoutLib.layoutRelations(map, layout);
+  const bounds = layoutLib.mindMapCanvasBounds(layout, relations);
+  const halfW = layoutLib.MIND_NODE_WIDTH / 2;
+  const halfH = layoutLib.MIND_NODE_HEIGHT / 2;
+  const xs = [
+    ...layout.nodes.flatMap((item) => [item.x - halfW, item.x + halfW]),
+    ...layout.edges.flatMap((edge) => [edge.x1, edge.x2]),
+    ...relations.flatMap((item) => [item.x1, item.x2]),
+  ];
+  const ys = [
+    ...layout.nodes.flatMap((item) => [item.y - halfH, item.y + halfH]),
+    ...layout.edges.flatMap((edge) => [edge.y1, edge.y2]),
+    ...relations.flatMap((item) => [item.y1, item.y2]),
+  ];
+  assert.ok(xs.every((value) => value >= bounds.x && value <= bounds.x + bounds.width), "x 方向端点超出显示边界");
+  assert.ok(ys.every((value) => value >= bounds.y && value <= bounds.y + bounds.height), "y 方向端点超出显示边界");
+  assert.ok(bounds.x < 0 || bounds.y < 0, "负方向越界未被纳入边界");
+  assert.ok(bounds.width >= layout.width && bounds.height >= layout.height, "边界未覆盖原自动布局画布");
+  assert.ok(Number.isFinite(bounds.width) && Number.isFinite(bounds.height), "边界尺寸非有限");
+});

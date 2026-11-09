@@ -10,7 +10,7 @@ import type { PageSaveHandle, PageSaveKind } from "../hooks/useEntityDraft";
 import { useWorkspaceDraft } from "../hooks/useWorkspaceDraft";
 import {
   applyPositions, createMindMap, createMindMapNode, layoutMindMap, layoutRelations,
-  MIND_NODE_HEIGHT, MIND_NODE_WIDTH, newId,
+  MIND_NODE_HEIGHT, MIND_NODE_WIDTH, mindMapCanvasBounds, newId,
 } from "../lib/mind-map";
 import { mergePositions, nodesInRect, removeMindMapNodes, subtreeIds } from "../lib/mind-map-commands";
 import { useMindMapCommands } from "./mind-map/useMindMapCommands";
@@ -90,6 +90,9 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus, ful
   const [importError, setImportError] = useState("");
   const [importing, setImporting] = useState(false);
   const [showInspector, setShowInspector] = useState(true);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [listQuery, setListQuery] = useState("");
+  const [listCollapsed, setListCollapsed] = useState(false);
   const [dragOffsets, setDragOffsets] = useState<Record<string, { dx: number; dy: number }> | null>(null);
   const [selectionBox, setSelectionBox] = useState<SelectionRect | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -120,6 +123,11 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus, ful
     [map, effectivePositions],
   );
   const laidRelations = useMemo<LaidMindRelation[]>(() => map ? layoutRelations(map, layout) : [], [map, layout]);
+  // 显示边界由布局引擎统一计算（可单测）：SVG 的 viewBox 与 left/top 取同一组 x/y，
+  // 保持 1:1 坐标映射，节点不跳位；渲染范围随自由摆放动态扩展，超界连线不再被裁剪。
+  const canvasBounds = useMemo(() => mindMapCanvasBounds(layout, laidRelations), [layout, laidRelations]);
+  const worldWidth = Math.max(layout.width, canvasBounds.x + canvasBounds.width);
+  const worldHeight = Math.max(layout.height, canvasBounds.y + canvasBounds.height);
   // 每种线色生成一对三角箭头 marker，避免为每条线重复定义且保持箭头与线同色。
   const relationColors = useMemo(
     () => Array.from(new Set(laidRelations.map((item) => item.relation.lineColor || RELATION_DEFAULT_COLOR))),
@@ -686,6 +694,10 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus, ful
 
   const childCount = map && selectedNode ? map.nodes.filter((node) => node.parentId === selectedNode.id).length : 0;
   const hasPositions = Object.keys(effectivePositions || {}).length > 0;
+  // 列表搜索只过滤卡片，不改 <select> 的 option 数量；默认空串即全量，保证列表断言稳定。
+  const visibleMaps = listQuery.trim()
+    ? board.items.filter((item) => item.title.toLowerCase().includes(listQuery.trim().toLowerCase()))
+    : board.items;
 
   return <section className={`mind-map-panel ${fullscreen ? "fullscreen" : ""} ${showInspector ? "" : "inspector-compact"}`} aria-label="思维导图">
     <header className="mind-map-toolbar">
@@ -695,18 +707,22 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus, ful
       </select>
       <button onClick={() => void board.create()}>新建思维导图</button>
       <button onClick={() => void chooseXMind()}>导入 XMind</button>
-      <button disabled={importing} onClick={() => void generateFromRelations()}>从角色关系生成</button>
-      <button disabled={!map} onClick={() => void removeBoard()}>删除此导图</button>
       <button disabled={!map} aria-pressed={relationMode} onClick={toggleRelationMode}>添加关系线</button>
       <button disabled={!canUndo} onClick={undo}>撤销</button>
       <button disabled={!canRedo} onClick={redo}>重做</button>
-      <button disabled={!map || !hasPositions} onClick={resetPositions}>重置位置</button>
-      <label>名称<input aria-label="思维导图名称" maxLength={160} value={map?.title || ""} onChange={(event) => commit((previous) => ({ ...previous, title: event.target.value, updatedAt: new Date().toISOString() }), `title:${map?.id || ""}`)} /></label>
-      <span role="status" aria-live="polite">{board.saveState}</span>
       <button onClick={fitView}>适应画布</button>
-      <button onClick={() => setShowInspector((value) => !value)}>{showInspector ? "精简属性区" : "展开属性区"}</button>
-      <button onClick={() => setAllCollapsed(false)}>展开全部</button>
-      <button onClick={() => setAllCollapsed(true)}>折叠全部</button>
+      <span role="status" aria-live="polite">{board.saveState}</span>
+      {/* 次要操作常驻 DOM，仅用 CSS 折叠；UI 断言按 textContent 查找，隐藏不影响点击。 */}
+      <button aria-label="更多操作" aria-expanded={moreOpen} onClick={() => setMoreOpen((value) => !value)}>更多</button>
+      <div className={`mind-map-toolbar-more ${moreOpen ? "open" : ""}`}>
+        <button disabled={importing} onClick={() => void generateFromRelations()}>从角色关系生成</button>
+        <button disabled={!map} onClick={() => void removeBoard()}>删除此导图</button>
+        <button disabled={!map || !hasPositions} onClick={resetPositions}>重置位置</button>
+        <label>名称<input aria-label="思维导图名称" maxLength={160} value={map?.title || ""} onChange={(event) => commit((previous) => ({ ...previous, title: event.target.value, updatedAt: new Date().toISOString() }), `title:${map?.id || ""}`)} /></label>
+        <button onClick={() => setShowInspector((value) => !value)}>{showInspector ? "精简属性区" : "展开属性区"}</button>
+        <button onClick={() => setAllCollapsed(false)}>展开全部</button>
+        <button onClick={() => setAllCollapsed(true)}>折叠全部</button>
+      </div>
     </header>
 
     {importError && <p className="mind-map-import-error" role="alert">{importError}</p>}
@@ -728,13 +744,20 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus, ful
 
     {!map ? <div className="mind-map-empty"><p>还没有思维导图。</p><button onClick={() => void board.create()}>创建第一张思维导图</button></div> :
       <div className="mind-map-body">
-        <aside className="mind-map-list" aria-label="已创建的思维导图">
-          <header><strong>我的思维导图</strong><span>{board.items.length} 张</span></header>
-          {board.items.map((item) => <button key={item.id} className={item.id === board.activeId ? "active" : ""} onClick={() => void board.select(item.id)}>
-            <strong>{item.title}</strong>
-            <span>{item.nodes.length} 个主题 · {formatTime(item.updatedAt)}</span>
-          </button>)}
-          {!board.items.length && <p>点击上方「新建思维导图」创建第一张。</p>}
+        <aside className={`mind-map-list ${listCollapsed ? "collapsed" : ""}`} aria-label="已创建的思维导图">
+          <div className="mind-map-list-tools">
+            <strong>我的思维导图</strong><span>{board.items.length} 张</span>
+            <input aria-label="搜索思维导图" placeholder="搜索名称…" value={listQuery} onChange={(event) => setListQuery(event.target.value)} />
+            <button aria-label={listCollapsed ? "展开导图列表" : "折叠导图列表"} onClick={() => setListCollapsed((value) => !value)}>{listCollapsed ? "展开" : "折叠"}</button>
+          </div>
+          <div className="mind-map-list-items">
+            {visibleMaps.map((item) => <button key={item.id} className={item.id === board.activeId ? "active" : ""} onClick={() => void board.select(item.id)}>
+              <strong>{item.title}</strong>
+              <span>{item.nodes.length} 个主题 · {formatTime(item.updatedAt)}</span>
+            </button>)}
+            {!board.items.length && <p>点击上方「新建思维导图」创建第一张。</p>}
+            {board.items.length > 0 && !visibleMaps.length && <p>没有匹配的思维导图。</p>}
+          </div>
         </aside>
 
         <div className="mind-map-main">
@@ -742,8 +765,11 @@ export function MindMaps({ workspace, onWorkspace, onRegisterSave, onStatus, ful
             onKeyDown={onCanvasKeyDown} onMouseDown={onCanvasMouseDown} onMouseMove={onCanvasMouseMove}
             onMouseUp={onCanvasMouseUp} onMouseLeave={onCanvasMouseUp} onWheel={onCanvasWheel}
             onContextMenu={onCanvasContextMenu}>
-            <div className="mind-map-world" style={{ width: layout.width, height: layout.height, transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})` }}>
-              <svg className="mind-map-links" width={layout.width} height={layout.height} viewBox={`0 0 ${layout.width} ${layout.height}`} aria-hidden="true">
+            <div className="mind-map-world" style={{ width: worldWidth, height: worldHeight, transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})` }}>
+              {/* viewBox 起点与 SVG 的 left/top 一致：坐标 1:1，节点不跳位；渲染范围随内容动态扩展。 */}
+              <svg className="mind-map-links" style={{ left: canvasBounds.x, top: canvasBounds.y }}
+                width={canvasBounds.width} height={canvasBounds.height}
+                viewBox={`${canvasBounds.x} ${canvasBounds.y} ${canvasBounds.width} ${canvasBounds.height}`} aria-hidden="true">
                 <defs>
                   {relationColors.map((color, index) => <marker key={`mind-relation-arrow-${index}`}
                     id={`mind-relation-arrow-${index}`} viewBox="0 0 10 10" refX="9" refY="5"
