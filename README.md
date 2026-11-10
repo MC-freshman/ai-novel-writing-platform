@@ -55,7 +55,8 @@ AI 功能用于检索相关资料、讨论情节、生成规划和提出修订�
 4. 在新版中点击“打开”，选择原来的小说项目目录。无需把章节复制进软件安装目录。
 5. 升级后可继续使用既有正文、资料、进度和小说统筹网。若界面仍显示旧样式，确认启动的是新的 0.4.0 文件，而不是旧快捷方式。
 <img width="2125" height="1349" alt="image" src="https://github.com/user-attachments/assets/34eb4a57-6908-4907-baae-dac4307ab09d" />
-<img width="2439" height="1307" alt="image" src="https://github.com/user-attachments/assets/69217e79-3dc1-4f9c-8157-d200a383f72b" />
+<img width="2439" height="1307" alt="70f407d4da00d1339a335bd95fbf257d" src="https://github.com/user-attachments/assets/57e52ebe-95ef-409d-a4c1-3e494dcfd821" />
+
 
 
 
