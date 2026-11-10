@@ -43,7 +43,8 @@ AI 功能用于检索相关资料、讨论情节、生成规划和提出修订�
 2. 要使用自己的项目，在顶部点击“新建”创建小说，或点击“打开”选择已有项目目录。
 3. 左侧“章节”展示项目中的文档。点击文档名称，正文会在中央打开；底部显示保存状态和字数。
 4. 项目目录保存你的正文和资料。便携版并不意味着小说会写到下载的 `.exe` 内，也不意味着移动 `.exe` 就移动了小说。
-<img width="2557" height="1507" alt="image" src="https://github.com/user-attachments/assets/e1c25d38-c09d-4ef2-8b54-8d0960a76858" />
+<img width="2557" height="1506" alt="1de5ab80abdeb032e9d8dc703e3bfefe" src="https://github.com/user-attachments/assets/e9410620-8eab-4d1b-af3c-f21f65187da2" />
+
 
 
 **从旧版升级：**
@@ -53,6 +54,10 @@ AI 功能用于检索相关资料、讨论情节、生成规划和提出修订�
 3. 关闭旧版，再运行 0.4.0 安装程序或新的便携程序。
 4. 在新版中点击“打开”，选择原来的小说项目目录。无需把章节复制进软件安装目录。
 5. 升级后可继续使用既有正文、资料、进度和小说统筹网。若界面仍显示旧样式，确认启动的是新的 0.4.0 文件，而不是旧快捷方式。
+<img width="2125" height="1349" alt="image" src="https://github.com/user-attachments/assets/34eb4a57-6908-4907-baae-dac4307ab09d" />
+<img width="2439" height="1307" alt="image" src="https://github.com/user-attachments/assets/69217e79-3dc1-4f9c-8157-d200a383f72b" />
+
+
 
 ### 3. 五分钟开始写作
 
