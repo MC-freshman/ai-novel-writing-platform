@@ -4,7 +4,7 @@
 
 A Windows desktop application for long-form fiction. Keep manuscripts, outlines, characters, worldbuilding, progress, and AI assistance in one local project, with a quiet writing workspace and tools for checking story continuity.
 
-**当前版本 / Current release: 0.4.0 · Windows x64**
+**当前版本 / Current release: 0.4.1 · Windows x64**
 
 软件界面目前使用中文；本 README 提供完整的中文和英文操作说明，英文部分保留实际中文按钮名称，方便对照界面。
 
@@ -26,12 +26,12 @@ AI 功能用于检索相关资料、讨论情节、生成规划和提出修订�
 
 ### 2. 下载、安装与升级
 
-在 [0.4.0 发布页](https://github.com/MC-freshman/ai-novel-writing-platform/releases/tag/v0.4.0) 下载适合自己的文件。下面的说明已经包含安装和升级步骤，不需要另找教程。
+在 [0.4.1 发布页](https://github.com/MC-freshman/ai-novel-writing-platform/releases/tag/v0.4.1) 下载适合自己的文件。下面的说明已经包含安装和升级步骤，不需要另找教程。
 
 | 文件 | 用途 | 如何使用 |
 | --- | --- | --- |
-| [AI-Novel-Writing-Platform-Setup-0.4.0-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.4.0/AI-Novel-Writing-Platform-Setup-0.4.0-x64.exe) | Windows 64 位安装版 | 运行安装向导，选择安装位置，之后从桌面或开始菜单打开。适合日常固定使用。 |
-| [AI-Novel-Writing-Platform-Portable-0.4.0-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.4.0/AI-Novel-Writing-Platform-Portable-0.4.0-x64.exe) | Windows 64 位便携版 | 下载后直接运行，程序包含所需运行环境，无需安装 Node.js。项目数据仍保存在独立项目目录。 |
+| [AI-Novel-Writing-Platform-Setup-0.4.1-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.4.1/AI-Novel-Writing-Platform-Setup-0.4.1-x64.exe) | Windows 64 位安装版 | 运行安装向导，选择安装位置，之后从桌面或开始菜单打开。适合日常固定使用。 |
+| [AI-Novel-Writing-Platform-Portable-0.4.1-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.4.1/AI-Novel-Writing-Platform-Portable-0.4.1-x64.exe) | Windows 64 位便携版 | 下载后直接运行，程序包含所需运行环境，无需安装 Node.js。项目数据仍保存在独立项目目录。 |
 | SHA256SUMS.txt | 文件校验 | 与程序一起下载，用 PowerShell 的 `Get-FileHash -Algorithm SHA256` 对照其中的哈希值。 |
 | latest.yml、`.blockmap` | 发布更新元数据 | 普通使用者不需要手动打开；它们用于记录发布包和更新信息，**但请勿从发布目录删除：校验和表依赖它们**。 |
 
@@ -51,13 +51,11 @@ AI 功能用于检索相关资料、讨论情节、生成规划和提出修订�
 
 1. 在旧版中保存当前章节及正在编辑的角色、世界观或小说统筹网。
 2. 使用顶部“更多 → 备份项目”导出备份，保留原项目目录。
-3. 关闭旧版，再运行 0.4.0 安装程序或新的便携程序。
+3. 关闭旧版，再运行 0.4.1 安装程序或新的便携程序。
 4. 在新版中点击“打开”，选择原来的小说项目目录。无需把章节复制进软件安装目录。
-5. 升级后可继续使用既有正文、资料、进度和小说统筹网。若界面仍显示旧样式，确认启动的是新的 0.4.0 文件，而不是旧快捷方式。
+5. 升级后可继续使用既有正文、资料、进度和小说统筹网。若界面仍显示旧样式，确认启动的是新的 0.4.1 文件，而不是旧快捷方式。
 <img width="2125" height="1349" alt="image" src="https://github.com/user-attachments/assets/34eb4a57-6908-4907-baae-dac4307ab09d" />
 <img width="2439" height="1307" alt="70f407d4da00d1339a335bd95fbf257d" src="https://github.com/user-attachments/assets/57e52ebe-95ef-409d-a4c1-3e494dcfd821" />
-
-
 
 
 ### 3. 五分钟开始写作
@@ -67,7 +65,7 @@ AI 功能用于检索相关资料、讨论情节、生成规划和提出修订�
 3. 按 `Ctrl+S` 保存。软件也支持在设置中调整自动保存；底部“有未保存修改 / 保存中 / 已保存”反映实际状态。
 4. 如果已经在 Word 中写了内容，点击顶部“导入文档”，选择 `.docx`、`.txt` 或 `.md`，也可以从分组旁导入到指定目录。导入 Word 时会尽量保留标题、图片和表格结构。
 5. 想专心写作时，点击右上角“专注写作”；需要资料或 AI 时，退出专注或点击顶部“AI 对话”。
-6. 在“分析 → 进度 → 章节进度”查看全书状态；需要排期、线索和世界钟时，切换到同一页的“小说统筹网”。
+6. 在“分析 → 规划与进度 → 章节进度”查看全书状态；需要排期、线索和世界钟时，切换到同一页的“小说统筹网”。
 
 例如，你可以先新建“第一章 雨停之后”，写一段正文并保存，再到章节进度把它标为“写作中”。这是一条真实可完成的工作路径，不要求先配置模型或完成全书规划。
 
@@ -88,7 +86,7 @@ AI 功能用于检索相关资料、讨论情节、生成规划和提出修订�
 
 ### 5. 章节进度怎么用
 
-进入“分析 → 进度 → 章节进度”，软件按分卷显示文档网格。每个格子显示标题、字数、状态，以及可用的场景、筹备要点或大纲标题。
+进入“分析 → 规划与进度 → 章节进度”，软件按分卷显示文档网格。每个格子显示标题、字数、状态，以及可用的场景、筹备要点或大纲标题。
 
 - 点击格子里的状态标签，可在“计划中、写作中、已完成、暂缓”之间循环切换。
 - 双击格子可写进度备注；点击章节标题可打开正文。
@@ -100,7 +98,7 @@ AI 功能用于检索相关资料、讨论情节、生成规划和提出修订�
 
 ### 6. 小说统筹网：线程、排期、世界钟与信息揭露
 
-入口是“分析 → 进度 → 小说统筹网”。它用于维护计划表和正文之间的关系，与章节进度共享入口，但规划章号和实际正文编号分别管理。
+入口是“分析 → 规划与进度 → 小说统筹网”。它用于维护计划表和正文之间的关系，与章节进度共享入口，但规划章号和实际正文编号分别管理。
 
 1. 点击“新建小说网”，填写名称。默认提供 POV 线程、逐章排期、世界钟、信息台账和已写章节对齐等表，也可添加自定义表。
 2. 选择一张表，点击“添加记录”，编辑事件、角色、线索或时间等列。“调整列与地区”可增删和改名列。
@@ -122,7 +120,7 @@ AI 功能用于检索相关资料、讨论情节、生成规划和提出修订�
 
 容量上限：每项目 20 个小说网；每网 80 张表、10,000 条记录、32 列、30 份原始说明，总文字数据 4 MB。每次导入 1–16 份资料，单文件上限 8 MB。超出上限会拒绝相应保存或导入，而不是截断现有规划。
 
-**思维导图与进度网格：**同一个「分析 → 进度」下还有两个可随时切换的规划视图。
+**思维导图与进度网格：**同一个「分析 → 规划与进度」下还有两个可随时切换的规划视图。
 
 - 点击「思维导图」→「新建思维导图」，会以中心主题为起点创建一张左右双向展开的导图。列表列出之前创建的全部导图（含主题数与更新时间），点击即可切回继续编辑；列表带搜索框与折叠按钮，数量多时可按名称快速定位。选中节点后可在属性区改文字、备注、颜色和分支方向；Tab 加子主题、Enter 加同级、F2 改名、Delete 删除，双击节点也可改名。滚轮缩放、拖动空白处平移，「展开编辑区」可放大到全窗口。画布空白处右键可「新建独立中心主题」，选中节点右键可「从父主题断开，独立成块」——多个中心各自成块、互不连线。
 - 点击「进度网格」→「新建网格」，可创建多张自定义网格：增删行列、改列名与列类型（文字 / 状态 / 关联章节）、填写单元格、调整行顺序并绑定实际章节。顶部按状态统计完成率，「同步章节状态」把已绑定章节的进度写回网格。左侧列表可随时切回之前的网格。
@@ -158,7 +156,7 @@ AI 功能用于检索相关资料、讨论情节、生成规划和提出修订�
 
 **创作状态与工作台：**从 AI 标题栏“创作状态”入口管理有原文证据的剧情事实、角色位置/目标/知情/持有物、伏笔生命周期和下一章筹备。工作台还提供场景、剧情因果、角色弧线、分层项目记忆、章节质量诊断与项目交换。
 
-**分析工具：**全局搜索、时间线、关系网、一致性检查、章节版本对比和导出/提取集中在“分析”。检查可以限定资料范围，结果供作者确认、忽略或修复。人物出场统计、地点/势力版图和素材库在导出/提取的试验功能中。
+**分析工具：**全局搜索、时间线、一致性检查、章节版本对比和导出/提取集中在“分析”。角色关系图已并入“规划与进度 → 思维导图”。检查可以限定资料范围，结果供作者确认、忽略或修复。人物出场统计、地点/势力版图和素材库在导出/提取的试验功能中。
 
 **安全修订：**选中正文后从右键菜单生成修订候选或添加批注。修订可整体或逐句采纳；应用前校验原文位置并保存历史版本，冲突时停止写入。批注独立保存。每章的撤销/重做历史独立，快速切章会丢弃迟到的加载结果。
 
@@ -180,7 +178,7 @@ AI 功能用于检索相关资料、讨论情节、生成规划和提出修订�
 
 **打开后不是我的小说。** 可能打开了默认项目。点击顶部“打开”，选择保存原小说的项目目录，查看左侧底部路径确认位置。
 
-**升级后界面没变。** 检查是否仍在运行旧程序或旧快捷方式。保存并关闭旧版，再打开 0.4.0 的安装版或便携版。
+**升级后界面没变。** 检查是否仍在运行旧程序或旧快捷方式。保存并关闭旧版，再打开 0.4.1 的安装版或便携版。
 
 **想在专注模式里查看任务。** 底部仍显示当前章进度条，点击箭头展开任务说明。可勾选任务、切换状态；`Esc` 返回普通布局。
 
@@ -190,17 +188,15 @@ AI 功能用于检索相关资料、讨论情节、生成规划和提出修订�
 
 **保存提示冲突。** 当前输入可能仍在恢复草稿里。先保留或导出草稿，重新读取最新内容，再对照历史版本；不要通过删除项目文件来绕过保护。
 
-### 11. 0.4.0 本次更新与验证
+### 11. 0.4.1 本次更新与验证
 
-0.4.0 在 0.3.9 基础上完成服务依赖、状态订阅、导图模块和界面一致性的收口。
+0.4.1 是 0.4.0 的修正版，重点修复原生菜单和输入弹窗，并完成仓库整理。历史版本见[变更日志索引](更新日志.md)。
 
-- **服务依赖**：删除共享 IPC 依赖桶，12 个 IPC 域改为逐域最小依赖；顶层服务循环从 17 条降为 0，并新增无环与逐域依赖门禁。
-- **状态订阅**：聊天消息、会话和 AI 进度改由 ChatPanel 按域订阅，编辑区和目录树使用稳定回调与 memo；流式回答期间编辑区渲染实测 0 次。
-- **导图模块**：内置导图改为注册表挂载，支持注销、重新挂载和卸载守卫；新增未注册模块构建启动验证，导图数据保留，进度网格等规划功能可用。
-- **界面**：规划页签统一为“规划与进度”，功能面板可直达导图、进度网格和统筹网；设置页按职责分组，接口说明折叠，保存失败聚焦错误提示；导图弹窗接入焦点围栏；主题令牌、弹窗外壳和反馈组件统一，导图与网格专属样式拆分。
-- **XMind 接入核验**：XMind 8（3.7.8）没有 CLI、COM 或可嵌入编辑 API；xmind-mcp 1.0.0（MIT）只提供文件级 MCP 工具和外部启动，XMind 8 XML 路径不保留样式、主题和图片。因此本版不把 XMind 作为平台内导图 UI 的替换实现；文件桥或外部打开仍为条件项。
-
-验证（2026-11-10）：完整回归、191 项服务单测、33 项桌面回归、导图/网格 22 项、视觉回归和未注册模块构建启动均通过；生产依赖审计 0 漏洞；build、lint、typecheck、check:modules、check:services、check:quality、scan:privacy 通过。安装器原位升级与卸载仍以 GitHub Windows runner 的独立验收记录为准；程序未做 Authenticode 签名。
+- **原生菜单**：修复 preload 未透传菜单动作的问题；文件、编辑、视图、设置中的新建、打开、导入、三种导出、保存、主题、专注、重建索引和设置入口均恢复。
+- **输入弹窗**：Electron不支持 window.prompt；新建项目、AI提问、进度板新建章节/备注、快照改名和创建分支改为应用内输入弹窗，支持必填校验、取消、Esc和焦点围栏。
+- **按钮收口**：静态核对99个TS/TSX文件中的345个按钮元素；只在选中章节显示目录升降级按钮；导图模块不可用时隐藏空弹窗入口；任务中心按任务类型跳转；无可见行、无选中项或无章节时禁用无效批量操作；删除不可达的关系网面板。
+- **结构整理**：`src/components`按`shell`、`writing`、`chat`、`resources`、`story`、`planning`、`analysis`、`ui`分组；历史变更日志归档到`docs/changelog/`，旧方案与验收资料归档到`docs/archive/`。
+- **验证**：完整回归、191项服务单测、33项桌面回归、22项导图/网格、15项菜单/弹窗控件、视觉回归和未注册模块构建启动均通过；生产依赖审计0漏洞；build、lint、typecheck、check:modules、check:services、check:quality、scan:privacy通过。安装器原位升级与卸载仍以GitHub Windows runner的独立验收记录为准；程序未做Authenticode签名。
 
 ### 12. 开发与许可
 
@@ -215,7 +211,7 @@ npm run start
 
 `npm run dev` 只启动 Vite 前端；完整桌面功能依赖 Electron 的本地接口，日常开发和测试请使用 `npm run start`。项目未随源码包含作者的小说数据或接口密钥。
 
-仓库主要目录：`src/`（React 界面、组件与样式）、`electron/`（主进程与本地服务）、`shared/`（IPC 契约）、`scripts/`（测试、门禁与构建脚本）、`docs/`（验收与实测记录）、`dist/`（Vite 前端产物，桌面运行时需要）、`release/`（安装版与便携版 exe）；根目录存放配置、许可、启动脚本与中英双语说明。`node_modules/`、`.test-runs/`、小说数据、`novel.config.json`、向量库与密钥文件均不纳入版本控制。
+仓库主要目录：`src/`（React 入口、控制器、stores 与 types）；`src/components/`按职责分为`shell/`、`writing/`、`chat/`、`resources/`、`story/`、`planning/`、`analysis/`和`ui/`，`src/modules/mindmap/`是内置导图模块；`electron/`（主进程、IPC域与本地服务）、`shared/`（IPC契约）、`scripts/`（测试、门禁与构建脚本）、`docs/`（`changelog/`、`guides/`、`archive/`与工程验收记录）、`dist/`（Vite前端产物，桌面运行时需要）、`release/`（最新安装版与便携版exe）；根目录保留配置、许可、启动脚本和中英双语说明。`node_modules/`、`.test-runs/`、小说数据、`novel.config.json`、向量库与密钥文件均不纳入版本控制。
 
 ```powershell
 npm run build
@@ -226,6 +222,7 @@ npm run check:services
 npm run test:services:coverage
 npm run typecheck:electron
 npm run test:ui-plan
+npm run test:ui-controls
 npm run test:ui-planning-boards
 npm run test:ui-novel-network
 npm run test:ui-visual
@@ -253,12 +250,12 @@ AI tools retrieve relevant material, discuss plot ideas, prepare plans, and prop
 
 ### 2. Download, install, and upgrade
 
-Download the files from the [0.4.0 release](https://github.com/MC-freshman/ai-novel-writing-platform/releases/tag/v0.4.0). The installation and upgrade instructions are included below.
+Download the files from the [0.4.1 release](https://github.com/MC-freshman/ai-novel-writing-platform/releases/tag/v0.4.1). The installation and upgrade instructions are included below.
 
 | File | Purpose | How to use it |
 | --- | --- | --- |
-| [AI-Novel-Writing-Platform-Setup-0.4.0-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.4.0/AI-Novel-Writing-Platform-Setup-0.4.0-x64.exe) | Windows x64 installer | Run the wizard, choose an installation location, then launch from the desktop or Start menu. Suitable for regular use on one computer. |
-| [AI-Novel-Writing-Platform-Portable-0.4.0-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.4.0/AI-Novel-Writing-Platform-Portable-0.4.0-x64.exe) | Windows x64 portable application | Download and run it directly. The runtime is bundled; Node.js is not required. Your novel remains in a separate project directory. |
+| [AI-Novel-Writing-Platform-Setup-0.4.1-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.4.1/AI-Novel-Writing-Platform-Setup-0.4.1-x64.exe) | Windows x64 installer | Run the wizard, choose an installation location, then launch from the desktop or Start menu. Suitable for regular use on one computer. |
+| [AI-Novel-Writing-Platform-Portable-0.4.1-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.4.1/AI-Novel-Writing-Platform-Portable-0.4.1-x64.exe) | Windows x64 portable application | Download and run it directly. The runtime is bundled; Node.js is not required. Your novel remains in a separate project directory. |
 | SHA256SUMS.txt | Download verification | Download it alongside the application and compare its entries with PowerShell `Get-FileHash -Algorithm SHA256`. |
 | latest.yml and `.blockmap` | Release/update metadata | Ordinary users do not need to open these files manually. They describe the release artifacts and update information. **Do not delete them from the release directory: the checksum manifest depends on them.** |
 
@@ -275,7 +272,7 @@ This release provides Windows x64 applications. Real Electron interface and writ
 
 1. Save the current chapter and any character, worldbuilding, or planning-network edits in the old version.
 2. Use `更多 → 备份项目` (More → Back up project) and keep the original project directory.
-3. Close the old version, then run the 0.4.0 installer or the new portable executable.
+3. Close the old version, then run the 0.4.1 installer or the new portable executable.
 4. Click `打开` (Open) in the new version and select the existing novel directory. You do not need to copy chapters into the application's installation directory.
 5. Continue using your existing chapters, reference material, progress, and planning networks. If the old interface still appears, check that you launched the new file rather than an old shortcut.
 
@@ -286,7 +283,7 @@ This release provides Windows x64 applications. Real Electron interface and writ
 3. Press `Ctrl+S` to save. Automatic saving can be adjusted in Settings. The bottom bar distinguishes unsaved changes (`有未保存修改`), saving (`保存中`), and saved (`已保存`).
 4. To bring in existing material, click `导入文档` (Import documents) and choose `.docx`, `.txt`, or `.md` files. Import from a group in the tree to place files in that group. Word import attempts to retain headings, images, and table structure.
 5. Click `专注写作` (Focus writing) at the upper right when you want more room for the manuscript. Exit focus or use `AI 对话` when you need the assistant.
-6. Open `分析 → 进度 → 章节进度` (Analysis → Progress → Chapter progress) to track the book. Switch to `小说统筹网` in the same workspace for schedules, threads, information reveals, and the world clock.
+6. Open `分析 → 规划与进度 → 章节进度` (Analysis → Planning & Progress → Chapter progress) to track the book. Switch to `小说统筹网` in the same workspace for schedules, threads, information reveals, and the world clock.
 
 A simple first task is to create a chapter, write a paragraph, save it, and mark it as `写作中` (Writing) on the progress page. You can complete this without configuring a model or planning the whole book.
 
@@ -307,7 +304,7 @@ Focus mode hides the document tree and AI side panel to give the manuscript more
 
 ### 5. Chapter progress
 
-Open `分析 → 进度 → 章节进度`. Documents are grouped by volume. Cards show the title, word count, status, and available scene, preparation, or outline information.
+Open `分析 → 规划与进度 → 章节进度`. Documents are grouped by volume. Cards show the title, word count, status, and available scene, preparation, or outline information.
 
 - Click a status label to cycle through `计划中` (Planned), `写作中` (Writing), `已完成` (Completed), and `暂缓` (Paused).
 - Double-click a card to edit its progress note; click the chapter title to open the manuscript.
@@ -319,7 +316,7 @@ Since 0.3.7, navigation, mode controls, action buttons, help text, and volume st
 
 ### 6. Novel planning networks
 
-Open `分析 → 进度 → 小说统筹网` (Analysis → Progress → Novel planning network). This workspace relates planning tables to actual manuscript documents. Planned chapter numbers and written-document references are maintained separately.
+Open `分析 → 规划与进度 → 小说统筹网` (Analysis → Planning & Progress → Novel planning network). This workspace relates planning tables to actual manuscript documents. Planned chapter numbers and written-document references are maintained separately.
 
 1. Click `新建小说网` (New network) and enter a name. Default tables cover POV threads, chapter schedules, the world clock, information tracking, and written-chapter alignment; custom tables are also supported.
 2. Select a table, click `添加记录` (Add record), and edit event, character, clue, or time columns. `调整列与地区` adds, renames, or removes columns.
@@ -341,7 +338,7 @@ Imported text is retained in `说明与导入原文` (Notes and imported source)
 
 Limits: 20 networks per project; 80 tables, 10,000 records, 32 columns, 30 imported source documents, and 4 MB of text data per network. Import 1–16 files at a time, with an 8 MB limit per file. Requests exceeding these limits are rejected rather than silently truncating the existing plan.
 
-**Mind maps and progress grids:** The same `分析 → 进度` (Analysis → Progress) workspace has two more switchable views.
+**Mind maps and progress grids:** The same `分析 → 规划与进度` (Analysis → Planning & Progress) workspace has two more switchable views.
 
 - `思维导图` (Mind maps) creates a two-sided map from a central topic. A list shows every map created earlier with its topic count and last update, so you can switch back and keep editing; the list has a search box and a collapse toggle for large collections. Select a node to edit its text, notes, colour, and branch side; `Tab` adds a child, `Enter` adds a sibling, `F2` renames, `Delete` removes, and double-click also renames. Use the wheel to zoom, drag empty space to pan, and `展开编辑区` to enlarge the canvas. Right-click blank canvas to add another independent centre, or right-click a node to detach it into its own block; blocks do not connect to one another.
 - `进度网格` (Progress grids) creates multiple custom grids: add or remove rows and columns, rename columns, choose a column type (text / status / linked chapter), fill cells, reorder rows, and bind real chapters. The summary bar counts each status and shows a completion rate; `同步章节状态` copies chapter progress back into linked rows. The list switches between previously created grids.
@@ -381,7 +378,7 @@ The candidate scan limit and sent-excerpt limit are separate ceilings, not an in
 
 **Story state and workspace:** Use `创作状态` in the AI header to manage evidence-backed facts, character positions/goals/knowledge/items, foreshadowing lifecycles, and next-chapter preparation. The workspace also contains scenes, causal relationships, character arcs, layered project memory, chapter diagnostics, and project exchange.
 
-**Analysis:** `分析` contains global search, timelines, relationship graphs, consistency checks, chapter-version comparison, and export/extraction. Checks can be scoped to selected material, and their findings can be confirmed, ignored, or addressed. Experimental tools cover appearances, location/faction maps, and a material library.
+**Analysis:** `分析` contains global search, timelines, consistency checks, chapter-version comparison, and export/extraction. Relationship graphs are now part of `规划与进度 → 思维导图` (Planning & Progress → Mind maps). Checks can be scoped to selected material, and their findings can be confirmed, ignored, or addressed. Experimental tools cover appearances, location/faction maps, and a material library.
 
 **Safe revisions:** Select manuscript text and use the context menu to propose a revision or add an annotation. Adopt revisions as a whole or sentence by sentence. Applying one checks the original location and saves history; conflicts stop the write. Annotations are stored separately. Undo/redo history is independent per chapter, and stale responses from rapid chapter switches are discarded.
 
@@ -403,7 +400,7 @@ The candidate scan limit and sent-excerpt limit are separate ceilings, not an in
 
 **The application opened an unfamiliar novel.** It may be the default project. Use `打开` to select your existing novel directory and check the path displayed at the bottom of the left panel.
 
-**The interface did not change after upgrading.** Check the executable and shortcut. Save and close the old application, then open the 0.4.0 installed or portable version.
+**The interface did not change after upgrading.** Check the executable and shortcut. Save and close the old application, then open the 0.4.1 installed or portable version.
 
 **I need tasks in focus mode.** The chapter progress strip remains at the bottom. Expand it to read tasks, mark completion, and change status. `Esc` returns to the normal layout.
 
@@ -413,17 +410,15 @@ The candidate scan limit and sent-excerpt limit are separate ceilings, not an in
 
 **Saving reports a conflict.** Current input may still be in a recovery draft. Preserve/export it, reload the latest content, and compare history. Do not delete project files to bypass the protection.
 
-### 11. Changes and validation in 0.4.0
+### 11. Changes and validation in 0.4.1
 
-0.4.0 closes the service-dependency, state-subscription, mind-map module and interface-consistency work started after 0.3.9.
+0.4.1 is a correction release for 0.4.0, focused on native-menu and input-dialog fixes plus repository cleanup. See the [changelog index](更新日志.md) for earlier versions.
 
-- **Service dependencies:** the shared IPC dependency barrel was removed, all 12 IPC domains use per-domain imports, and top-level service cycles dropped from 17 to 0 with new boundary gates.
-- **State subscriptions:** chat messages, sessions and AI progress are subscribed by ChatPanel; the editor and chapter tree use stable callbacks and memoization. The editor rendered 0 times during a streaming answer in the automated check.
-- **Mind-map module:** the built-in module is registered through a registry and can be unregistered, restored, and guarded by a save barrier. A build with no registered module starts successfully, keeps map data, and leaves progress-grid planning available.
-- **Interface:** the planning tab is named `规划与进度`; the function panel links directly to mind maps, progress grid and story network; settings are grouped by responsibility with collapsible help and focused save errors; the mind-map modal has a focus trap; theme tokens, modal surfaces and feedback components are centralized, and mind-map/grid styles are separated.
-- **XMind assessment:** XMind 8 (3.7.8) has no CLI, COM, or embeddable editing API. xmind-mcp 1.0.0 (MIT) provides file-level MCP tools and external launch only; the XMind 8 XML path does not preserve styles, themes, or images. XMind is therefore not used as an in-app UI replacement in this release; a file bridge or external-open integration remains conditional.
-
-Validation (2026-11-10): the full regression suite, 191 service tests, 33 desktop checks, 22 mind-map/grid checks, visual regression, and the no-module build startup all passed. Production dependency audit found 0 vulnerabilities; build, lint, typecheck, check:modules, check:services, check:quality, and scan:privacy passed. Installer in-place upgrade and uninstall still require the isolated GitHub Windows runner record. The executables are not Authenticode-signed.
+- **Native menu:** preload now forwards the menu action payload; New, Open, Import, the three export actions, Save, Theme, Focus, Rebuild Index and Settings all trigger their real handlers again.
+- **Input dialogs:** Electron does not support `window.prompt`. New project, AI selection questions, progress-board chapter creation and notes, snapshot rename and branch creation now use an in-app prompt with validation, cancel, Escape, and focus trapping.
+- **Button audit:** 345 button elements across 99 TS/TSX files were checked statically. Chapter-level outline controls now appear only for the selected chapter; the empty mind-map modal entry is hidden when the module is unavailable; task results open the correct tab; invalid batch actions are disabled; and the unreachable relations panel was removed.
+- **Structure:** `src/components` is grouped into `shell`, `writing`, `chat`, `resources`, `story`, `planning`, `analysis` and `ui`. Historical changelogs live in `docs/changelog/`, and old plans and acceptance records live in `docs/archive/`.
+- **Validation:** the full regression suite, 191 service tests, 33 desktop checks, 22 mind-map/grid checks, 15 menu/dialog checks, visual regression, and the no-module build startup all passed. Production dependency audit found 0 vulnerabilities; build, lint, typecheck, check:modules, check:services, check:quality, and scan:privacy passed. Installer upgrade and uninstall still require the isolated GitHub Windows runner record. The executables are not Authenticode-signed.
 
 ### 12. Development and license
 
@@ -438,7 +433,7 @@ npm run start
 
 `npm run dev` starts only the Vite frontend. Full desktop features use Electron's local bridge; use `npm run start` for desktop development and testing. Source does not include the author's novel projects or API credentials.
 
-Repository layout: `src/` (React UI, components and styles), `electron/` (main process and local services), `shared/` (IPC contract), `scripts/` (tests, quality gates and build helpers), `docs/` (acceptance and benchmark notes), `dist/` (Vite frontend output required at runtime), and `release/` (installer and portable executables). The root holds configuration, the license, the launcher script and the bilingual guides. `node_modules/`, `.test-runs/`, novel data, `novel.config.json`, vector stores and credential files are excluded from version control.
+Repository layout: `src/` (React entry, controllers, stores and types); `src/components/` is grouped into `shell/`, `writing/`, `chat/`, `resources/`, `story/`, `planning/`, `analysis/` and `ui/`; `src/modules/mindmap/` contains the built-in mind-map module; `electron/` (main process, IPC domains and local services), `shared/` (IPC contract), `scripts/` (tests, quality gates and build helpers), `docs/` (`changelog/`, `guides/`, `archive/` and engineering records), `dist/` (Vite frontend output required at runtime), and `release/` (latest installer and portable executables). The root holds configuration, the license, the launcher script and the bilingual guides. `node_modules/`, `.test-runs/`, novel data, `novel.config.json`, vector stores and credential files are excluded from version control.
 
 ```powershell
 npm run build
@@ -449,6 +444,7 @@ npm run check:services
 npm run test:services:coverage
 npm run typecheck:electron
 npm run test:ui-plan
+npm run test:ui-controls
 npm run test:ui-planning-boards
 npm run test:ui-novel-network
 npm run test:ui-visual

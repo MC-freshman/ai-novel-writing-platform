@@ -1,6 +1,6 @@
 {
   "name": "ai-novel-writing-platform",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "description": "本地 AI 小说创作平台，支持 Markdown 写作、本地知识库和 RAG 对话。",
   "engines": {
@@ -18,6 +18,7 @@
     "test:safety": "node --test --test-concurrency=1 scripts/test-safety-regression.cjs",
     "test:plan": "node --test --test-concurrency=1 scripts/test-plan-regression.cjs",
     "test:ui-plan": "node scripts/test-ui-plan.cjs",
+    "test:ui-controls": "node scripts/test-ui-controls.cjs",
     "test:agent": "node scripts/test-agent-platform.cjs",
     "test:long-project": "node scripts/test-long-project-performance.cjs",
     "test:save-performance": "node scripts/test-save-performance.cjs",

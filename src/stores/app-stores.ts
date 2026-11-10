@@ -1,7 +1,8 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import type { SetStateAction } from "react";
 import type { AppState, Chapter, BackgroundTask, EditorScrollAnchor, ChatMessage, ChatSession, RetrievalMode, RetrievalDiagnostics, ProgressState, RecoveryDraft } from "../types";
-import type { CreativeWorkspaceTab } from "../components/CreativeWorkspace";
+import type { CreativeWorkspaceTab } from "../components/story/CreativeWorkspace";
+import type { StoryCenterTab } from "../components/story/StoryCenterModal";
 import type { InlineReviewItem } from "../lib/editor-ops";
 
 export type Domain<T extends object> = { store: StoreApi<T>; setters: { [K in keyof T]: (next: SetStateAction<T[K]>) => void } };
@@ -57,7 +58,7 @@ type NavigationState = {
   showSettings: boolean;
   showQuickPanel: boolean;
   showStoryCenter: boolean;
-  storyCenterInitialTab: "facts" | "workspace";
+  storyCenterInitialTab: StoryCenterTab;
   workspaceInitialTab: CreativeWorkspaceTab;
   showTaskCenter: boolean;
   aiChatOpenRequest: number;

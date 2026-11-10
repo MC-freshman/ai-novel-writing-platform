@@ -9,7 +9,7 @@ import type {
   ChatMessage,
   ChatSession,
 } from "../types";
-import type { CreativeWorkspaceTab } from "../components/CreativeWorkspace";
+import type { CreativeWorkspaceTab } from "../components/story/CreativeWorkspace";
 import type { MouseEvent } from "react";
 
 export type ChapterSaveDraft = {

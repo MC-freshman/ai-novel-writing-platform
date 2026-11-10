@@ -1,4 +1,4 @@
-import { MindMaps } from "../../components/MindMaps";
+import { MindMaps } from "../../components/planning/MindMaps";
 import { MIND_MAP_CONTRACT_VERSION, type MindMapModule } from "./contract";
 
 export const builtinMindMapModule: MindMapModule = {

@@ -37,6 +37,7 @@ jobs:
       - run: npm run check:quality
       - run: npm run scan:privacy
       - run: npm run test:ui-plan
+      - run: npm run test:ui-controls
       - run: npm run test:ui-novel-network
       - run: npm run test:ui-visual
       - run: npm run test:ui-serene

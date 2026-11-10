@@ -16,7 +16,7 @@ contextBridge.exposeInMainWorld("novelAPI", {
 
   // ---- 事件推送：主进程 → 渲染监听 ----
   onMenuAction: (callback) => {
-    const handler = () => callback();
+    const handler = (_event, payload) => callback(payload);
     ipcRenderer.on("menu:action", handler);
     return () => ipcRenderer.removeListener("menu:action", handler);
   },

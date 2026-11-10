@@ -7,7 +7,7 @@ function source(file) {
 }
 const limits = {
   "src/App.tsx": 650,
-  "src/components/AnalysisPanel.tsx": 150,
+  "src/components/analysis/AnalysisPanel.tsx": 150,
   "src/types.ts": 30,
   "electron/ipc/handlers.cjs": 120,
   "electron/services/analysis-tools.cjs": 80,
@@ -22,7 +22,7 @@ if (/require\(["']\.\/project-ops\.cjs["']\)/.test(source("electron/services/pro
 for (const file of fs.readdirSync(path.join(root, "electron/ipc/domains")).filter((name) => name.endsWith(".cjs")))
   if (/require\(["']\.\.\/dependencies\.cjs["']\)/.test(source(`electron/ipc/domains/${file}`)))
     throw Error(`IPC域必须使用逐域依赖，不得回退共享依赖桶: ${file}`);
-if (/modules\/mindmap\/builtin/.test(source("src/components/ProgressWorkspace.tsx")))
+if (/modules\/mindmap\/builtin/.test(source("src/components/planning/ProgressWorkspace.tsx")))
   throw Error("导图宿主不得静态依赖内置模块，必须通过注册表挂载");
 if (!/registerMindMapModule\(builtinMindMapModule\)/.test(source("src/main.tsx")))
   throw Error("内置导图模块必须通过注册表显式注册");

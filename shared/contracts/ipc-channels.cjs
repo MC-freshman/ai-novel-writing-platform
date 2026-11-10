@@ -14,7 +14,7 @@ const channels = [
   { method: "confirmAppClose", channel: "app:confirm-close", kind: "send" },
   { method: "cancelAppClose", channel: "app:cancel-close", kind: "send" },
   // ---- 事件推送：主进程 webContents.send → 渲染监听 ----
-  { method: "onMenuAction", channel: "menu:action", kind: "event", payload: false },
+  { method: "onMenuAction", channel: "menu:action", kind: "event", payload: true },
   { method: "onImportProgress", channel: "import:progress", kind: "event", payload: true },
   { method: "onIndexProgress", channel: "index:progress", kind: "event", payload: true },
   { method: "onAIStream", channel: "ai:stream", kind: "event", payload: true },

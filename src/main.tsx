@@ -1,7 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
-import { ErrorBoundary } from "./components/ErrorBoundary";
+import { ErrorBoundary } from "./components/shell/ErrorBoundary";
 import { builtinMindMapModule } from "./modules/mindmap/builtin";
 import { registerMindMapModule } from "./modules/mindmap/registry";
 import "./styles.css";

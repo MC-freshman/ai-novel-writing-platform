@@ -14,6 +14,66 @@
   background: rgb(0 0 0 / 35%);
 }
 
+.prompt-backdrop {
+  z-index: 60;
+}
+
+.prompt-dialog {
+  width: min(520px, 92vw);
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 8px;
+}
+
+.prompt-dialog header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.prompt-dialog header button {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  padding: 0;
+}
+
+.prompt-dialog p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.prompt-dialog form {
+  display: grid;
+  gap: 10px;
+}
+
+.prompt-dialog input,
+.prompt-dialog textarea {
+  width: 100%;
+  min-height: 36px;
+}
+
+.prompt-dialog textarea {
+  resize: vertical;
+  line-height: 1.6;
+}
+
+.prompt-error {
+  color: #b42318;
+  font-size: 12px;
+}
+
+.prompt-dialog footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .settings-modal {
   width: min(980px, 96vw);
   max-height: 92vh;

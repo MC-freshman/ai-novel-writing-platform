@@ -1,4 +1,5 @@
 import { getErrorMessage } from "../lib/text-utils";
+import { appPrompt } from "../lib/app-prompt";
 import type { AppContext } from "./context";
 
 export function useAppProjects(
@@ -26,7 +27,14 @@ export function useAppProjects(
   } = context;
   async function createProject() {
     if (!(await saveBeforeLeavingChapter())) return;
-    const title = window.prompt("新小说项目名称", "新小说项目");
+    const title = (
+      await appPrompt({
+        title: "新建小说项目",
+        message: "新小说项目名称",
+        defaultValue: "新小说项目",
+        confirmText: "创建",
+      })
+    )?.trim();
     if (!title) return;
     try {
       const result = await window.novelAPI.createProject({ title });

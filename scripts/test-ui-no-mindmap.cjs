@@ -80,6 +80,11 @@ async function main() {
     await until("Boolean(document.querySelector('.progress-workspace'))");
     await cdp.evaluate("[...document.querySelectorAll('.progress-workspace-modes button')].find((button) => button.textContent.trim() === '思维导图')?.click(); true");
     await until("document.body.textContent.includes('思维导图模块未安装')");
+    assert.equal(
+      await cdp.evaluate("[...document.querySelectorAll('.progress-workspace-modes button')].some((button) => button.textContent.trim() === '弹窗编辑')"),
+      false,
+      "导图模块不可用时不应显示空弹窗入口",
+    );
     assert.equal(await cdp.evaluate("window.novelAPI.getCreativeWorkspace().then((workspace) => workspace.mindMaps.length)"), 1, "未注册模块时导图数据仍应保留");
     await cdp.evaluate("[...document.querySelectorAll('.progress-workspace-modes button')].find((button) => button.textContent.trim() === '进度网格')?.click(); true");
     await until("Boolean(document.querySelector('.progress-grid-panel'))");

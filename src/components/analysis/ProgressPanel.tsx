@@ -1,4 +1,4 @@
-import { ProgressWorkspace } from "../../components/ProgressWorkspace";
+import { ProgressWorkspace } from "../planning/ProgressWorkspace";
 import type { AnalysisContext } from "./context";
 
 export function ProgressPanel(

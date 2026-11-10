@@ -1,5 +1,6 @@
 import { useMemo } from "react";
-import { type CreativeWorkspaceTab } from "../components/CreativeWorkspace";
+import { type CreativeWorkspaceTab } from "../components/story/CreativeWorkspace";
+import type { StoryCenterTab } from "../components/story/StoryCenterModal";
 import { countWords, getErrorMessage } from "../lib/text-utils";
 import type { AppContext } from "./context";
 
@@ -71,7 +72,7 @@ export function useAppLayout(
   }
 
   async function openStoryCenter(
-    initialTab: "facts" | "workspace" = storyCenterInitialTab,
+    initialTab: StoryCenterTab = storyCenterInitialTab,
     workspaceTab: CreativeWorkspaceTab = workspaceInitialTab,
   ) {
     if (!(await saveBeforeLeavingChapter())) return;

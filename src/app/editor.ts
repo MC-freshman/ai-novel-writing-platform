@@ -1,6 +1,7 @@
 import type { ChatMessage } from "../types";
-import { type CreativeWorkspaceTab } from "../components/CreativeWorkspace";
+import { type CreativeWorkspaceTab } from "../components/story/CreativeWorkspace";
 import { escapeRegExp } from "../lib/text-utils";
+import { appPrompt } from "../lib/app-prompt";
 import { makeMessageId } from "../lib/chat-utils";
 import {
   findNextInRichEditor,
@@ -169,10 +170,14 @@ export function useAppEditor(
 
   async function askSelectedText(text: string) {
     setContextMenu(null);
-    const question = window.prompt(
-      "想让 AI 围绕选中文字回答什么？",
-      "分析这段文字的作用，并给出修改建议。",
-    );
+    const question = (
+      await appPrompt({
+        title: "向 AI 提问",
+        message: "想让 AI 围绕选中文字回答什么？",
+        defaultValue: "分析这段文字的作用，并给出修改建议。",
+        confirmText: "发送",
+      })
+    )?.trim();
     if (!question) return;
     await sendChat(question, text);
   }

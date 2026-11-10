@@ -1,6 +1,6 @@
 import { FileDown, Wand2 } from "lucide-react";
 import { contentToPlainText } from "../../lib/text-utils";
-import { ExperimentalTools } from ".././ExperimentalTools";
+import { ExperimentalTools } from "./ExperimentalTools";
 import type { AnalysisContext } from "./context";
 
 export function ExportPanel(
@@ -162,7 +162,10 @@ export function ExportPanel(
             </button>
             <button
               onClick={() => void saveSelectedCandidates()}
-              disabled={busy === "save-candidates"}
+              disabled={
+                busy === "save-candidates" ||
+                !worldCandidates.some((item) => item.selected)
+              }
             >
               写入选中条目
             </button>

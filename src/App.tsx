@@ -12,19 +12,18 @@ import "@tiptap/extension-underline";
 import "@tiptap/starter-kit";
 import "@tiptap/pm/state";
 import "@tiptap/pm/view";
-import { CharacterManager } from "./components/CharacterManager";
-import { WorldManager } from "./components/WorldManager";
+import { CharacterManager } from "./components/resources/CharacterManager";
+import { WorldManager } from "./components/resources/WorldManager";
 import "./lib/categories";
-import "./components/ProgressWorkspace";
-import { ChapterTree } from "./components/ChapterTree";
-import { ChatPanel } from "./components/ChatPanel";
-import { KnowledgeOrganizer } from "./components/KnowledgeOrganizer";
-import { AnalysisPanel } from "./components/AnalysisPanel";
-import { AppModals } from "./components/AppModals";
-import { EditorPanel } from "./components/EditorPanel";
-import { SelectionContextMenu } from "./components/SelectionContextMenu";
-import { StatusBar } from "./components/StatusBar";
-import { TopBar, type TopBarLayout } from "./components/TopBar";
+import { ChapterTree } from "./components/shell/ChapterTree";
+import { ChatPanel } from "./components/chat/ChatPanel";
+import { KnowledgeOrganizer } from "./components/resources/KnowledgeOrganizer";
+import { AnalysisPanel } from "./components/analysis/AnalysisPanel";
+import { AppModals } from "./components/shell/AppModals";
+import { EditorPanel } from "./components/writing/EditorPanel";
+import { SelectionContextMenu } from "./components/writing/SelectionContextMenu";
+import { StatusBar } from "./components/shell/StatusBar";
+import { TopBar, type TopBarLayout } from "./components/shell/TopBar";
 import { useAppController } from "./app/controller";
 
 export default function App() {
@@ -587,9 +586,9 @@ export default function App() {
         onStatus={setStatus}
         onCloseTaskCenter={() => setShowTaskCenter(false)}
         onChangeTasks={setBackgroundTasks}
-        onOpenStoryCenter={() => {
+        onOpenStoryCenter={(tab) => {
           setShowTaskCenter(false);
-          void openStoryCenter();
+          void openStoryCenter(tab);
         }}
         onBeforeDisableMindMap={() => saveCurrentPage()}
       />

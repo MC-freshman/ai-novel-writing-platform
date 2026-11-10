@@ -183,11 +183,58 @@ function auditDuplicateLabels() {
     if (!key) continue;
     map.set(key, [...(map.get(key) || []), button.file + ":" + button.line]);
   }
-  const allowed = new Set(["关闭", "删除", "取消", "全选", "保存", "编辑", "刷新", "重试", "继续显示（/）", "导出正文", "导出当前DOCX", "备份", "重建索引", "设置", "导入文档", "保存素材", "开始检查", "刷新关系网", "保存并加入知识库"]);
+  const allowed = new Set(["关闭", "删除", "取消", "全选", "保存", "编辑", "刷新", "重试", "继续显示（/）", "导出正文", "导出当前DOCX", "备份", "重建索引", "设置", "导入文档", "保存素材", "开始检查", "刷新关系网", "保存并加入知识库", "思维导图", "进度网格", "小说统筹网"]);
   const duplicates = [...map.entries()]
     .filter(([label, lines]) => lines.length > 1 && !allowed.has(label))
     .map(([label, lines]) => `${label}：第 ${lines.join("、")} 行`);
   addResult("五、重复入口", "重复按钮文案", duplicates.length ? "WARN" : "PASS", duplicates.length ? duplicates.join("\n") : "未发现明显多余的重复按钮文案；允许的重复项属于顶部/功能面板快捷入口或列表内批量操作。");
+}
+
+function auditRuntimeHazards() {
+  const promptCalls = [];
+  for (const item of sourceFiles) {
+    for (const match of item.source.matchAll(/window\.prompt/g)) {
+      promptCalls.push(`${item.file}:${lineOf(item.source, match.index)}`);
+    }
+  }
+  addResult(
+    "六、运行期死键",
+    "Electron 不支持的 window.prompt",
+    promptCalls.length ? "FAIL" : "PASS",
+    promptCalls.length
+      ? `以下位置仍会在 Electron 中抛错：\n${promptCalls.join("\n")}`
+      : "未发现 window.prompt，所有文本输入入口均使用应用内弹窗。",
+  );
+
+  const menuHandler =
+    preloadSource.match(/onMenuAction:[\s\S]*?\n\s{2}\},/)?.[0] || "";
+  const forwardsAction =
+    /_event,\s*payload\)\s*=>\s*callback\(payload\)/.test(menuHandler);
+  addResult(
+    "六、运行期死键",
+    "菜单动作参数透传",
+    forwardsAction ? "PASS" : "FAIL",
+    forwardsAction
+      ? "onMenuAction 会把主进程发送的 action 字符串传给渲染层。"
+      : "onMenuAction 未透传 action，原生菜单会全部无响应。",
+  );
+}
+
+function auditMenuHandlers() {
+  const effects = sourceFiles.find((item) => item.file === path.join("src", "app", "effects.ts"));
+  const menuActions = [...mainSource.matchAll(/sendMenuAction\(["']([^"']+)["']\)/g)].map((match) => match[1]);
+  const handled = new Set(
+    [...(effects?.source || "").matchAll(/action === ["']([^"']+)["']/g)].map((match) => match[1]),
+  );
+  const missing = menuActions.filter((action) => !handled.has(action));
+  addResult(
+    "六、运行期死键",
+    "原生菜单动作处理",
+    missing.length ? "FAIL" : "PASS",
+    missing.length
+      ? `菜单发送了渲染层未处理的动作：${missing.join("、")}`
+      : `菜单发送的 ${menuActions.length} 个动作均有渲染层处理分支。`,
+  );
 }
 
 function writeReport() {
@@ -234,6 +281,8 @@ auditSummaries();
 auditApiBindings();
 auditFeatureCoverage();
 auditDuplicateLabels();
+auditRuntimeHazards();
+auditMenuHandlers();
 
 const output = writeReport();
 console.log(JSON.stringify(output, null, 2));
