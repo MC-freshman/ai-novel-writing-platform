@@ -220,5 +220,16 @@
   ],
   "tasks/statistics.cjs": [
     "scripts/test/services/task-runtime.test.cjs"
+  ],
+  "agent-context.cjs": [
+    "scripts/test-agent-platform.cjs",
+    "scripts/test-core-regression.cjs"
+  ],
+  "http-diagnostics.cjs": [
+    "scripts/test/services/http-diagnostics.test.cjs"
+  ],
+  "project-state.cjs": [
+    "scripts/test/services/project-state.test.cjs",
+    "scripts/test-core-regression.cjs"
   ]
 }

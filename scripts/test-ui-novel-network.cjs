@@ -35,7 +35,7 @@ async function fill(label, value, tag = "input") {
 async function save() { await button("保存小说网"); await until("document.querySelector('.novel-network-heading [role=status]')?.textContent.includes('小说网已保存')"); }
 async function openNetwork() {
   await cdp.evaluate("document.querySelector('.pane-tabs button[title=分析]').click()"); await wait(200);
-  await button("进度", "document.querySelector('.analysis-tabs')");
+  await button("规划与进度", "document.querySelector('.analysis-tabs')");
   await button("小说统筹网"); await until("Boolean(document.querySelector('.novel-network-panel'))");
 }
 async function selectTable(kind) {
@@ -108,11 +108,11 @@ async function main() {
     assert.equal(saved.tables.find(t => t.kind === "chapters").rows[0].cells[2], "界面修改事件");
     assert.ok(await cdp.evaluate("/标记 [TR]\\d+|计划第/.test(document.querySelector('.novel-network-related').textContent)"));
     report.checks.push("编辑记录、绑定已写正文、共同标记关联查看、正式保存");
-    await button("展开小说网"); await button("表格总览"); await shot("network-expanded"); await measure("expanded");
-    await button("收起小说网"); await measure("narrow"); await shot("network-narrow");
+    await button("展开编辑区"); await button("表格总览"); await shot("network-expanded"); await measure("expanded");
+    await button("收起编辑区"); await measure("narrow"); await shot("network-narrow");
     await cdp.call("Emulation.setDeviceMetricsOverride", { width: 1280, height: 800, deviceScaleFactor: 1.5, mobile: false }); await wait(250); await measure("dpi-150"); await shot("network-dpi-150");
     await cdp.call("Emulation.clearDeviceMetricsOverride"); report.checks.push("展开、窄面板和150%缩放没有容器外横向溢出");
-    await fill("小说网名称", "换页保护草稿"); await button("全局搜索", "document.querySelector('.analysis-tabs')"); await button("进度", "document.querySelector('.analysis-tabs')"); await button("小说统筹网");
+    await fill("小说网名称", "换页保护草稿"); await button("全局搜索", "document.querySelector('.analysis-tabs')"); await button("规划与进度", "document.querySelector('.analysis-tabs')"); await button("小说统筹网");
     await until("document.querySelector('input[aria-label=小说网名称]')?.value==='换页保护草稿'");
     await stop(); await start(); await openNetwork(); await until("document.querySelector('input[aria-label=小说网名称]')?.value==='换页保护草稿'");
     await cdp.call("Input.dispatchKeyEvent", { type: "keyDown", modifiers: 2, key: "s", code: "KeyS", windowsVirtualKeyCode: 83 });

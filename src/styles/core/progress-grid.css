@@ -1,0 +1,22 @@
+/* 进度网格专属样式；共享工作区规则保留在 planning-boards.css。 */
+.progress-grid-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.progress-grid-summary-labels { display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px; color: var(--muted); }
+.progress-grid-bar { flex: 1; min-width: 140px; height: 10px; overflow: hidden; border-radius: 6px; background: var(--panel-strong); }
+.progress-grid-bar i { display: block; height: 100%; background: var(--accent); }
+.progress-grid-percent { font-size: 12px; color: var(--muted); }
+.progress-grid-description { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.progress-grid-description textarea { flex: 1; min-height: 40px; }
+.progress-grid-table-scroll { overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.progress-grid-table { width: 100%; min-width: 820px; border-collapse: collapse; }
+.progress-grid-table th,
+.progress-grid-table td { padding: 6px; text-align: left; vertical-align: top; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.progress-grid-table th { background: var(--panel-strong); font-size: 12px; font-weight: 500; }
+.progress-grid-table th > * { display: block; width: 100%; margin-bottom: 4px; }
+.progress-grid-table input,
+.progress-grid-table select { box-sizing: border-box; width: 100%; min-width: 96px; }
+.progress-grid-table th button { font-size: 11px; padding: 3px 6px; }
+.progress-grid-chapter-cell button,
+.progress-grid-row-actions button { margin-top: 4px; font-size: 11px; padding: 3px 6px; }
+.progress-grid-row-actions { white-space: nowrap; }
+.progress-grid-empty-hint,
+.progress-grid-hint { margin: 0; padding: 10px; font-size: 12px; color: var(--muted); }

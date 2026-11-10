@@ -26,6 +26,7 @@ export function AppModals({
   onSaveSettings,
   onCloseQuickPanel,
   onOpenView,
+  onOpenProgress,
   onImportDocument,
   onExportChapterDocx,
   onExportBook,
@@ -41,6 +42,7 @@ export function AppModals({
   onCloseTaskCenter,
   onChangeTasks,
   onOpenStoryCenter,
+  onBeforeDisableMindMap,
 }: {
   state: AppState;
   selectedChapterId: string;
@@ -60,6 +62,7 @@ export function AppModals({
   onOpenView: (
     view: "chapters" | "characters" | "world" | "knowledge" | "analysis",
   ) => void;
+  onOpenProgress: (tool: "mindmap" | "network" | "grid") => void;
   onImportDocument: () => void;
   onExportChapterDocx: () => void;
   onExportBook: () => void;
@@ -75,6 +78,7 @@ export function AppModals({
   onCloseTaskCenter: () => void;
   onChangeTasks: (tasks: BackgroundTask[]) => void;
   onOpenStoryCenter: () => void;
+  onBeforeDisableMindMap?: () => Promise<boolean>;
 }) {
   return (
     <>
@@ -84,6 +88,7 @@ export function AppModals({
           selectedChapterId={selectedChapterId}
           onClose={onCloseSettings}
           onSave={onSaveSettings}
+          onBeforeDisableMindMap={onBeforeDisableMindMap}
         />
       )}
       {showQuickPanel && (
@@ -92,6 +97,7 @@ export function AppModals({
           currentView={view}
           onClose={onCloseQuickPanel}
           onOpenView={onOpenView}
+          onOpenProgress={onOpenProgress}
           onImport={onImportDocument}
           onExportChapter={onExportChapterDocx}
           onExportBook={onExportBook}

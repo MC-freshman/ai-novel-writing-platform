@@ -467,7 +467,7 @@ export function StoryCenterModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <section ref={dialogRef} className="story-center-modal" role="dialog" aria-modal="true" aria-label="创作状态" tabIndex={-1} onClick={(event) => event.stopPropagation()}>
+      <section ref={dialogRef} className="story-center-modal modal-surface" role="dialog" aria-modal="true" aria-label="创作状态" tabIndex={-1} onClick={(event) => event.stopPropagation()}>
         <header className="story-center-header">
           <div><Activity size={18} /><strong>创作状态</strong></div>
           <div className="story-center-summary">

@@ -12,10 +12,22 @@ import type {
 import type { CreativeWorkspaceTab } from "../components/CreativeWorkspace";
 import type { MouseEvent } from "react";
 
+export type ChapterSaveDraft = {
+  chapterId: string;
+  title: string;
+  volume: string;
+  content: string;
+  expectedRevision: string;
+};
+
 export type AppContext = AppBindings &
   AppRefs & {
     applyAppState: (nextState: AppState) => void;
     saveChapter: () => Promise<boolean>;
+    saveChapterDraft: (
+      draft: ChapterSaveDraft,
+      successMessage?: string,
+    ) => Promise<boolean>;
     saveChapterIfDirty: () => Promise<boolean>;
     saveBeforeLeavingChapter: () => Promise<boolean>;
     saveCurrentPage: () => Promise<boolean>;

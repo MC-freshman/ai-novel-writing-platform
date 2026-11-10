@@ -17,6 +17,15 @@ const limits = {
 for (const [file, limit] of Object.entries(limits))
   if (source(file).split("\n").length > limit)
     throw Error(`${file} 超过职责入口行数门槛 ${limit}`);
+if (/require\(["']\.\/project-ops\.cjs["']\)/.test(source("electron/services/project-config.cjs")))
+  throw Error("project-config 不得反向依赖事务编排 project-ops");
+for (const file of fs.readdirSync(path.join(root, "electron/ipc/domains")).filter((name) => name.endsWith(".cjs")))
+  if (/require\(["']\.\.\/dependencies\.cjs["']\)/.test(source(`electron/ipc/domains/${file}`)))
+    throw Error(`IPC域必须使用逐域依赖，不得回退共享依赖桶: ${file}`);
+if (/modules\/mindmap\/builtin/.test(source("src/components/ProgressWorkspace.tsx")))
+  throw Error("导图宿主不得静态依赖内置模块，必须通过注册表挂载");
+if (!/registerMindMapModule\(builtinMindMapModule\)/.test(source("src/main.tsx")))
+  throw Error("内置导图模块必须通过注册表显式注册");
 const domains = fs
   .readdirSync(path.join(root, "electron/ipc/domains"))
   .filter((f) => f.endsWith(".cjs"));
@@ -25,6 +34,7 @@ for (const file of domains)
     throw Error("IPC领域绕过统一来源/参数验证: " + file);
 for (const directory of [
   "src/types",
+  "electron/services",
   "electron/services/story",
   "electron/services/analysis",
   "electron/services/tasks",
@@ -61,7 +71,7 @@ for (const directory of [
   }
   // Type-only references may cross domains. Runtime service children must form
   // an acyclic graph so adding a helper cannot reintroduce initialization races.
-  if (directory !== "src/types") {
+  if (directory !== "src/types" && directory !== "electron/services") {
     const done = new Set(),
       active = new Set();
     function visit(file) {
@@ -76,4 +86,27 @@ for (const directory of [
     files.forEach(visit);
   }
 }
-console.log("PASS: 职责入口大小、统一IPC验证、类型导入及服务子模块依赖边界");
+// 顶层服务必须保持单向；子目录仍由原有局部无环检查兜底。
+{
+  const serviceDirectory = "electron/services";
+  const serviceFiles = fs.readdirSync(path.join(root, serviceDirectory)).filter((file) => file.endsWith(".cjs"));
+  const serviceGraph = new Map();
+  for (const file of serviceFiles) {
+    const deps = [...source(`${serviceDirectory}/${file}`).matchAll(/require\(["']\.\/([^"']+)["']\)/g)]
+      .map((match) => `${match[1].endsWith(".cjs") ? match[1] : `${match[1]}.cjs`}`)
+      .filter((dep) => serviceFiles.includes(dep));
+    serviceGraph.set(file, deps);
+  }
+  const done = new Set();
+  const active = new Set();
+  const visit = (file, trail = []) => {
+    if (done.has(file)) return;
+    if (active.has(file)) throw Error(`顶层服务循环依赖: ${[...trail, file].join(" -> ")}`);
+    active.add(file);
+    for (const next of serviceGraph.get(file) || []) visit(next, [...trail, file]);
+    active.delete(file);
+    done.add(file);
+  };
+  serviceFiles.forEach((file) => visit(file));
+}
+console.log("PASS: 职责入口大小、统一IPC验证、类型导入、顶层及子目录服务依赖边界");

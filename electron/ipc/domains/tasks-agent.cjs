@@ -11,7 +11,7 @@ const {
   prepareCreativeAgentRun,
   queueCreativeAgentRun,
   withJournalOperation,
-} = require("../dependencies.cjs");
+} = require("../domain-dependencies/tasks-agent.cjs");
 
 function registerDomain() {
   registerIpcHandler("agent:prepare", async (_event, payload) => {

@@ -183,6 +183,17 @@
   background: var(--accent);
 }
 
+.task-progress.indeterminate span {
+  width: 35%;
+  animation: task-progress-indeterminate 1.2s ease-in-out infinite;
+}
+
+@keyframes task-progress-indeterminate {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(300%); }
+}
+
+
 .task-row details summary {
   cursor: pointer;
   color: var(--muted);
@@ -279,6 +290,20 @@
   padding: 16px;
 }
 
+.settings-group-title {
+  grid-column: 1 / -1;
+  margin-top: 2px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settings-group-title:first-child {
+  margin-top: 0;
+}
+
 .checkbox-line {
   display: flex !important;
   grid-template-columns: none !important;
@@ -292,11 +317,29 @@
 }
 
 .settings-help {
-  padding: 12px 16px;
+  padding: 0 16px;
   border-top: 1px solid var(--line);
   color: var(--muted);
   font-size: 13px;
   line-height: 1.55;
+}
+
+.settings-help > summary {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.settings-help[open] {
+  padding-bottom: 12px;
+}
+
+.settings-help > p {
+  max-height: 160px;
+  overflow: auto;
+  margin: 0;
 }
 
 .settings-agent-panel {

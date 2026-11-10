@@ -1,35 +1,40 @@
 :root {
+  color-scheme: light;
   font-family:
     "Microsoft YaHei UI",
     "Microsoft YaHei",
     "Segoe UI",
     sans-serif;
-  color: #2d2923;
-  background: #f5f0e8;
-  --bg: #f5f0e8;
-  --panel: #fffaf2;
-  --panel-strong: #efe6d8;
-  --line: #ded1c1;
-  --text: #2d2923;
-  --muted: #766d61;
-  --accent: #3e7c78;
-  --accent-strong: #245f5b;
-  --danger: #b4493f;
-  --shadow: 0 14px 35px rgb(50 39 25 / 10%);
+  color: #30392f;
+  background: #eeeee6;
+  --bg: #eeeee6;
+  --panel: #f7f7f0;
+  --panel-strong: #e7ebdf;
+  --paper: #fffdf6;
+  --line: #d8ded0;
+  --text: #30392f;
+  --muted: #64705f;
+  --accent: #58734f;
+  --accent-strong: #3d5937;
+  --danger: #a64438;
+  --shadow: 0 12px 34px rgb(48 57 47 / 9%);
+  --writing-font: "LXGW WenKai", "Noto Serif CJK SC", "Source Han Serif SC", "SimSun", serif;
 }
 
 :root[data-theme="dark"] {
-  color: #ece6dc;
-  background: #171a1f;
-  --bg: #171a1f;
-  --panel: #20242b;
-  --panel-strong: #2b3038;
-  --line: #3a414b;
-  --text: #ece6dc;
-  --muted: #b4ada4;
-  --accent: #6ab5ad;
-  --accent-strong: #8fd1ca;
-  --danger: #e47a6f;
-  --shadow: 0 14px 35px rgb(0 0 0 / 25%);
+  color-scheme: dark;
+  color: #e1e7db;
+  background: #19211e;
+  --bg: #19211e;
+  --panel: #202a25;
+  --panel-strong: #2d3a31;
+  --paper: #232c26;
+  --line: #3a493d;
+  --text: #e1e7db;
+  --muted: #a8b7a2;
+  --accent: #a4bc93;
+  --accent-strong: #c2d7b2;
+  --danger: #f29b88;
+  --shadow: 0 12px 34px rgb(0 0 0 / 16%);
 }
 

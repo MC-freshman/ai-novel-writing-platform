@@ -3,18 +3,22 @@ import type { AppState, CreativeWorkspaceState } from "../types";
 import type { PageSaveHandle, PageSaveKind } from "../hooks/useEntityDraft";
 import { ProgressGrid } from "./ProgressBoard";
 import { NovelNetworks } from "./NovelNetworks";
-import { MindMaps } from "./MindMaps";
+import { useDialogFocus } from "../hooks/useDialogFocus";
 import { ProgressGrids } from "./ProgressGrids";
+import { describeMindMapModuleProblem } from "../modules/mindmap/contract";
+import { setMindMapModuleUnloadGuard, useMindMapModule } from "../modules/mindmap/registry";
 
 type ProgressMode = "chapters" | "network" | "mindmap" | "grid";
 
-export function ProgressWorkspace({ state, selectedChapterId, onSelectChapter, onApplyState, onStatus, onRegisterSave, networkOpenRequest }: {
+export function ProgressWorkspace({ state, selectedChapterId, onSelectChapter, onApplyState, onStatus, onRegisterSave, networkOpenRequest, progressOpenRequest, progressOpenMode }: {
   state: AppState; selectedChapterId: string; onSelectChapter: (id: string) => void;
   onApplyState: (state: AppState) => void; onStatus: (message: string) => void;
   onRegisterSave: (kind: PageSaveKind, handle: PageSaveHandle | null) => void;
   networkOpenRequest: number;
+  progressOpenRequest: number;
+  progressOpenMode: ProgressMode | "";
 }) {
-  const [mode, setMode] = useState<ProgressMode>(networkOpenRequest ? "network" : "chapters");
+  const [mode, setMode] = useState<ProgressMode>(progressOpenRequest && progressOpenMode ? progressOpenMode : networkOpenRequest ? "network" : "chapters");
   const [expanded, setExpanded] = useState(false);
   const [mindmapModal, setMindmapModal] = useState(false);
   // 弹窗窗口：最大化状态与标题栏拖动偏移。默认由 .modal-backdrop 居中，transform 只做相对位移。
@@ -24,7 +28,6 @@ export function ProgressWorkspace({ state, selectedChapterId, onSelectChapter, o
   const [loadError, setLoadError] = useState("");
   const [reload, setReload] = useState(0);
   const saver = useRef<PageSaveHandle | null>(null);
-  const closeModalRef = useRef<() => void>(() => {});
   // 弹窗内的连线模式由 MindMaps 同步过来：激活时 Esc 先用于取消连线，不再关闭整个弹窗。
   const relationModeRef = useRef(false);
   const modalDrag = useRef<{ startX: number; startY: number; originX: number; originY: number } | null>(null);
@@ -37,6 +40,10 @@ export function ProgressWorkspace({ state, selectedChapterId, onSelectChapter, o
   }, [networkOpenRequest]);
 
   useEffect(() => {
+    if (progressOpenRequest && progressOpenMode) setMode(progressOpenMode);
+  }, [progressOpenMode, progressOpenRequest]);
+
+  useEffect(() => {
     let cancelled = false;
     setLoadError("");
     void window.novelAPI.getCreativeWorkspace().then((value) => {
@@ -45,13 +52,13 @@ export function ProgressWorkspace({ state, selectedChapterId, onSelectChapter, o
     return () => { cancelled = true; };
   }, [state.projectPath, reload]);
 
-  async function protectCurrent() {
+  const protectCurrent = useCallback(async () => {
     if (saver.current && !(await saver.current.protect())) {
       onStatus("当前规划草稿尚未保存，请先保存后再切换。");
       return false;
     }
     return true;
-  }
+  }, [onStatus]);
 
   async function changeMode(next: ProgressMode) {
     if (next === mode) return;
@@ -76,20 +83,6 @@ export function ProgressWorkspace({ state, selectedChapterId, onSelectChapter, o
     setModalShift({ x: 0, y: 0 });
   }
 
-  closeModalRef.current = () => { void closeMindmapModal(); };
-
-  useEffect(() => {
-    if (!mindmapModal) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      if (["INPUT", "TEXTAREA", "SELECT"].includes((event.target as HTMLElement)?.tagName || "")) return;
-      if (relationModeRef.current) return;
-      closeModalRef.current();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [mindmapModal]);
-
   // 标题栏拖动：起点 + 鼠标位移换算成窗口偏移，限制在视口内，避免窗口被拖出屏幕找不回来。
   useEffect(() => {
     if (!mindmapModal || maximized) return;
@@ -112,12 +105,40 @@ export function ProgressWorkspace({ state, selectedChapterId, onSelectChapter, o
     };
   }, [mindmapModal, maximized]);
 
+  const mindMapModule = useMindMapModule();
+  const mindMapEnabled = state.config.ui.mindMapEnabled !== false;
+  const mindMapProblem = !mindMapEnabled
+    ? "思维导图模块已停用；导图数据保留，可在设置中重新启用。正文和其他规划功能不受影响。"
+    : mindMapModule
+      ? describeMindMapModuleProblem(mindMapModule)
+      : "思维导图模块未安装；正文和其他规划功能不受影响。";
+
+  useEffect(() => {
+    if (!mindMapModule) {
+      setMindMapModuleUnloadGuard(null);
+      return;
+    }
+    setMindMapModuleUnloadGuard(() => protectCurrent());
+    return () => setMindMapModuleUnloadGuard(null);
+  }, [mindMapModule, protectCurrent]);
+
+  const mindMapDialogRef = useDialogFocus(
+    () => { void closeMindmapModal(); },
+    mindmapModal,
+    (event) => {
+      const tag = (event.target as HTMLElement)?.tagName || "";
+      return !["INPUT", "TEXTAREA", "SELECT"].includes(tag) && !relationModeRef.current;
+    },
+  );
+
   const canExpand = mode !== "chapters" && !mindmapModal;
   const boardProps = workspace ? { workspace, onWorkspace: setWorkspace, onRegisterSave: register, onStatus } : null;
-  const mindMaps = (fullscreen: boolean, onRelationModeChange?: (active: boolean) => void) => boardProps && <MindMaps
-    workspace={boardProps.workspace} onWorkspace={boardProps.onWorkspace}
-    onRegisterSave={register} onStatus={onStatus} fullscreen={fullscreen}
-    onRelationModeChange={onRelationModeChange} />;
+  const mindMaps = (fullscreen: boolean, onRelationModeChange?: (active: boolean) => void) => boardProps && (mindMapModule && !mindMapProblem
+    ? <mindMapModule.Component
+        workspace={boardProps.workspace} onWorkspace={boardProps.onWorkspace}
+        onRegisterSave={register} onStatus={onStatus} fullscreen={fullscreen}
+        onRelationModeChange={onRelationModeChange} />
+    : <div className="analysis-empty mind-map-module-unavailable" role="status">{mindMapProblem}</div>);
 
   return <div className={`progress-workspace ${expanded ? "expanded" : ""}`}>
     <div className="progress-workspace-modes">
@@ -125,7 +146,7 @@ export function ProgressWorkspace({ state, selectedChapterId, onSelectChapter, o
       <button className={mode === "network" ? "active" : ""} onClick={() => void changeMode("network")}>小说统筹网</button>
       <button className={mode === "mindmap" ? "active" : ""} onClick={() => void changeMode("mindmap")}>思维导图</button>
       <button className={mode === "grid" ? "active" : ""} onClick={() => void changeMode("grid")}>进度网格</button>
-      {mode === "mindmap" && boardProps && !mindmapModal && <button title="在独立弹窗中放大画布" onClick={() => void openMindmapModal()}>弹窗编辑</button>}
+      {mode === "mindmap" && mindMapEnabled && boardProps && !mindmapModal && <button title="在独立弹窗中放大画布" onClick={() => void openMindmapModal()}>弹窗编辑</button>}
       {canExpand && <button title="调整编辑区域" onClick={() => setExpanded((value) => !value)}>{expanded ? "收起编辑区" : "展开编辑区"}</button>}
       {mode !== "chapters" && <button title="重新读取项目里的规划数据（含外部 MCP 写入）" onClick={() => setReload((value) => value + 1)}>刷新规划数据</button>}
     </div>
@@ -136,7 +157,7 @@ export function ProgressWorkspace({ state, selectedChapterId, onSelectChapter, o
             <ProgressGrids state={state} workspace={boardProps.workspace} onWorkspace={boardProps.onWorkspace} onRegisterSave={register} onOpenChapter={onSelectChapter} onStatus={onStatus} />}
 
     {mindmapModal && boardProps && <div className={`modal-backdrop ${maximized ? "modal-maximized" : ""}`} onClick={() => void closeMindmapModal()}>
-      <section className={`mind-map-modal ${maximized ? "maximized" : ""}`} role="dialog" aria-modal="true" aria-label="思维导图弹窗编辑"
+      <section ref={mindMapDialogRef} className={`mind-map-modal modal-surface ${maximized ? "maximized" : ""}`} role="dialog" aria-modal="true" aria-label="思维导图弹窗编辑" tabIndex={-1}
         style={maximized ? undefined : { transform: `translate(${modalShift.x}px, ${modalShift.y}px)` }}
         onClick={(event) => event.stopPropagation()}>
         <header className="mind-map-modal-header"
@@ -147,7 +168,7 @@ export function ProgressWorkspace({ state, selectedChapterId, onSelectChapter, o
           }}>
           <strong>思维导图 · 弹窗编辑</strong>
           <span>拖动标题栏移动 · 右下角调整尺寸 · 可切换全屏 · 按 Esc 返回</span>
-          <button className="mind-map-modal-close" aria-label="关闭思维导图弹窗" onClick={() => void closeMindmapModal()}>关闭弹窗</button>
+          <button className="mind-map-modal-close" autoFocus aria-label="关闭思维导图弹窗" onClick={() => void closeMindmapModal()}>关闭弹窗</button>
           <button className="mind-map-modal-maximize" aria-label={maximized ? "还原窗口" : "最大化窗口"}
             onClick={() => { setMaximized((value) => !value); setModalShift({ x: 0, y: 0 }); }}>{maximized ? "还原窗口" : "全屏显示"}</button>
         </header>

@@ -61,6 +61,56 @@ function cleanRefs(value) {
   })).filter((item) => item.chapterId || item.quote);
 }
 
+// 导图模块契约外的字段按 id 存在独立扩展区，节点/关系本身仍保持原白名单。
+const MIND_MAP_NODE_KEYS = new Set(["id", "parentId", "text", "note", "color", "collapsed", "order", "side"]);
+const MIND_MAP_RELATION_KEYS = new Set(["id", "sourceId", "targetId", "label", "note", "shape", "linePattern", "lineColor", "lineWidth", "arrowBegin", "arrowEnd", "labelFontStyle", "labelColor", "controlPoints"]);
+const MIND_MAP_POSITION_KEYS = new Set(["dx", "dy"]);
+const EXTENSION_RESERVED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+function sanitizeExtensionValue(value, depth = 0) {
+  if (depth > 3) return undefined;
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  if (typeof value === "string") return value.slice(0, 2000);
+  if (Array.isArray(value)) return value.slice(0, 50).map((item) => sanitizeExtensionValue(item, depth + 1)).filter((item) => item !== undefined);
+  if (!value || typeof value !== "object") return undefined;
+  const result = {};
+  for (const [key, item] of Object.entries(value).slice(0, 50)) {
+    if (EXTENSION_RESERVED_KEYS.has(key)) continue;
+    const clean = sanitizeExtensionValue(item, depth + 1);
+    if (clean !== undefined) result[String(key).slice(0, 120)] = clean;
+  }
+  return result;
+}
+
+function cleanExtensionRecord(value) {
+  const clean = sanitizeExtensionValue(value, 0);
+  if (!clean || typeof clean !== "object" || Array.isArray(clean)) return undefined;
+  return Object.keys(clean).length ? clean : undefined;
+}
+
+function extensionRecordAt(bag, id) {
+  if (!bag || typeof bag !== "object" || Array.isArray(bag) || EXTENSION_RESERVED_KEYS.has(id)) return undefined;
+  if (!Object.prototype.hasOwnProperty.call(bag, id)) return undefined;
+  return bag[id];
+}
+
+function collectUnknownFields(source, allowed) {
+  if (!source || typeof source !== "object" || Array.isArray(source)) return undefined;
+  const result = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (allowed.has(key) || EXTENSION_RESERVED_KEYS.has(key)) continue;
+    const clean = sanitizeExtensionValue(value, 0);
+    if (clean !== undefined) result[String(key).slice(0, 120)] = clean;
+  }
+  return Object.keys(result).length ? result : undefined;
+}
+
+function mergeExtensionRecord(previous, next) {
+  const merged = { ...(cleanExtensionRecord(previous) || {}), ...(next || {}) };
+  return Object.keys(merged).length ? merged : undefined;
+}
+
 function normalizeItem(collection, payload = {}, index = 0) {
   const updatedAt = nowIso();
   const base = {
@@ -184,16 +234,23 @@ function normalizeItem(collection, payload = {}, index = 0) {
   if (collection === "mindMaps") {
     const title = cleanText(payload.title || "未命名思维导图", 160);
     const rootId = cleanText(payload.rootId, 120) || "root";
-    const nodes = (Array.isArray(payload.nodes) ? payload.nodes : []).slice(0, 2000).map((node, index) => ({
-      id: cleanText(node?.id, 120) || stableId("mind-node", `${index}|${updatedAt}`),
-      parentId: cleanText(node?.parentId, 120),
-      text: cleanText(node?.text, 500) || "新主题",
-      note: cleanText(node?.note, 2000),
-      color: cleanText(node?.color, 24),
-      collapsed: Boolean(node?.collapsed),
-      order: Number.isFinite(Number(node?.order)) ? Number(node.order) : index,
-      side: node?.side === "left" ? "left" : "right",
-    }));
+    const incomingExtensions = payload.extensions && typeof payload.extensions === "object" && !Array.isArray(payload.extensions) ? payload.extensions : {};
+    const nodeExtensions = Object.create(null);
+    const nodes = (Array.isArray(payload.nodes) ? payload.nodes : []).slice(0, 2000).map((node, index) => {
+      const id = cleanText(node?.id, 120) || stableId("mind-node", `${index}|${updatedAt}`);
+      const extra = mergeExtensionRecord(extensionRecordAt(incomingExtensions.nodes, id), collectUnknownFields(node, MIND_MAP_NODE_KEYS));
+      if (extra && !EXTENSION_RESERVED_KEYS.has(id)) nodeExtensions[id] = extra;
+      return {
+        id,
+        parentId: cleanText(node?.parentId, 120),
+        text: cleanText(node?.text, 500) || "新主题",
+        note: cleanText(node?.note, 2000),
+        color: cleanText(node?.color, 24),
+        collapsed: Boolean(node?.collapsed),
+        order: Number.isFinite(Number(node?.order)) ? Number(node.order) : index,
+        side: node?.side === "left" ? "left" : "right",
+      };
+    });
     if (!nodes.some((node) => node.id === rootId)) {
       nodes.unshift({ id: rootId, parentId: "", text: title, note: "", color: "", collapsed: false, order: -1, side: "right" });
     }
@@ -202,6 +259,7 @@ function normalizeItem(collection, payload = {}, index = 0) {
     const nodeIds = new Set(nodes.map((node) => node.id));
     const relations = [];
     const seenRelationIds = new Set();
+    const relationExtensions = Object.create(null);
     const rawRelations = Array.isArray(payload.relations) ? payload.relations : [];
     for (const raw of rawRelations) {
       const sourceId = cleanText(raw?.sourceId, 120);
@@ -212,6 +270,8 @@ function normalizeItem(collection, payload = {}, index = 0) {
       // 按 id 去重，保留第一条，避免 React key 冲突与按 id 编辑时误伤。
       if (seenRelationIds.has(id)) continue;
       seenRelationIds.add(id);
+      const relationExtra = mergeExtensionRecord(extensionRecordAt(incomingExtensions.relations, id), collectUnknownFields(raw, MIND_MAP_RELATION_KEYS));
+      if (relationExtra && !EXTENSION_RESERVED_KEYS.has(id)) relationExtensions[id] = relationExtra;
       const rawLineColor = cleanText(raw?.lineColor, 24);
       const rawLabelColor = cleanText(raw?.labelColor, 24);
       const width = raw?.lineWidth;
@@ -240,15 +300,22 @@ function normalizeItem(collection, payload = {}, index = 0) {
       if (relations.length >= 2000) break;
     }
     const positions = {};
+    const positionExtensions = Object.create(null);
     const rawPositions = payload.positions && typeof payload.positions === "object" && !Array.isArray(payload.positions) ? payload.positions : {};
     for (const [key, value] of Object.entries(rawPositions)) {
       // key 必须是现存节点 id，并跳过可能污染对象原型的键名。
-      if (!nodeIds.has(key) || ["__proto__", "constructor", "prototype"].includes(key)) continue;
+      if (!nodeIds.has(key) || EXTENSION_RESERVED_KEYS.has(key)) continue;
       if (!Number.isFinite(value?.dx) || !Number.isFinite(value?.dy)) continue;
       if (Math.abs(value.dx) > 10000 || Math.abs(value.dy) > 10000) continue;
       positions[key] = { dx: value.dx, dy: value.dy };
+      const positionExtra = mergeExtensionRecord(extensionRecordAt(incomingExtensions.positions, key), collectUnknownFields(value, MIND_MAP_POSITION_KEYS));
+      if (positionExtra) positionExtensions[key] = positionExtra;
     }
-    return { ...base, title, rootId, nodes, relations, positions };
+    const extensions = { contractVersion: 1 };
+    if (Object.keys(nodeExtensions).length) extensions.nodes = nodeExtensions;
+    if (Object.keys(relationExtensions).length) extensions.relations = relationExtensions;
+    if (Object.keys(positionExtensions).length) extensions.positions = positionExtensions;
+    return { ...base, schemaVersion: 1, extensions, title, rootId, nodes, relations, positions };
   }
   if (collection === "progressGrids") {
     const columns = (Array.isArray(payload.columns) ? payload.columns : []).slice(0, 24).map((column, index) => ({

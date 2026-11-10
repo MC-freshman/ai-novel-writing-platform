@@ -7,14 +7,14 @@ const mammoth = require("./word-import.cjs");
 const { writeFileAtomic, withProjectTransaction, writeProjectFiles } = require("./project-storage.cjs");
 const vectorShards = require("./vector-shards.cjs");
 const creativeWorkspace = require("./creative-workspace.cjs");
-const operationJournal = require("./operation-journal.cjs");
 const docxFidelity = require("./docx-fidelity.cjs");
 const __dep0 = require("./project-files.cjs");
 const __dep1 = require("./project-config.cjs");
 const __dep2 = require("./knowledge-index.cjs");
 const __dep3 = require("./analysis-tools.cjs");
 const __dep4 = require("./task-runtime.cjs");
-const __dep5 = require("./project-ops.cjs");
+const projectArchives = require("./project-archives.cjs");
+const projectState = require("./project-state.cjs");
 const path = require("node:path");
 const fs = require("node:fs/promises");
 
@@ -37,9 +37,6 @@ function promoteMarkdownHeadingsInHtml(...args) { return __dep0.promoteMarkdownH
 function getChapterVersionContentPath(...args) { return __dep0.getChapterVersionContentPath(...args); }
 function snapshotChapterVersion(...args) { return __dep0.snapshotChapterVersion(...args); }
 function listChapterVersions(...args) { return __dep0.listChapterVersions(...args); }
-function loadCharacters(...args) { return __dep0.loadCharacters(...args); }
-function loadWorldDocs(...args) { return __dep0.loadWorldDocs(...args); }
-function loadChapterContent(...args) { return __dep0.loadChapterContent(...args); }
 function extractOutline(...args) { return __dep0.extractOutline(...args); }
 function getKnowledgeRole(...args) { return __dep0.getKnowledgeRole(...args); }
 function configForRenderer(...args) { return __dep1.configForRenderer(...args); }
@@ -50,11 +47,10 @@ function assertExpectedChapterRevision(...args) { return __dep1.assertExpectedCh
 function indexSource(...args) { return __dep2.indexSource(...args); }
 function refreshLocalStoryState(...args) { return __dep3.refreshLocalStoryState(...args); }
 function scheduleIdleDeepAnalysis(...args) { return __dep4.scheduleIdleDeepAnalysis(...args); }
-function ensureProjectStructure(...args) { return __dep5.ensureProjectStructure(...args); }
-function loadConfig(...args) { return __dep5.loadConfig(...args); }
-function saveConfig(...args) { return __dep5.saveConfig(...args); }
-function buildAppState(...args) { return __dep5.buildAppState(...args); }
-function createBackup(...args) { return __dep5.createBackup(...args); }
+function loadConfig(...args) { return __dep0.loadConfigUnlocked(...args); }
+function saveConfig(...args) { return __dep1.saveConfigUnlocked(...args); }
+function buildAppState(...args) { return projectState.buildAppStateUnlocked(...args); }
+function createBackup(...args) { return projectArchives.createBackupArchive(...args); }
 
 async function convertDocumentToRichContent(projectPath, filePath, importId) {
   const ext = path.extname(filePath).toLowerCase();
@@ -297,27 +293,7 @@ async function refreshChapterFromOriginalDocumentUnlocked(projectPath, chapterId
 
 
 async function calculateTotalWords(projectPath, config) {
-  let total = 0;
-  for (const chapter of config.chapters) {
-    const filePath = getChapterPath(projectPath, chapter);
-    try {
-      const stat = await fs.stat(filePath);
-      const signature = `${stat.size}|${stat.mtimeMs}|${stat.ctimeMs}`;
-      if (chapter.contentSignature !== signature || !chapter.contentRevision) {
-        const content = await fs.readFile(filePath, "utf8");
-        chapter.wordCount = countWords(content);
-        chapter.outline = extractOutline(content);
-        chapter.contentRevision = contentRevision(content);
-        chapter.contentSignature = signature;
-      }
-      total += chapter.wordCount;
-    } catch {
-      chapter.wordCount = chapter.wordCount || 0;
-      chapter.outline = chapter.outline || [];
-      total += chapter.wordCount;
-    }
-  }
-  config.stats.totalWords = total;
+  return __dep0.calculateTotalWords(projectPath, config);
 }
 
 
@@ -421,35 +397,7 @@ async function saveChapterContent(projectPath, payload = {}) {
 
 
 async function buildAppStateUnlocked(projectPath, preferredChapterId = "") {
-  await ensureProjectStructure(projectPath);
-  const config = await loadConfig(projectPath);
-  await calculateTotalWords(projectPath, config);
-  await saveConfig(projectPath, config);
-  const savedWindowState = preferredChapterId ? null : await operationJournal.loadWindowState(projectPath).catch(() => null);
-  const recoveredChapterId = savedWindowState?.selectedChapterId && config.chapters.some((item) => item.id === savedWindowState.selectedChapterId)
-    ? savedWindowState.selectedChapterId
-    : "";
-  const selectedChapterId = preferredChapterId || recoveredChapterId || config.chapters[0]?.id || "";
-  const chapterPayload = await loadChapterContent(projectPath, selectedChapterId);
-  const characters = await loadCharacters(projectPath);
-  const worldDocs = await loadWorldDocs(projectPath);
-  const vectorStats = await vectorShards.stats(projectPath);
-  return {
-    projectPath,
-    config: configForRenderer(config),
-    chapters: config.chapters,
-    selectedChapter: chapterPayload.chapter,
-    chapterContent: chapterPayload.content,
-    chapterRevision: chapterPayload.revision,
-    characters,
-    worldDocs,
-    vectorStats: {
-      chunks: vectorStats.chunks,
-      updatedAt: vectorStats.updatedAt,
-      embeddingFallback: { ...__dep2.embeddingFallback },
-      recovery: vectorStats.recovery,
-    },
-  };
+  return projectState.buildAppStateUnlocked(projectPath, preferredChapterId);
 }
 
 

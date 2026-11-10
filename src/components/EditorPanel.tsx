@@ -5,6 +5,7 @@ import type {
   EditorScrollAnchor,
   RecoveryDraft,
 } from "../types";
+import { memo } from "react";
 import type { InlineReviewItem } from "../lib/editor-ops";
 import type { AppStores } from "../stores/app-stores";
 import {
@@ -19,7 +20,7 @@ import { ChapterProgressStrip } from "./ProgressBoard";
 import { RichDocumentEditor } from "./RichDocumentEditor";
 import { countWords, formatDateTime } from "../lib/text-utils";
 
-export function EditorPanel({
+function EditorPanelComponent({
   selectedChapter,
   chapterTitle,
   chapterVolume,
@@ -100,6 +101,13 @@ export function EditorPanel({
   onApplyState: (state: AppState) => void;
   onStatus: (message: string) => void;
 }) {
+  const debugWindow = window as Window & {
+    __NOVEL_RENDER_DEBUG__?: boolean;
+    __editorRenderCount?: number;
+  };
+  if (debugWindow.__NOVEL_RENDER_DEBUG__) {
+    debugWindow.__editorRenderCount = (debugWindow.__editorRenderCount || 0) + 1;
+  }
   return (
     <section
       key={selectedChapter?.id || "empty-document"}
@@ -257,3 +265,5 @@ export function EditorPanel({
     </section>
   );
 }
+
+export const EditorPanel = memo(EditorPanelComponent);

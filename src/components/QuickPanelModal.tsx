@@ -8,6 +8,7 @@ export function QuickPanelModal({
   currentView,
   onClose,
   onOpenView,
+  onOpenProgress,
   onImport,
   onExportChapter,
   onExportBook,
@@ -19,6 +20,7 @@ export function QuickPanelModal({
   currentView: "chapters" | "characters" | "world" | "knowledge" | "analysis";
   onClose: () => void;
   onOpenView: (view: "chapters" | "characters" | "world" | "knowledge" | "analysis") => void;
+  onOpenProgress: (tool: "mindmap" | "network" | "grid") => void;
   onImport: () => void;
   onExportChapter: () => void;
   onExportBook: () => void;
@@ -36,7 +38,7 @@ export function QuickPanelModal({
   ];
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <section ref={dialogRef} className="quick-panel-modal" role="dialog" aria-modal="true" aria-label="功能面板" tabIndex={-1} onClick={(event) => event.stopPropagation()}>
+      <section ref={dialogRef} className="quick-panel-modal modal-surface" role="dialog" aria-modal="true" aria-label="功能面板" tabIndex={-1} onClick={(event) => event.stopPropagation()}>
         <header>
           <div>
             <ListTree size={18} />
@@ -54,6 +56,18 @@ export function QuickPanelModal({
           ))}
         </div>
         <div className="quick-panel-actions">
+          <button onClick={() => onOpenProgress("mindmap")}>
+            <ListTree size={17} />
+            思维导图
+          </button>
+          <button onClick={() => onOpenProgress("grid")}>
+            <BookOpen size={17} />
+            进度网格
+          </button>
+          <button onClick={() => onOpenProgress("network")}>
+            <Boxes size={17} />
+            小说统筹网
+          </button>
           <button onClick={onImport}>
             <Upload size={17} />
             导入文档

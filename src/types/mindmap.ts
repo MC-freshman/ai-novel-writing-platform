@@ -52,6 +52,18 @@ export interface MindMapNode {
   side: MindMapSide;
 }
 
+export interface MindMapExtensionRecord {
+  [key: string]: unknown;
+}
+
+/** 模块契约外的字段由宿主按 id 保存，避免替换实现时静默丢数据。 */
+export interface MindMapExtensions {
+  contractVersion?: number;
+  nodes?: Record<string, MindMapExtensionRecord>;
+  relations?: Record<string, MindMapExtensionRecord>;
+  positions?: Record<string, MindMapExtensionRecord>;
+}
+
 export interface MindMap {
   id: string;
   title: string;
@@ -63,6 +75,8 @@ export interface MindMap {
   relations?: MindMapRelation[];
   /** 节点自由摆放偏移；key 必须是现存节点 id，值为相对自动布局的偏移量。 */
   positions?: Record<string, { dx: number; dy: number }>;
+  schemaVersion?: 1;
+  extensions?: MindMapExtensions;
 }
 
 export interface XMindImportSheet {

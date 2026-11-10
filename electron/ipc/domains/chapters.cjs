@@ -33,7 +33,7 @@ const {
   withJournalOperation,
   withProjectTransaction,
   writeProjectFiles,
-} = require("../dependencies.cjs");
+} = require("../domain-dependencies/chapters.cjs");
 
 function registerDomain() {
   registerIpcHandler("chapter:create", async (_event, payload) => {

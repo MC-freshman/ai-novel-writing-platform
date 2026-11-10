@@ -1,5 +1,5 @@
 // Extracted from src/App.tsx by the P3 refactor (cut-paste, no logic changes).
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Settings } from "lucide-react";
 import type { AppState, AgentPermissionLevel, Provider } from "../types";
 import { clampNumber, getErrorMessage } from "../lib/text-utils";
@@ -11,11 +11,13 @@ export function SettingsModal({
   selectedChapterId,
   onClose,
   onSave,
+  onBeforeDisableMindMap,
 }: {
   state: AppState;
   selectedChapterId?: string;
   onClose: () => void;
   onSave: (state: AppState) => void;
+  onBeforeDisableMindMap?: () => Promise<boolean>;
 }) {
   const dialogRef = useDialogFocus(onClose);
   const [draft, setDraft] = useState(state.config);
@@ -24,7 +26,12 @@ export function SettingsModal({
   const [securityStatus, setSecurityStatus] = useState("");
   const [securityBusy, setSecurityBusy] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<Awaited<ReturnType<typeof window.novelAPI.checkForUpdate>> | null>(null);
+  const errorRef = useRef<HTMLSpanElement | null>(null);
   const provider = draft.api.provider;
+
+  useEffect(() => {
+    if (errorText) errorRef.current?.focus();
+  }, [errorText]);
 
   function updateApi<K extends keyof typeof draft.api>(key: K, value: (typeof draft.api)[K]) {
     setDraft((config) => ({ ...config, api: { ...config.api, [key]: value } }));
@@ -104,7 +111,7 @@ export function SettingsModal({
 
   return (
     <div className="modal-backdrop">
-      <section ref={dialogRef} className="settings-modal" role="dialog" aria-modal="true" aria-label="设置" tabIndex={-1}>
+      <section ref={dialogRef} className="settings-modal modal-surface" role="dialog" aria-modal="true" aria-label="设置" tabIndex={-1}>
         <header>
           <div>
             <Settings size={20} />
@@ -114,6 +121,7 @@ export function SettingsModal({
         </header>
 
         <div className="settings-grid">
+          <div className="settings-group-title">项目信息</div>
           <label>
             小说名称
             <input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} />
@@ -122,6 +130,7 @@ export function SettingsModal({
             作者
             <input value={draft.author} onChange={(event) => setDraft({ ...draft, author: event.target.value })} />
           </label>
+          <div className="settings-group-title">接口与模型</div>
           <label>
             接口提供商
             <select
@@ -160,6 +169,7 @@ export function SettingsModal({
             聊天模型
             <input value={draft.api.chatModel} onChange={(event) => updateApi("chatModel", event.target.value)} />
           </label>
+          <div className="settings-group-title">生成与检索参数</div>
           <label>
             创造性
             <input
@@ -201,6 +211,7 @@ export function SettingsModal({
               onChange={(event) => updateApi("scanK", Math.floor(clampNumber(Number(event.target.value), Math.max(1, Number(draft.api.topK) || 1), MAX_RETRIEVAL_SCAN_K, 5000)))}
             />
           </label>
+          <div className="settings-group-title">向量检索</div>
           <label>
             向量接口地址
             <input value={draft.api.embeddingBaseUrl} onChange={(event) => updateApi("embeddingBaseUrl", event.target.value)} />
@@ -214,6 +225,7 @@ export function SettingsModal({
             向量模型
             <input value={draft.api.embeddingModel} onChange={(event) => updateApi("embeddingModel", event.target.value)} />
           </label>
+          <div className="settings-group-title">编辑与保存</div>
           <label>
             字号
             <input type="number" min="13" max="28" value={draft.ui.fontSize} onChange={(event) => updateUi("fontSize", Number(event.target.value))} />
@@ -269,6 +281,31 @@ export function SettingsModal({
           </div>
         </details>
 
+        <details className="settings-agent-panel">
+          <summary>模块与规划</summary>
+          <div>
+            <label className="checkbox-line">
+              <input
+                type="checkbox"
+                checked={draft.ui.mindMapEnabled !== false}
+                onChange={(event) => {
+                  const enabled = event.target.checked;
+                  void (async () => {
+                    if (!enabled && onBeforeDisableMindMap && !(await onBeforeDisableMindMap())) {
+                      setErrorText("规划草稿尚未保存，未停用思维导图模块。");
+                      return;
+                    }
+                    setErrorText("");
+                    updateUi("mindMapEnabled", enabled);
+                  })();
+                }}
+              />
+              启用内置思维导图模块
+            </label>
+            <p>关闭后思维导图入口显示停用提示，导图数据保留；重新启用即可恢复。</p>
+          </div>
+        </details>
+
         <details className="settings-agent-panel settings-security-panel">
           <summary>发布、密钥与软件更新</summary>
           <div>
@@ -279,13 +316,13 @@ export function SettingsModal({
           </div>
         </details>
 
-        <div className="settings-help">
-          <strong>接口说明</strong>
+        <details className="settings-help">
+          <summary>接口说明与推荐参数</summary>
           <p>DeepSeek 推荐：接口地址 https://api.deepseek.com/v1，聊天模型 deepseek-chat。通义千问推荐：接口地址 https://dashscope.aliyuncs.com/compatible-mode/v1，聊天模型 qwen-plus。候选扫描上限表示本地最多先看多少片段，发送片段上限表示最多交给 AI 多少片段。长篇项目建议候选扫描 5000-20000，发送片段日常 80-180，全书分析再临时提高。聊天问答会流式显示，默认不再因本地等待超时而中断；如果网络在生成中断开，已收到的内容会保留下来。DeepSeek、通义千问、OpenAI、Kimi、Ollama 和大多数中转接口使用 /chat/completions；Claude 使用 /v1/messages。向量接口使用 /embeddings。若不填向量接口密钥，软件会使用本地哈希向量作为临时索引。</p>
-        </div>
+        </details>
 
         <footer>
-          {errorText && <span className="settings-error">{errorText}</span>}
+          {errorText && <span ref={errorRef} tabIndex={-1} className="settings-error" role="alert">{errorText}</span>}
           <button onClick={onClose}>取消</button>
           <button className="primary" onClick={() => void save()} disabled={saving}>
             {saving ? "保存中..." : "保存设置"}

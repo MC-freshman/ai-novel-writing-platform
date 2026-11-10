@@ -16,6 +16,7 @@ const checks = [
   ["创作 Agent 与数据保护", process.execPath, [path.join(__dirname, "test-agent-platform.cjs")]],
   ["逐篇 Word 导出", process.execPath, [path.join(__dirname, "test-batch-docx-export.cjs")]],
   ["UI 按钮与入口", process.execPath, [path.join(__dirname, "run-ui-button-audit.cjs")]],
+  ["未注册导图模块的构建启动", process.execPath, [path.join(__dirname, "test-ui-no-mindmap.cjs")]],
 ];
 
 for (const [name, command, args] of checks) {

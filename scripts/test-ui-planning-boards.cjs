@@ -98,7 +98,7 @@ async function stop() {
 async function openProgress() {
   await cdp.evaluate("document.querySelector('.pane-tabs button[title=分析]').click()");
   await wait(250);
-  await button("进度", "document.querySelector('.analysis-tabs')");
+  await button("规划与进度", "document.querySelector('.analysis-tabs')");
 }
 
 async function main() {

@@ -13,7 +13,6 @@ export function useAppEditor(
     AppContext,
     | "changeView"
     | "chapterContent"
-    | "chatMessages"
     | "editorRef"
     | "findText"
     | "openStoryCenter"
@@ -27,13 +26,13 @@ export function useAppEditor(
     | "setDirty"
     | "setSelectedText"
     | "setStatus"
+    | "stores"
     | "updateCurrentChat"
   >,
 ) {
   const {
     changeView,
     chapterContent,
-    chatMessages,
     editorRef,
     findText,
     openStoryCenter,
@@ -47,6 +46,7 @@ export function useAppEditor(
     setDirty,
     setSelectedText,
     setStatus,
+    stores,
     updateCurrentChat,
   } = context;
   function captureSelection() {
@@ -184,7 +184,7 @@ export function useAppEditor(
     setContextMenu(null);
     const pendingId = makeMessageId();
     const startedMessages: ChatMessage[] = [
-      ...chatMessages,
+      ...stores.chat.store.getState().chatMessages,
       {
         id: makeMessageId(),
         role: "user",

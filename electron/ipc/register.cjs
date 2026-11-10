@@ -5,7 +5,7 @@ const {
   log,
   state,
   validateIpcArguments,
-} = require("./dependencies.cjs");
+} = require("./core-dependencies.cjs");
 
 function registerIpcHandler(channel, action) {
   state.registeredIpcChannels.add(channel);

@@ -1,14 +1,13 @@
 "use strict";
 const { registerIpcHandler } = require("../register.cjs");
 const {
-  activateProjectSession,
   buildAppState,
+  switchCurrentProject,
   calculateTotalWords,
   configFromRenderer,
   createBackup,
   dialog,
   ensureCurrentProject,
-  ensureProjectStructure,
   exportBookDocumentsToDirectory,
   exportProjectExchange,
   getProjectTaskCenter,
@@ -28,7 +27,20 @@ const {
   state,
   withJournalOperation,
   withProjectTransaction,
-} = require("../dependencies.cjs");
+} = require("../domain-dependencies/projects.cjs");
+
+async function switchProjectAndBuild(target, title) {
+  const previous = state.currentProjectPath;
+  await switchCurrentProject(target, title);
+  try {
+    return buildAppState(target);
+  } catch (error) {
+    if (previous && path.resolve(previous) !== path.resolve(target)) {
+      await switchCurrentProject(previous).catch(() => null);
+    }
+    throw error;
+  }
+}
 
 function registerDomain() {
   registerIpcHandler("project:create", async (_event, payload) => {
@@ -38,13 +50,8 @@ function registerDomain() {
     });
     if (result.canceled || !result.filePaths[0]) return { canceled: true };
     const title = payload?.title?.trim() || "新小说项目";
-    state.currentProjectPath = path.join(
-      result.filePaths[0],
-      sanitizeFileName(title),
-    );
-    await ensureProjectStructure(state.currentProjectPath, title);
-    await activateProjectSession(state.currentProjectPath);
-    return buildAppState(state.currentProjectPath);
+    const target = path.join(result.filePaths[0], sanitizeFileName(title));
+    return switchProjectAndBuild(target, title);
   });
 
   registerIpcHandler("project:open", async () => {
@@ -53,10 +60,8 @@ function registerDomain() {
       properties: ["openDirectory"],
     });
     if (result.canceled || !result.filePaths[0]) return { canceled: true };
-    state.currentProjectPath = result.filePaths[0];
-    await ensureProjectStructure(state.currentProjectPath);
-    await activateProjectSession(state.currentProjectPath);
-    return buildAppState(state.currentProjectPath);
+    const target = path.resolve(result.filePaths[0]);
+    return switchProjectAndBuild(target);
   });
 
   registerIpcHandler("document:import", async (_event, payload) => {

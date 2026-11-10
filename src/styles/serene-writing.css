@@ -1,39 +1,4 @@
-/* A quiet writing room: paper, sage and a low-glare forest evening. */
-:root {
-  color-scheme: light;
-  --bg: #eeeee6;
-  --panel: #f7f7f0;
-  --panel-strong: #e7ebdf;
-  --paper: #fffdf6;
-  --line: #d8ded0;
-  --text: #30392f;
-  --muted: #64705f;
-  --accent: #58734f;
-  --accent-strong: #3d5937;
-  --danger: #a64438;
-  --shadow: 0 12px 34px rgb(48 57 47 / 9%);
-  --writing-font: "LXGW WenKai", "Noto Serif CJK SC", "Source Han Serif SC", "SimSun", serif;
-  background: var(--bg);
-  color: var(--text);
-}
-
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --bg: #19211e;
-  --panel: #202a25;
-  --panel-strong: #2d3a31;
-  --paper: #232c26;
-  --line: #3a493d;
-  --text: #e1e7db;
-  --muted: #a8b7a2;
-  --accent: #a4bc93;
-  --accent-strong: #c2d7b2;
-  --danger: #f29b88;
-  --shadow: 0 12px 34px rgb(0 0 0 / 16%);
-  background: var(--bg);
-  color: var(--text);
-}
-
+/* A quiet writing room: layout and writing surface; theme tokens live in tokens.css. */
 ::selection { background: color-mix(in srgb, var(--accent) 25%, transparent); }
 * { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
 button { border-radius: 8px; }

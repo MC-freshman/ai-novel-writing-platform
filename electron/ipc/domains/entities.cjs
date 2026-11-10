@@ -20,7 +20,7 @@ const {
   withProjectTransaction,
   writeJson,
   writeWorldDoc,
-} = require("../dependencies.cjs");
+} = require("../domain-dependencies/entities.cjs");
 
 function registerDomain() {
   registerIpcHandler("character:save", async (_event, payload) => {

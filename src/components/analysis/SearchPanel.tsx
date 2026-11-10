@@ -1,5 +1,6 @@
 import { Search } from "lucide-react";
 import { sourceLabel } from "../../lib/text-utils";
+import { InlineFeedback } from "../ui/InlineFeedback";
 import type { AnalysisContext } from "./context";
 
 export function SearchPanel(
@@ -9,12 +10,22 @@ export function SearchPanel(
     | "onOpenSource"
     | "query"
     | "runSearch"
+    | "searchError"
     | "searchResults"
+    | "searchedQuery"
     | "setQuery"
   >,
 ) {
-  const { busy, onOpenSource, query, runSearch, searchResults, setQuery } =
-    context;
+  const {
+    busy,
+    onOpenSource,
+    query,
+    runSearch,
+    searchError,
+    searchResults,
+    searchedQuery,
+    setQuery,
+  } = context;
 
   return (
     <div className="analysis-section">
@@ -36,7 +47,15 @@ export function SearchPanel(
         </button>
       </form>
       <div className="search-results">
-        {searchResults.map((result) => (
+        {busy === "search" && (
+          <div className="analysis-empty" role="status">
+            正在搜索…
+          </div>
+        )}
+        {busy !== "search" && searchError && query.trim() === searchedQuery && (
+          <InlineFeedback className="search-feedback" title="搜索失败" message={searchError} actionLabel="重试搜索" onAction={() => void runSearch()} />
+        )}
+        {busy !== "search" && (!searchError || query.trim() !== searchedQuery) && searchResults.map((result) => (
           <button
             key={result.id}
             className="search-result"
@@ -54,9 +73,11 @@ export function SearchPanel(
             <p>{result.snippet || "匹配标题或分类"}</p>
           </button>
         ))}
-        {!searchResults.length && (
+        {busy !== "search" && !searchError && !searchResults.length && (
           <div className="analysis-empty">
-            输入关键词后可搜索章节正文、角色卡片和世界观条目。
+            {searchedQuery && query.trim() === searchedQuery
+              ? `没有找到与「${searchedQuery}」匹配的章节、角色或设定。`
+              : "输入关键词后可搜索章节正文、角色卡片和世界观条目。"}
           </div>
         )}
       </div>

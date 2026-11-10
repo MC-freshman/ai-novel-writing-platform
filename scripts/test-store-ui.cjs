@@ -82,8 +82,13 @@ async function main() {
   cdp = connectCdp(target.webSocketDebuggerUrl); await cdp.ready;
   await until("Boolean(document.querySelector('.chat-input textarea'))");
   await wait(1200);
+  await cdp.evaluate("window.__NOVEL_RENDER_DEBUG__ = true; window.__editorRenderCount = 0; true");
   await send("合成测试：生成可取消回答");
   await until("document.querySelector('.messages')?.textContent.includes('合成片段1')");
+  await wait(500);
+  const editorRenders = await cdp.evaluate("window.__editorRenderCount");
+  assert.ok(editorRenders <= 1, `流式回答期间编辑区渲染次数应受控，实际 ${editorRenders}`);
+  report.checks.push(`F2 流式回答期间编辑区渲染 ${editorRenders} 次（上限 1）`);
   await cdp.evaluate("document.querySelector('.chat-input button.stop').click()");
   await until("!document.querySelector('.chat-input button.stop')");
   assert.match(await cdp.evaluate("document.querySelector('.messages').textContent"), /合成片段1[\s\S]*已保留/);
@@ -95,6 +100,13 @@ async function main() {
   const mainTarget = (await fetch(`http://127.0.0.1:${mainPort}/json/list`).then((response) => response.json()))[0];
   assert.ok(mainTarget?.webSocketDebuggerUrl, "隔离测试主进程调试连接可用");
   mainCdp = connectCdp(mainTarget.webSocketDebuggerUrl); await mainCdp.ready;
+  await mainCdp.evaluate("globalThis.__testElectron = process.getBuiltinModule('module').createRequire(process.execPath)('electron'); true");
+  await mainCdp.evaluate(`globalThis.__testElectron.dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [${JSON.stringify(path.join(project, "novel.config.json"))}] })`);
+  await cdp.evaluate("document.querySelector('button[title=\"打开小说项目\"]').click()");
+  await until("document.body.textContent.includes('打开项目失败')");
+  assert.ok(await cdp.evaluate("document.body.textContent.includes('Zustand合成流式验收')"), "打开无效项目失败后标题仍应是原项目");
+  assert.ok(await cdp.evaluate("window.novelAPI.listKnowledgeItems().then((result) => result.items.length)") >= 1, "失败切换后IPC仍作用于原项目");
+  report.checks.push("F1b 打开无效项目失败后保留原项目，后续IPC不串到失败路径");
   // Delay only the synthetic IPC response; project selection still runs the real
   // project:open handler. No test hooks or dialog overrides enter production code.
   await mainCdp.evaluate(`(() => {globalThis.__testElectron=process.getBuiltinModule('module').createRequire(process.execPath)('electron');const ipc=globalThis.__testElectron.ipcMain;const original=ipc._invokeHandlers.get('ai:ask');globalThis.__heldAsks={};ipc.removeHandler('ai:ask');ipc.handle('ai:ask',(event,payload)=>payload.question.startsWith('隔离竞态')?new Promise((resolve,reject)=>{globalThis.__heldAsks[payload.question]={resolve,reject}}):original(event,payload));return true;})()`);

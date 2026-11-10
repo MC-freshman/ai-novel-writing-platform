@@ -11,6 +11,8 @@ export function useAppChapters(
     | "draggingChapterId"
     | "editorRef"
     | "saveBeforeLeavingChapter"
+    | "saveChapterDraft"
+    | "savePromiseRef"
     | "selectedChapter"
     | "setChapterContent"
     | "setChapterRevision"
@@ -18,13 +20,13 @@ export function useAppChapters(
     | "setChapterVolume"
     | "setDirty"
     | "setDraggingChapterId"
-    | "setSaving"
     | "setScrollAnchor"
     | "setSelectedChapter"
     | "setState"
     | "setStatus"
     | "setView"
     | "state"
+    | "stores"
   >,
 ) {
   const {
@@ -34,6 +36,8 @@ export function useAppChapters(
     draggingChapterId,
     editorRef,
     saveBeforeLeavingChapter,
+    saveChapterDraft,
+    savePromiseRef,
     selectedChapter,
     setChapterContent,
     setChapterRevision,
@@ -41,13 +45,13 @@ export function useAppChapters(
     setChapterVolume,
     setDirty,
     setDraggingChapterId,
-    setSaving,
     setScrollAnchor,
     setSelectedChapter,
     setState,
     setStatus,
     setView,
     state,
+    stores,
   } = context;
   async function selectChapter(
     chapterId: string,
@@ -181,7 +185,13 @@ export function useAppChapters(
     currentLevel: number,
     delta: number,
   ) {
+    const epoch = stores.project.store.getState().projectEpoch;
     if (!(await saveBeforeLeavingChapter())) return;
+    if (epoch !== stores.project.store.getState().projectEpoch) return;
+    if (savePromiseRef.current) {
+      setStatus("当前文档正在保存，请稍后调整目录等级。");
+      return;
+    }
     let payload: Awaited<ReturnType<typeof window.novelAPI.loadChapter>>;
     try {
       payload = await window.novelAPI.loadChapter(chapterId);
@@ -189,8 +199,26 @@ export function useAppChapters(
       setStatus(`读取目录对应文档失败：${getErrorMessage(error)}`);
       return;
     }
+    const current = stores.project.store.getState();
+    if (epoch !== current.projectEpoch) return;
+    if (current.selectedChapter?.id !== chapterId) {
+      setStatus("章节已切换，已停止调整目录等级。");
+      return;
+    }
     if (!payload.chapter) {
       setStatus("没有找到要调整目录等级的文档。");
+      return;
+    }
+    if (
+      current.chapterContent !== payload.content ||
+      current.chapterTitle !== payload.chapter.title ||
+      current.chapterVolume !== payload.chapter.volume
+    ) {
+      setStatus("正文或标题已有新改动，请先保存后再调整目录等级。");
+      return;
+    }
+    if (savePromiseRef.current) {
+      setStatus("当前文档正在保存，请稍后重试调整目录等级。");
       return;
     }
     const nextLevel = Math.min(6, Math.max(1, currentLevel + delta));
@@ -242,50 +270,22 @@ export function useAppChapters(
       setChapterVolume(optimisticChapter.volume);
       setDirty(false);
     }
-    setSaving(true);
     setStatus("正在调整目录等级并保存...");
-    try {
-      const result = await window.novelAPI.saveChapter({
+    const saved = await saveChapterDraft(
+      {
         chapterId,
         title: payload.chapter.title,
         volume: payload.chapter.volume,
         content: nextContent,
         expectedRevision: payload.revision,
-      });
-      setState((current) =>
-        current
-          ? {
-              ...current,
-              config: result.config,
-              chapters: result.config.chapters,
-              selectedChapter:
-                chapterId === selectedChapter?.id
-                  ? result.chapter
-                  : current.selectedChapter,
-              vectorStats: result.vectorStats,
-              chapterRevision:
-                chapterId === selectedChapter?.id
-                  ? result.revision
-                  : current.chapterRevision,
-            }
-          : current,
-      );
-      if (chapterId === selectedChapter?.id) {
-        setChapterRevision(result.revision);
-        setSelectedChapter(result.chapter);
-        setChapterContent(nextContent);
-        setChapterTitle(result.chapter.title);
-        setChapterVolume(result.chapter.volume);
-        setDirty(false);
-      }
-      setStatus(`已把标题调整为 ${nextLevel} 级，并同步更新知识库`);
-    } catch (error) {
-      if (chapterId === selectedChapter?.id) setDirty(true);
-      setStatus(
-        `调整目录等级失败：${error instanceof Error ? error.message : String(error)}`,
-      );
-    } finally {
-      setSaving(false);
+      },
+      `已把标题调整为 ${nextLevel} 级，并同步更新知识库`,
+    );
+    if (
+      !saved &&
+      stores.project.store.getState().selectedChapter?.id === chapterId
+    ) {
+      setDirty(true);
     }
   }
 

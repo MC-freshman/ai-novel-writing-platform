@@ -52,6 +52,8 @@ type LayoutState = {
 type NavigationState = {
   view: "chapters" | "characters" | "world" | "knowledge" | "analysis";
   networkOpenRequest: number;
+  progressOpenRequest: number;
+  progressOpenMode: "chapters" | "network" | "mindmap" | "grid" | "";
   showSettings: boolean;
   showQuickPanel: boolean;
   showStoryCenter: boolean;
@@ -115,6 +117,8 @@ export function createAppStores(viewportWidth = 1024) {
     navigation: createDomain<NavigationState>({
       view: "chapters",
       networkOpenRequest: 0,
+      progressOpenRequest: 0,
+      progressOpenMode: "",
       showSettings: false,
       showQuickPanel: false,
       showStoryCenter: false,

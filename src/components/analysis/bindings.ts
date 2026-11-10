@@ -21,13 +21,17 @@ import type { AnalysisPanelProps } from "./props";
 export function useAnalysisBindings(
   context: Pick<
     AnalysisPanelProps,
-    "networkOpenRequest" | "onRegisterSave" | "selectedChapterId" | "state"
+    | "networkOpenRequest"
+    | "progressOpenRequest"
+    | "onRegisterSave"
+    | "selectedChapterId"
+    | "state"
   >,
 ) {
-  const { networkOpenRequest, onRegisterSave, selectedChapterId, state } =
+  const { networkOpenRequest, progressOpenRequest, onRegisterSave, selectedChapterId, state } =
     context;
   const [tab, setTab] = useState<AnalysisTab>(
-    networkOpenRequest ? "progress" : "search",
+    networkOpenRequest || progressOpenRequest ? "progress" : "search",
   );
 
   const userSelectedTab = useRef(false);
@@ -45,6 +49,10 @@ export function useAnalysisBindings(
   const [query, setQuery] = useState("");
 
   const [searchResults, setSearchResults] = useState<GlobalSearchResult[]>([]);
+
+  const [searchError, setSearchError] = useState("");
+
+  const [searchedQuery, setSearchedQuery] = useState("");
 
   const [timelineEvents, setTimelineEvents] = useState<TimelineEvent[]>([]);
 
@@ -242,6 +250,10 @@ export function useAnalysisBindings(
     setQuery,
     searchResults,
     setSearchResults,
+    searchError,
+    setSearchError,
+    searchedQuery,
+    setSearchedQuery,
     timelineEvents,
     setTimelineEvents,
     relationshipNodes,

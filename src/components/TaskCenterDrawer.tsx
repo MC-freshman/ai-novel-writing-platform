@@ -1,9 +1,10 @@
 // Extracted from src/App.tsx by the P3 refactor (cut-paste, no logic changes).
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ListChecks, Trash2, X } from "lucide-react";
 import type { BackgroundTask, OperationJournalItem } from "../types";
 import { formatDateTime, getErrorMessage } from "../lib/text-utils";
 import { useDialogFocus } from "../hooks/useDialogFocus";
+import { InlineFeedback } from "./ui/InlineFeedback";
 
 export function TaskCenterDrawer({
   tasks,
@@ -21,10 +22,21 @@ export function TaskCenterDrawer({
   const dialogRef = useDialogFocus(onClose);
   const activeCount = tasks.filter((task) => ["等待中", "运行中", "正在停止", "已暂停"].includes(task.status)).length;
   const [operations, setOperations] = useState<OperationJournalItem[]>([]);
+  const [operationsStatus, setOperationsStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [operationsError, setOperationsError] = useState("");
 
-  useEffect(() => {
-    void window.novelAPI.listOperationJournal().then((result) => setOperations(result.operations)).catch(() => setOperations([]));
+  const loadOperations = useCallback(() => {
+    setOperationsStatus("loading");
+    setOperationsError("");
+    void window.novelAPI.listOperationJournal()
+      .then((result) => { setOperations(result.operations); setOperationsStatus("ready"); })
+      .catch((error) => {
+        setOperationsStatus("error");
+        setOperationsError(getErrorMessage(error));
+      });
   }, []);
+
+  useEffect(() => { loadOperations(); }, [loadOperations]);
 
   async function cancelTask(taskId: string) {
     const result = await window.novelAPI.cancelTask(taskId);
@@ -75,17 +87,24 @@ export function TaskCenterDrawer({
         <header><div><ListChecks size={18} /><strong>后台任务</strong><span>{activeCount ? `${activeCount} 个进行中或暂停` : "当前空闲"}</span></div><div><button onClick={() => void clearTaskHistory()} disabled={!tasks.some((task) => !["等待中", "运行中", "正在停止", "已暂停"].includes(task.status))}>清理记录</button><button onClick={onClose} title="关闭"><X size={17} /></button></div></header>
         <details className="operation-history">
           <summary>项目操作记录（{operations.length}）</summary>
-          <div>{operations.slice(0, 40).map((item) => <article key={item.id} className={`operation-${item.status}`}><strong>{item.title}</strong><span>{item.status} / {formatDateTime(item.updatedAt)}</span>{item.error && <em>{item.error}</em>}</article>)}{!operations.length && <p>暂无保存、导入、拖动或修订记录。</p>}</div>
+          <div>
+            {operationsStatus === "loading" && <p role="status">正在读取项目操作记录…</p>}
+            {operationsStatus === "error" && <InlineFeedback title="项目操作记录读取失败" message={operationsError} actionLabel="重试" onAction={loadOperations} />}
+            {operationsStatus === "ready" && operations.slice(0, 40).map((item) => <article key={item.id} className={`operation-${item.status}`}><strong>{item.title}</strong><span>{item.status} / {formatDateTime(item.updatedAt)}</span>{item.error && <em>{item.error}</em>}</article>)}
+            {operationsStatus === "ready" && !operations.length && <p>暂无保存、导入、拖动或修订记录。</p>}
+          </div>
         </details>
         <div className="task-list">
           {tasks.map((task) => {
             const active = ["等待中", "运行中", "正在停止", "已暂停"].includes(task.status);
-            const progress = task.total ? Math.min(100, Math.round((task.current / task.total) * 100)) : active ? 8 : task.status === "已完成" ? 100 : 0;
+            const progress = task.total ? Math.min(100, Math.round((task.current / task.total) * 100)) : active ? null : task.status === "已完成" ? 100 : 0;
             return (
               <article key={task.id} className={`task-row status-${task.status}`}>
                 <div className="task-row-title"><strong>{task.title}</strong><span>{task.status}</span></div>
                 <p>{task.phase}{task.detail ? `：${task.detail}` : ""}</p>
-                <div className="task-progress"><span style={{ width: `${progress}%` }} /></div>
+                <div className={`task-progress ${progress === null ? "indeterminate" : ""}`} role="progressbar" aria-valuenow={progress ?? undefined} aria-valuemin={progress === null ? undefined : 0} aria-valuemax={progress === null ? undefined : 100}>
+                  <span style={progress === null ? undefined : { width: `${progress}%` }} />
+                </div>
                 <small>{task.total ? `${task.current}/${task.total}` : ""} {formatDateTime(task.updatedAt)}{task.usage?.totalTokens ? ` / 约 ${task.usage.totalTokens.toLocaleString("zh-CN")} Token` : ""}</small>
                 {task.error && <em>{task.error}</em>}
                 {task.partialOutput && <details><summary>查看已保留的部分输出</summary><pre>{task.partialOutput.slice(-12000)}</pre></details>}

@@ -11,7 +11,7 @@ const {
   projectSnapshots,
   saveAnalysisState,
   saveWorldCardCandidates,
-} = require("../dependencies.cjs");
+} = require("../domain-dependencies/ai-tools.cjs");
 
 function registerDomain() {
   registerIpcHandler("ai:creative-advice", async (_event, payload) => {

@@ -14,7 +14,8 @@ const { state } = require("./runtime-state.cjs");
 const __dep0 = require("./project-files.cjs");
 const __dep1 = require("./knowledge-index.cjs");
 const __dep2 = require("./project-content.cjs");
-const __dep3 = require("./project-ops.cjs");
+const projectConfig = require("./project-config.cjs");
+const projectState = require("./project-state.cjs");
 const path = require("node:path");
 const fs = require("node:fs/promises");
 
@@ -38,10 +39,10 @@ function loadMaterials(...args) { return __dep1.loadMaterials(...args); }
 function saveMaterial(...args) { return __dep1.saveMaterial(...args); }
 function rebuildIndex(...args) { return __dep1.rebuildIndex(...args); }
 function calculateTotalWords(...args) { return __dep2.calculateTotalWords(...args); }
-function loadConfig(...args) { return __dep3.loadConfig(...args); }
-function saveConfig(...args) { return __dep3.saveConfig(...args); }
-function buildAppState(...args) { return __dep3.buildAppState(...args); }
-function buildProjectExchangeArchive(...args) { return __dep3.buildProjectExchangeArchive(...args); }
+function loadConfig(...args) { return __dep0.loadConfigUnlocked(...args); }
+function saveConfig(...args) { return projectConfig.saveConfigUnlocked(...args); }
+function buildAppState(...args) { return projectState.buildAppStateUnlocked(...args); }
+function buildProjectExchangeArchive(...args) { return buildProjectExchangeArchiveUnlocked(...args); }
 
 async function uniqueFileNameInDirectory(directory, requestedBase, extension) {
   const base = sanitizeFileName(requestedBase || "导入资料") || "导入资料";

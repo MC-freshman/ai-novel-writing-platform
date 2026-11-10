@@ -13,68 +13,43 @@ import type { AppContext } from "./context";
 export function useAppChat(
   context: Pick<
     AppContext,
-    | "activeAiRequestId"
-    | "activeChatSessionId"
-    | "aiProjectMemory"
-    | "chatLoaded"
-    | "chatMessages"
-    | "chatRetrievalMode"
-    | "chatSessions"
-    | "selectedChapter"
-    | "selectedText"
-    | "setActiveAiRequestId"
-    | "setActiveChatSessionId"
-    | "setAiProgress"
-    | "setAiProjectMemory"
-    | "setChatMessages"
-    | "setChatRetrievalMode"
-    | "setChatSessions"
-    | "setStatus"
-    | "stores"
+    "selectedChapter" | "selectedText" | "setStatus" | "stores"
   >,
 ) {
+  const { selectedChapter, selectedText, setStatus, stores } = context;
+  const chatState = () => stores.chat.store.getState();
   const {
-    activeAiRequestId,
-    activeChatSessionId,
-    aiProjectMemory,
-    chatLoaded,
-    chatMessages,
-    chatRetrievalMode,
-    chatSessions,
-    selectedChapter,
-    selectedText,
-    setActiveAiRequestId,
-    setActiveChatSessionId,
-    setAiProgress,
-    setAiProjectMemory,
-    setChatMessages,
-    setChatRetrievalMode,
-    setChatSessions,
-    setStatus,
-    stores,
-  } = context;
+    activeAiRequestId: setActiveAiRequestId,
+    activeChatSessionId: setActiveChatSessionId,
+    aiProgress: setAiProgress,
+    aiProjectMemory: setAiProjectMemory,
+    chatMessages: setChatMessages,
+    chatRetrievalMode: setChatRetrievalMode,
+    chatSessions: setChatSessions,
+  } = stores.chat.setters;
   function saveChatDraft(
     nextSessions: ChatSession[],
-    nextActiveId = activeChatSessionId,
-    nextMemory = aiProjectMemory,
+    nextActiveId = chatState().activeChatSessionId,
+    nextMemory = chatState().aiProjectMemory,
   ) {
-    if (!chatLoaded) return;
+    if (!chatState().chatLoaded) return;
     const compactSessions = keepRecentChatSessions(nextSessions, nextActiveId);
     void window.novelAPI
       .saveAnalysisState({
         chatSessions: compactSessions,
         activeChatSessionId: nextActiveId,
         aiProjectMemory: nextMemory,
-        chatRetrievalMode,
+        chatRetrievalMode: chatState().chatRetrievalMode,
       })
       .catch(() => null);
   }
 
   function updateCurrentChat(nextMessages: ChatMessage[]) {
     const now = new Date().toISOString();
+    const state = chatState();
     const existingSession =
-      chatSessions.find((session) => session.id === activeChatSessionId) ||
-      chatSessions[0];
+      state.chatSessions.find((session) => session.id === state.activeChatSessionId) ||
+      state.chatSessions[0];
     const baseSession = existingSession || makeChatSession();
     const activeId = baseSession.id;
     const nextSession = {
@@ -87,7 +62,7 @@ export function useAppChat(
     const nextSessions = keepRecentChatSessions(
       [
         nextSession,
-        ...chatSessions.filter((session) => session.id !== activeId),
+        ...state.chatSessions.filter((session) => session.id !== activeId),
       ],
       activeId,
     );
@@ -100,7 +75,7 @@ export function useAppChat(
   function createChatSession() {
     const session = makeChatSession();
     const nextSessions = keepRecentChatSessions(
-      [session, ...chatSessions],
+      [session, ...chatState().chatSessions],
       session.id,
     );
     setChatSessions(nextSessions);
@@ -111,19 +86,20 @@ export function useAppChat(
   }
 
   function switchChatSession(sessionId: string) {
-    if (activeAiRequestId) {
+    const state = chatState();
+    if (state.activeAiRequestId) {
       setStatus("当前回答仍在生成，请先停止或等待完成。");
       return;
     }
-    const session = chatSessions.find((item) => item.id === sessionId);
+    const session = state.chatSessions.find((item) => item.id === sessionId);
     if (!session) return;
     setActiveChatSessionId(session.id);
     setChatMessages(session.messages || []);
-    saveChatDraft(chatSessions, session.id);
+    saveChatDraft(state.chatSessions, session.id);
   }
 
   function clearCurrentChat() {
-    if (activeAiRequestId) {
+    if (chatState().activeAiRequestId) {
       setStatus("当前回答仍在生成，请先停止后再清空。");
       return;
     }
@@ -135,12 +111,12 @@ export function useAppChat(
   function updateProjectMemory(value: string) {
     const next = value.slice(0, 3000);
     setAiProjectMemory(next);
-    saveChatDraft(chatSessions, activeChatSessionId, next);
+    saveChatDraft(chatState().chatSessions, chatState().activeChatSessionId, next);
   }
 
   function updateChatRetrievalMode(mode: RetrievalMode) {
     setChatRetrievalMode(mode);
-    if (chatLoaded) {
+    if (chatState().chatLoaded) {
       void window.novelAPI
         .saveAnalysisState({ chatRetrievalMode: mode })
         .catch(() => null);
@@ -150,12 +126,12 @@ export function useAppChat(
   async function sendChat(
     question: string,
     selection = selectedText,
-    retrievalMode = chatRetrievalMode,
+    retrievalMode = chatState().chatRetrievalMode,
     additionalSourceIds: string[] = [],
   ) {
     const trimmed = question.trim();
     if (!trimmed) return;
-    if (activeAiRequestId) {
+    if (chatState().activeAiRequestId) {
       setStatus("AI 正在生成上一条回答，请先停止或等待完成。");
       return;
     }
@@ -167,7 +143,7 @@ export function useAppChat(
       createdAt: new Date().toISOString(),
     };
     const pendingId = makeMessageId();
-    const historyMessages = chatMessages;
+    const historyMessages = chatState().chatMessages;
     const startedMessages: ChatMessage[] = [
       ...historyMessages,
       userMessage,
@@ -190,7 +166,7 @@ export function useAppChat(
           role: item.role,
           content: item.content,
         })),
-        projectMemory: aiProjectMemory,
+        projectMemory: chatState().aiProjectMemory,
         retrievalMode,
         selectedChapterId: selectedChapter?.id || "",
         additionalSourceIds,
@@ -252,8 +228,8 @@ export function useAppChat(
   }
 
   async function stopChatGeneration() {
-    if (!activeAiRequestId) return;
-    const requestId = activeAiRequestId;
+    const requestId = chatState().activeAiRequestId;
+    if (!requestId) return;
     const epoch = stores.project.store.getState().projectEpoch;
     setAiProgress((current) => ({
       phase: "正在停止，已生成内容会保留",

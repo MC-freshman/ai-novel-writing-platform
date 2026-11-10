@@ -18,7 +18,7 @@ const {
   storyState,
   withProjectTransaction,
   writeFileAtomic,
-} = require("../dependencies.cjs");
+} = require("../domain-dependencies/workspace.cjs");
 
 function registerDomain() {
   registerIpcHandler("workspace:get", async () => {

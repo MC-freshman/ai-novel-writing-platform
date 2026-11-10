@@ -1,4 +1,5 @@
 import "marked";
+import { useMemo, useRef } from "react";
 import { BookOpen, Boxes, ListTree, Search, Sparkles, UserRound } from "lucide-react";
 import "@tiptap/react";
 import "@tiptap/extension-image";
@@ -28,14 +29,10 @@ import { useAppController } from "./app/controller";
 
 export default function App() {
   const {
-    activeAiRequestId,
-    activeChatSessionId,
     activeRecoveryDraft,
     adjustOutlineLevel,
     aiChatOpenRequest,
     aiExpanded,
-    aiProgress,
-    aiProjectMemory,
     applyAppState,
     askSelectedText,
     backgroundTasks,
@@ -45,9 +42,6 @@ export default function App() {
     chapterRevision,
     chapterTitle,
     chapterVolume,
-    chatMessages,
-    chatRetrievalMode,
-    chatSessions,
     clearCurrentChat,
     contextMenu,
     createChapter,
@@ -86,6 +80,8 @@ export default function App() {
     openWorkspaceFromSelection,
     paneWidths,
     preview,
+    progressOpenMode,
+    progressOpenRequest,
     rebuildIndex,
     refreshChapterFromOriginal,
     registerPageSave,
@@ -113,6 +109,8 @@ export default function App() {
     setFocusMode,
     setLeftWidth,
     setPreview,
+    setProgressOpenMode,
+    setProgressOpenRequest,
     setReplaceText,
     setRightWidth,
     setSelectedText,
@@ -144,6 +142,67 @@ export default function App() {
     workspaceInitialTab,
     workspaceRef,
   } = useAppController();
+
+  const editorActionsImplementation = {
+    onTitleChange: setChapterTitle,
+    onVolumeChange: setChapterVolume,
+    onContentChange: setChapterContent,
+    onDirty: () => setDirty(true),
+    onTogglePreview: () => setPreview((value) => !value),
+    onToggleFindReplace: () => setShowFindReplace((value) => !value),
+    onToggleFocus: () => setFocusMode((value) => !value),
+    onFindTextChange: setFindText,
+    onReplaceTextChange: setReplaceText,
+    onFindNext: findNextInChapter,
+    onReplaceAll: replaceAllInChapter,
+    onOpenOriginal: openOriginalDocument,
+    onRefreshFromOriginal: () => void refreshChapterFromOriginal(),
+    onDiscardDraft: (draft: Parameters<typeof discardRecoveryDraft>[0]) => void discardRecoveryDraft(draft),
+    onRestoreDraft: restoreRecoveryDraft,
+    onCaptureSelection: captureSelection,
+    onAskSelectionMenu: openAskSelectionMenu,
+    onRichAskSelectionMenu: openRichAskSelectionMenu,
+    onEditorReady: handleRichEditorReady,
+    onOpenReview: (review: Parameters<NonNullable<Parameters<typeof EditorPanel>[0]["onOpenReview"]>>[0]) => {
+      setSelectedText(review.quote);
+      void openStoryCenter(
+        "workspace",
+        review.kind === "revision" ? "revisions" : "annotations",
+      );
+    },
+    onApplyState: applyAppState,
+    onStatus: setStatus,
+  };
+  const editorActionsRef = useRef(editorActionsImplementation);
+  editorActionsRef.current = editorActionsImplementation;
+  const editorActions = useMemo(() => {
+    const keys = Object.keys(editorActionsRef.current) as Array<keyof typeof editorActionsRef.current>;
+    return Object.fromEntries(keys.map((key) => [key, (...args: unknown[]) => (editorActionsRef.current[key] as (...args: unknown[]) => unknown)(...args)])) as typeof editorActionsRef.current;
+  }, []);
+
+  const chapterActionsImplementation = {
+    onSelect: (id: string, line?: number) => void selectChapter(id, line),
+    onCreate: () => void createChapter(),
+    onDelete: (id: string) => void deleteChapter(id),
+    onDragStart: (id: string) => setDraggingChapterId(id),
+    onDragEnd: () => setDraggingChapterId(null),
+    onDropToVolume: (volume: string) => void moveDraggingChapter(volume),
+    onDropOnChapter: (chapter: Parameters<NonNullable<Parameters<typeof ChapterTree>[0]["onDropOnChapter"]>>[0]) => void moveDraggingChapter(chapter.volume || "未分卷", chapter.id),
+    onImportToVolume: (volume: string) => void importDocument(volume),
+    onAdjustLevel: (chapterId: string, line: number, level: number, delta: number) => void adjustOutlineLevel(chapterId, line, level, delta),
+  };
+  const chapterActionsRef = useRef(chapterActionsImplementation);
+  chapterActionsRef.current = chapterActionsImplementation;
+  const chapterActions = useMemo(() => {
+    const keys = Object.keys(chapterActionsRef.current) as Array<keyof typeof chapterActionsRef.current>;
+    return Object.fromEntries(keys.map((key) => [key, (...args: unknown[]) => (chapterActionsRef.current[key] as (...args: unknown[]) => unknown)(...args)])) as typeof chapterActionsRef.current;
+  }, []);
+
+  const openProgressTool = (tool: "mindmap" | "network" | "grid") => {
+    setProgressOpenMode(tool);
+    setProgressOpenRequest((value) => value + 1);
+    void changeView("analysis");
+  };
 
   const applyTopBarLayout = (nextLayout: TopBarLayout) => {
     if (nextLayout === "writing") {
@@ -268,19 +327,7 @@ export default function App() {
               projectPath={state.projectPath}
               chapters={state.chapters}
               selectedId={selectedChapter?.id ?? ""}
-              onSelect={(id, line) => void selectChapter(id, line)}
-              onCreate={() => void createChapter()}
-              onDelete={(id) => void deleteChapter(id)}
-              onDragStart={setDraggingChapterId}
-              onDragEnd={() => setDraggingChapterId(null)}
-              onDropToVolume={(volume) => void moveDraggingChapter(volume)}
-              onDropOnChapter={(chapter) =>
-                void moveDraggingChapter(chapter.volume || "未分卷", chapter.id)
-              }
-              onImportToVolume={(volume) => void importDocument(volume)}
-              onAdjustLevel={(chapterId, line, level, delta) =>
-                void adjustOutlineLevel(chapterId, line, level, delta)
-              }
+              {...chapterActions}
             />
             <div className="project-path" title={state.projectPath}>
               {state.projectPath}
@@ -316,34 +363,7 @@ export default function App() {
               fontSize={state.config.ui.fontSize}
               lineHeight={state.config.ui.lineHeight}
               stores={stores}
-              onTitleChange={setChapterTitle}
-              onVolumeChange={setChapterVolume}
-              onContentChange={setChapterContent}
-              onDirty={() => setDirty(true)}
-              onTogglePreview={() => setPreview((value) => !value)}
-              onToggleFindReplace={() => setShowFindReplace((value) => !value)}
-              onToggleFocus={() => setFocusMode((value) => !value)}
-              onFindTextChange={setFindText}
-              onReplaceTextChange={setReplaceText}
-              onFindNext={findNextInChapter}
-              onReplaceAll={replaceAllInChapter}
-              onOpenOriginal={openOriginalDocument}
-              onRefreshFromOriginal={() => void refreshChapterFromOriginal()}
-              onDiscardDraft={(draft) => void discardRecoveryDraft(draft)}
-              onRestoreDraft={restoreRecoveryDraft}
-              onCaptureSelection={captureSelection}
-              onAskSelectionMenu={openAskSelectionMenu}
-              onRichAskSelectionMenu={openRichAskSelectionMenu}
-              onEditorReady={handleRichEditorReady}
-              onOpenReview={(review) => {
-                setSelectedText(review.quote);
-                void openStoryCenter(
-                  "workspace",
-                  review.kind === "revision" ? "revisions" : "annotations",
-                );
-              }}
-              onApplyState={applyAppState}
-              onStatus={setStatus}
+              {...editorActions}
             />
           )}
 
@@ -375,7 +395,9 @@ export default function App() {
 
           {view === "knowledge" && (
             <KnowledgeOrganizer
+              key={state.projectPath}
               state={state}
+              onRegisterSave={registerPageSave}
               onApplyState={applyAppState}
               onStatus={setStatus}
             />
@@ -387,6 +409,8 @@ export default function App() {
               state={state}
               onRegisterSave={registerPageSave}
               networkOpenRequest={networkOpenRequest}
+              progressOpenRequest={progressOpenRequest}
+              progressOpenMode={progressOpenMode}
               selectedChapterId={selectedChapter?.id || ""}
               onSelectChapter={(chapterId) => void selectChapter(chapterId)}
               onOpenSource={(result) => {
@@ -424,15 +448,9 @@ export default function App() {
         {!focusMode && (
           <ChatPanel
             state={state}
+            stores={stores}
             selectedChapterId={selectedChapter?.id || ""}
-            messages={chatMessages}
-            sessions={chatSessions}
-            activeSessionId={activeChatSessionId}
-            projectMemory={aiProjectMemory}
-            retrievalMode={chatRetrievalMode}
             selectedText={selectedText}
-            generating={Boolean(activeAiRequestId)}
-            progress={aiProgress}
             onRetrievalModeChange={updateChatRetrievalMode}
             onSend={(question, mode) =>
               void sendChat(question, selectedText, mode)
@@ -449,7 +467,6 @@ export default function App() {
               void sendChat(
                 question,
                 question.includes("当前章节") ? chapterContent : selectedText,
-                chatRetrievalMode,
               )
             }
             onStatus={setStatus}
@@ -513,6 +530,10 @@ export default function App() {
           setShowQuickPanel(false);
           void changeView(nextView);
         }}
+        onOpenProgress={(tool) => {
+          setShowQuickPanel(false);
+          openProgressTool(tool);
+        }}
         onImportDocument={() => {
           setShowQuickPanel(false);
           void importDocument();
@@ -570,6 +591,7 @@ export default function App() {
           setShowTaskCenter(false);
           void openStoryCenter();
         }}
+        onBeforeDisableMindMap={() => saveCurrentPage()}
       />
     </div>
   );

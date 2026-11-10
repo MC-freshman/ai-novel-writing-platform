@@ -11,7 +11,7 @@ const {
   path,
   releasePrivacy,
   state,
-} = require("../dependencies.cjs");
+} = require("../domain-dependencies/application.cjs");
 
 function registerDomain() {
   registerIpcHandler("app:get-state", async () => {

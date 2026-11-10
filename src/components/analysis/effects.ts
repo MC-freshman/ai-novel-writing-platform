@@ -18,6 +18,7 @@ export function useAnalysisEffects(
     | "materials"
     | "networkOpenRequest"
     | "networkOpenRequestRef"
+    | "progressOpenRequest"
     | "query"
     | "relationCategoryFilter"
     | "relationTypes"
@@ -74,6 +75,7 @@ export function useAnalysisEffects(
     materials,
     networkOpenRequest,
     networkOpenRequestRef,
+    progressOpenRequest,
     query,
     relationCategoryFilter,
     relationTypes,
@@ -116,8 +118,8 @@ export function useAnalysisEffects(
     worldMapNodes,
   } = context;
   useEffect(() => {
-    if (networkOpenRequest) setTab("progress");
-  }, [networkOpenRequest, setTab]);
+    if (networkOpenRequest || progressOpenRequest) setTab("progress");
+  }, [networkOpenRequest, progressOpenRequest, setTab]);
 
   useEffect(() => {
     let cancelled = false;

@@ -3,6 +3,7 @@ const path = require("node:path");
 const { fileURLToPath, pathToFileURL } = require("node:url");
 const AdmZip = require("adm-zip");
 const { sha256, writeFileAtomic } = require("./project-storage.cjs");
+const { ensureDir, loadConfigUnlocked } = require("./project-files.cjs");
 const exchangeSecurity = require("./project-exchange-security.cjs");
 
 const ARCHIVE_LIMITS = { compressed: 100 * 1024 * 1024, expanded: 500 * 1024 * 1024, entry: 64 * 1024 * 1024, entries: 10000, ratio: 1000 };
@@ -94,6 +95,17 @@ function redactSecrets(value) {
   return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, /^(apiKey|embeddingApiKey|password|authorization|accessToken|refreshToken|secret|credentialError|__.*Secret)$/i.test(key) ? "" : redactSecrets(item)]));
 }
 
+async function createBackupArchive(projectPath, targetFile = "") {
+  await ensureDir(path.join(projectPath, "backups"));
+  const config = await loadConfigUnlocked(projectPath);
+  const stamp = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
+  const filePath = targetFile || path.join(projectPath, "backups", `backup_${stamp}.zip`);
+  const zip = await buildBackupZip(projectPath, config.title);
+  await writeFileAtomic(filePath, zip.toBuffer());
+  return filePath;
+}
+
+
 async function buildBackupZip(projectPath, title) {
   const zip = new AdmZip();
   const prefix = String(title || "NovelProject").replace(/[\\/:*?"<>|]/g, "_");
@@ -119,4 +131,4 @@ async function buildBackupZip(projectPath, title) {
   return zip;
 }
 
-module.exports = { ARCHIVE_LIMITS, buildBackupZip, importExchangeAssets, portableValue, readExchangeArchive, redactSecrets, remapAssetValue, validateExchangeZip };
+module.exports = { ARCHIVE_LIMITS, buildBackupZip, createBackupArchive, importExchangeAssets, portableValue, readExchangeArchive, redactSecrets, remapAssetValue, validateExchangeZip };

@@ -10,7 +10,7 @@ import type { AnalysisTab } from "../../types";
 
 const ANALYSIS_TABS: { key: AnalysisTab; label: string; Icon: typeof LayoutGrid }[] =
   [
-    { key: "progress", label: "进度", Icon: LayoutGrid },
+    { key: "progress", label: "规划与进度", Icon: LayoutGrid },
     { key: "search", label: "全局搜索", Icon: Search },
     { key: "timeline", label: "时间线", Icon: ListTree },
     { key: "consistency", label: "一致性", Icon: RefreshCcw },

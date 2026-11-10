@@ -3,19 +3,18 @@
 
 const storyState = require("./story-state.cjs");
 const creativeWorkspace = require("./creative-workspace.cjs");
-const retrievalPlanner = require("./retrieval-planner.cjs");
 const novelAgent = require("./novel-agent.cjs");
 const { MAX_RETRIEVAL_TOP_K, STRUCTURING_CONTEXT_CHAR_BUDGET } = require("./constants.cjs");
 require("./runtime-state.cjs");
 const __dep0 = require("./project-files.cjs");
-const __dep1 = require("./project-config.cjs");
 const __dep2 = require("./knowledge-index.cjs");
 const __dep3 = require("./retrieval-pipeline.cjs");
+const agentContext = require("./agent-context.cjs");
 const __dep4 = require("./ai-generate.cjs");
 const __dep5 = require("./analysis-tools.cjs");
 const __dep6 = require("./project-content.cjs");
 const __dep7 = require("./task-runtime.cjs");
-const __dep8 = require("./project-ops.cjs");
+const projectState = require("./project-state.cjs");
 const fs = require("node:fs/promises");
 
 function nowIso(...args) { return __dep0.nowIso.apply(null, args); }
@@ -32,7 +31,6 @@ function stableHash(...args) { return __dep0.stableHash(...args); }
 function loadCharacters(...args) { return __dep0.loadCharacters(...args); }
 function loadWorldDocs(...args) { return __dep0.loadWorldDocs(...args); }
 function getKnowledgeRole(...args) { return __dep0.getKnowledgeRole(...args); }
-function inspectProjectHealth(...args) { return __dep1.inspectProjectHealth(...args); }
 function loadKnowledgeSummaries(...args) { return __dep2.loadKnowledgeSummaries(...args); }
 function searchRelevantChunks(...args) { return __dep2.searchRelevantChunks(...args); }
 function forceIncludeSourceChunks(...args) { return __dep3.forceIncludeSourceChunks(...args); }
@@ -44,81 +42,16 @@ function buildCreativeAdvice(...args) { return __dep4.buildCreativeAdvice(...arg
 function loadAnalysisState(...args) { return __dep5.loadAnalysisState(...args); }
 function saveChapterContent(...args) { return __dep6.saveChapterContent(...args); }
 function getProjectTaskCenter(...args) { return __dep7.getProjectTaskCenter(...args); }
-function loadConfig(...args) { return __dep8.loadConfig(...args); }
-function buildAppState(...args) { return __dep8.buildAppState(...args); }
+function loadConfig(...args) { return __dep0.loadConfigUnlocked(...args); }
+function buildAppState(...args) { return projectState.buildAppStateUnlocked(...args); }
 
-async function collectCreativeAgentToolReport(projectPath, ordered, selectedIndex, currentText, contextIds = []) {
-  const characters = await loadCharacters(projectPath);
-  const worldDocs = await loadWorldDocs(projectPath);
-  const matchedCharacters = characters.filter((card) => card.name && currentText.includes(card.name)).slice(0, 20);
-  const matchedWorld = worldDocs.filter((doc) => doc.title && currentText.includes(doc.title)).slice(0, 20);
-  const earlierChapters = ordered.slice(0, selectedIndex + 1);
-  const earlierTexts = await mapWithConcurrency(earlierChapters, 6, async (chapter) => ({
-    chapter,
-    text: contentToPlainText(await fs.readFile(getChapterPath(projectPath, chapter), "utf8").catch(() => "")),
-  }));
-  const lastAppearances = [];
-  for (const card of matchedCharacters) {
-    for (let index = earlierTexts.length - 1; index >= 0; index -= 1) {
-      if (!earlierTexts[index].text.includes(card.name)) continue;
-      lastAppearances.push(`${card.name}：${earlierTexts[index].chapter.title}`);
-      break;
-    }
-  }
-  const analysis = await loadAnalysisState(projectPath);
-  const unresolvedIssues = (analysis.consistency?.issues || []).filter((item) => !["已修复", "忽略"].includes(item.status)).slice(0, 12);
-  const timelineCount = Array.isArray(analysis.timeline?.events) ? analysis.timeline.events.length : 0;
-  const summaries = await loadKnowledgeSummaries(projectPath);
-  const health = await inspectProjectHealth(projectPath);
-  const storyContext = await storyState.getAgentContext(projectPath, ordered[selectedIndex]?.id || "", matchedCharacters.map((item) => item.name), contextIds);
-  const selectedIds = new Set((contextIds || []).map(String));
-  const contextRefs = selectedIds.size
-    ? [
-        ...storyContext.facts.filter((item) => selectedIds.has(item.id)).flatMap((item) => item.evidence || []),
-        ...storyContext.characterStates.filter((item) => selectedIds.has(item.id) || selectedIds.has(item.characterId)).flatMap((item) => item.evidence || []),
-        ...storyContext.foreshadows.filter((item) => selectedIds.has(item.id)).flatMap((item) => item.plantedAt || []),
-      ].filter((item, index, array) => item?.chapterId && array.findIndex((candidate) => candidate.chapterId === item.chapterId && candidate.quote === item.quote) === index).slice(0, 20)
-    : [];
-  const foreshadowCandidates = [];
-  for (const item of earlierTexts) {
-    if (/(伏笔|线索|预兆|异常|秘密|谜团)/.test(item.text)) foreshadowCandidates.push(item.chapter.title);
-  }
-  const tools = [
-    { name: "当前与相邻章节", detail: `${ordered[Math.max(0, selectedIndex - 1)]?.title || "无"} / ${ordered[selectedIndex]?.title || "无"} / ${ordered[selectedIndex + 1]?.title || "无"}` },
-    { name: "角色最近出场", detail: lastAppearances.join("；") || "当前章节未命中已有角色卡" },
-    { name: "关联世界观", detail: matchedWorld.map((item) => item.title).join("；") || "当前章节未直接命名世界观条目" },
-    { name: "伏笔候选", detail: foreshadowCandidates.slice(-12).join("；") || "暂未发现显式伏笔词" },
-    { name: "时间线与一致性", detail: `时间线 ${timelineCount} 个事件；待处理问题 ${unresolvedIssues.length} 个` },
-    { name: "知识库结构", detail: `文档摘要 ${summaries.sources.length}；分卷摘要 ${summaries.volumes.length}；全书摘要 ${summaries.book?.summary ? "可用" : "待建立"}` },
-    { name: "章节健康", detail: health.healthy ? "未发现高风险结构问题" : `发现 ${health.issues.filter((item) => item.severity === "高").length} 个高风险问题` },
-    { name: "剧情事实账本", detail: `当前章节可用事实 ${storyContext.facts.length} 条；角色状态 ${storyContext.characterStates.length} 条` },
-    { name: "待处理伏笔", detail: storyContext.foreshadows.slice(0, 8).map((item) => `${item.title}（${item.status}）`).join("；") || "暂无已记录的待处理伏笔" },
-  ];
-  const evidencePrompt = [
-    storyContext.facts.length ? `【已发生事实】\n${storyContext.facts.slice(0, 24).map((item) => `- ${item.subject}：${item.object}（${item.chapterTitle}）`).join("\n")}` : "",
-    storyContext.characterStates.length ? `【角色最新状态】\n${storyContext.characterStates.slice(0, 16).map((item) => `- ${item.characterName}：地点 ${item.location || "未记录"}；目标 ${(item.goals || []).join("、") || "未记录"}；知情 ${(item.knowledge || []).join("、") || "未记录"}`).join("\n")}` : "",
-    storyContext.foreshadows.length ? `【未回收伏笔】\n${storyContext.foreshadows.slice(0, 20).map((item) => `- ${item.title}：${item.description}（${item.status}）`).join("\n")}` : "",
-  ].filter(Boolean).join("\n\n");
-  const prompt = `${tools.map((item) => `- ${item.name}：${item.detail}`).join("\n")}${evidencePrompt ? `\n\n${evidencePrompt}` : ""}`;
-  return { tools, prompt, storyContext, contextRefs };
+function collectCreativeAgentToolReport(...args) {
+  return agentContext.collectCreativeAgentToolReport(...args);
 }
 
 
-async function buildAgentRetrievalContext(projectPath, config, query, chapterId, contextIds = []) {
-  const [characters, worldDocs, workspace] = await Promise.all([
-    loadCharacters(projectPath),
-    loadWorldDocs(projectPath),
-    creativeWorkspace.loadWorkspace(projectPath),
-  ]);
-  const subQueries = retrievalPlanner.decomposeQuery(query, "normal");
-  const signals = retrievalPlanner.extractQuerySignals(query, characters, worldDocs);
-  const anchorIds = [chapterId].filter(Boolean);
-  const adjacencyScores = retrievalPlanner.buildChapterAdjacency(config.chapters || [], anchorIds);
-  const storyContext = chapterId
-    ? await storyState.getAgentContext(projectPath, chapterId, signals.characters, contextIds).catch(() => ({}))
-    : {};
-  const storyScores = retrievalPlanner.buildStoryBoosts(workspace, storyContext, subQueries);
-  return { subQueries, signals, adjacencyScores, storyScores };
+function buildAgentRetrievalContext(...args) {
+  return agentContext.buildAgentRetrievalContext(...args);
 }
 
 

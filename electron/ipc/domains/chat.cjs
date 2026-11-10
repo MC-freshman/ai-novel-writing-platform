@@ -14,7 +14,7 @@ const {
   saveAnalysisState,
   sendRendererEvent,
   state,
-} = require("../dependencies.cjs");
+} = require("../domain-dependencies/chat.cjs");
 
 function registerDomain() {
   registerIpcHandler("ai:ask", async (_event, payload) => {

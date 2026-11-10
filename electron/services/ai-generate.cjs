@@ -8,8 +8,8 @@ const __dep0 = require("./project-files.cjs");
 const __dep1 = require("./credentials.cjs");
 const __dep2 = require("./knowledge-index.cjs");
 const __dep3 = require("./retrieval-pipeline.cjs");
-const __dep4 = require("./creative-agent.cjs");
-const __dep5 = require("./project-ops.cjs");
+const agentContext = require("./agent-context.cjs");
+const projectState = require("./project-state.cjs");
 const fs = require("node:fs/promises");
 
 function nowIso(...args) { return __dep0.nowIso.apply(null, args); }
@@ -39,10 +39,10 @@ function fetchJsonWithDiagnostics(...args) { return __dep3.fetchJsonWithDiagnost
 function fetchOpenAiCompatibleStream(...args) { return __dep3.fetchOpenAiCompatibleStream(...args); }
 function truncateForPrompt(...args) { return __dep3.truncateForPrompt(...args); }
 function forceIncludeSourceChunks(...args) { return __dep3.forceIncludeSourceChunks(...args); }
-function collectCreativeAgentToolReport(...args) { return __dep4.collectCreativeAgentToolReport(...args); }
-function buildAgentRetrievalContext(...args) { return __dep4.buildAgentRetrievalContext(...args); }
-function loadConfig(...args) { return __dep5.loadConfig(...args); }
-function buildAppState(...args) { return __dep5.buildAppState(...args); }
+function collectCreativeAgentToolReport(...args) { return agentContext.collectCreativeAgentToolReport(...args); }
+function buildAgentRetrievalContext(...args) { return agentContext.buildAgentRetrievalContext(...args); }
+function loadConfig(...args) { return __dep0.loadConfigUnlocked(...args); }
+function buildAppState(...args) { return projectState.buildAppStateUnlocked(...args); }
 
 async function callChatApi(config, systemPrompt, question, history = [], options = {}) {
   const api = config.api || {};

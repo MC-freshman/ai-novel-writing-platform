@@ -14,16 +14,11 @@ import type { AppContext } from "./context";
 export function useAppEffects(
   context: Pick<
     AppContext,
-    | "activeChatSessionId"
-    | "aiProjectMemory"
     | "applyAppState"
     | "chapterContent"
     | "chapterRevision"
     | "chapterTitle"
     | "chapterVolume"
-    | "chatLoaded"
-    | "chatMessages"
-    | "chatRetrievalMode"
     | "closingRef"
     | "contextMenu"
     | "createProject"
@@ -78,16 +73,11 @@ export function useAppEffects(
   >,
 ) {
   const {
-    activeChatSessionId,
-    aiProjectMemory,
     applyAppState,
     chapterContent,
     chapterRevision,
     chapterTitle,
     chapterVolume,
-    chatLoaded,
-    chatMessages,
-    chatRetrievalMode,
     closingRef,
     contextMenu,
     createProject,
@@ -448,50 +438,60 @@ export function useAppEffects(
   }, [setAiProgress, setChatMessages, stores.chat.store]);
 
   useEffect(() => {
-    if (!chatLoaded || !activeChatSessionId) return;
-    const epoch = stores.project.store.getState().projectEpoch;
-    const timer = window.setTimeout(() => {
-      if (!isCurrentEpoch(stores, epoch)) return;
-      const now = new Date().toISOString();
-      setChatSessions((current) => {
+    let timer: number | null = null;
+    const schedule = () => {
+      const chat = stores.chat.store.getState();
+      if (!chat.chatLoaded || !chat.activeChatSessionId) return;
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        timer = null;
+        const current = stores.chat.store.getState();
+        if (!current.chatLoaded || !current.activeChatSessionId) return;
+        const epoch = stores.project.store.getState().projectEpoch;
+        if (!isCurrentEpoch(stores, epoch)) return;
         const active =
-          current.find((session) => session.id === activeChatSessionId) ||
-          current[0];
-        if (!active) return current;
+          current.chatSessions.find((session) => session.id === current.activeChatSessionId) ||
+          current.chatSessions[0];
+        if (!active) return;
         const nextSession = {
           ...active,
-          title: titleFromMessages(chatMessages, active.title || "新会话"),
-          messages: compactChatMessages(chatMessages),
-          updatedAt: now,
+          title: titleFromMessages(current.chatMessages, active.title || "新会话"),
+          messages: compactChatMessages(current.chatMessages),
+          updatedAt: new Date().toISOString(),
         };
         const next = keepRecentChatSessions(
           [
             nextSession,
-            ...current.filter((session) => session.id !== active.id),
+            ...current.chatSessions.filter((session) => session.id !== active.id),
           ],
           active.id,
         );
+        stores.chat.setters.chatSessions(next);
         void window.novelAPI
           .saveAnalysisState({
             chatSessions: next,
             activeChatSessionId: active.id,
-            aiProjectMemory,
-            chatRetrievalMode,
+            aiProjectMemory: current.aiProjectMemory,
+            chatRetrievalMode: current.chatRetrievalMode,
           })
           .catch(() => null);
-        return next;
-      });
-    }, 900);
-    return () => window.clearTimeout(timer);
-  }, [
-    activeChatSessionId,
-    aiProjectMemory,
-    chatLoaded,
-    chatMessages,
-    chatRetrievalMode,
-    setChatSessions,
-    stores,
-  ]);
+      }, 900);
+    };
+    const unsubscribe = stores.chat.store.subscribe((current, previous) => {
+      if (
+        current.chatLoaded !== previous.chatLoaded ||
+        current.activeChatSessionId !== previous.activeChatSessionId ||
+        current.chatMessages !== previous.chatMessages ||
+        current.aiProjectMemory !== previous.aiProjectMemory ||
+        current.chatRetrievalMode !== previous.chatRetrievalMode
+      ) schedule();
+    });
+    schedule();
+    return () => {
+      unsubscribe();
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [stores]);
 
   useEffect(() => {
     return window.novelAPI.onAppCloseRequested(() => {

@@ -4,7 +4,7 @@
 
 A Windows desktop application for long-form fiction. Keep manuscripts, outlines, characters, worldbuilding, progress, and AI assistance in one local project, with a quiet writing workspace and tools for checking story continuity.
 
-**当前版本 / Current release: 0.3.9 · Windows x64**
+**当前版本 / Current release: 0.4.0 · Windows x64**
 
 软件界面目前使用中文；本 README 提供完整的中文和英文操作说明，英文部分保留实际中文按钮名称，方便对照界面。
 
@@ -26,12 +26,12 @@ AI 功能用于检索相关资料、讨论情节、生成规划和提出修订�
 
 ### 2. 下载、安装与升级
 
-在 [0.3.9 发布页](https://github.com/MC-freshman/ai-novel-writing-platform/releases/tag/v0.3.9) 下载适合自己的文件。下面的说明已经包含安装和升级步骤，不需要另找教程。
+在 [0.4.0 发布页](https://github.com/MC-freshman/ai-novel-writing-platform/releases/tag/v0.4.0) 下载适合自己的文件。下面的说明已经包含安装和升级步骤，不需要另找教程。
 
 | 文件 | 用途 | 如何使用 |
 | --- | --- | --- |
-| [AI-Novel-Writing-Platform-Setup-0.3.9-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.3.9/AI-Novel-Writing-Platform-Setup-0.3.9-x64.exe) | Windows 64 位安装版 | 运行安装向导，选择安装位置，之后从桌面或开始菜单打开。适合日常固定使用。 |
-| [AI-Novel-Writing-Platform-Portable-0.3.9-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.3.9/AI-Novel-Writing-Platform-Portable-0.3.9-x64.exe) | Windows 64 位便携版 | 下载后直接运行，程序包含所需运行环境，无需安装 Node.js。项目数据仍保存在独立项目目录。 |
+| [AI-Novel-Writing-Platform-Setup-0.4.0-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.4.0/AI-Novel-Writing-Platform-Setup-0.4.0-x64.exe) | Windows 64 位安装版 | 运行安装向导，选择安装位置，之后从桌面或开始菜单打开。适合日常固定使用。 |
+| [AI-Novel-Writing-Platform-Portable-0.4.0-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.4.0/AI-Novel-Writing-Platform-Portable-0.4.0-x64.exe) | Windows 64 位便携版 | 下载后直接运行，程序包含所需运行环境，无需安装 Node.js。项目数据仍保存在独立项目目录。 |
 | SHA256SUMS.txt | 文件校验 | 与程序一起下载，用 PowerShell 的 `Get-FileHash -Algorithm SHA256` 对照其中的哈希值。 |
 | latest.yml、`.blockmap` | 发布更新元数据 | 普通使用者不需要手动打开；它们用于记录发布包和更新信息，**但请勿从发布目录删除：校验和表依赖它们**。 |
 
@@ -48,9 +48,9 @@ AI 功能用于检索相关资料、讨论情节、生成规划和提出修订�
 
 1. 在旧版中保存当前章节及正在编辑的角色、世界观或小说统筹网。
 2. 使用顶部“更多 → 备份项目”导出备份，保留原项目目录。
-3. 关闭旧版，再运行 0.3.9 安装程序或新的便携程序。
+3. 关闭旧版，再运行 0.4.0 安装程序或新的便携程序。
 4. 在新版中点击“打开”，选择原来的小说项目目录。无需把章节复制进软件安装目录。
-5. 升级后可继续使用既有正文、资料、进度和小说统筹网。若界面仍显示旧样式，确认启动的是新的 0.3.9 文件，而不是旧快捷方式。
+5. 升级后可继续使用既有正文、资料、进度和小说统筹网。若界面仍显示旧样式，确认启动的是新的 0.4.0 文件，而不是旧快捷方式。
 
 ### 3. 五分钟开始写作
 
@@ -172,7 +172,7 @@ AI 功能用于检索相关资料、讨论情节、生成规划和提出修订�
 
 **打开后不是我的小说。** 可能打开了默认项目。点击顶部“打开”，选择保存原小说的项目目录，查看左侧底部路径确认位置。
 
-**升级后界面没变。** 检查是否仍在运行旧程序或旧快捷方式。保存并关闭旧版，再打开 0.3.9 的安装版或便携版。
+**升级后界面没变。** 检查是否仍在运行旧程序或旧快捷方式。保存并关闭旧版，再打开 0.4.0 的安装版或便携版。
 
 **想在专注模式里查看任务。** 底部仍显示当前章进度条，点击箭头展开任务说明。可勾选任务、切换状态；`Esc` 返回普通布局。
 
@@ -182,15 +182,17 @@ AI 功能用于检索相关资料、讨论情节、生成规划和提出修订�
 
 **保存提示冲突。** 当前输入可能仍在恢复草稿里。先保留或导出草稿，重新读取最新内容，再对照历史版本；不要通过删除项目文件来绕过保护。
 
-### 11. 0.3.9 本次更新与验证
+### 11. 0.4.0 本次更新与验证
 
-0.3.9 在 0.3.8 的存储恢复、Zustand 与样式拆分基础上，按领域拆分 App 控制逻辑、分析页面、共享类型、IPC 和分析/剧情/任务服务；补充服务测试并修正并发剧情记录丢失。真实 Windows 安装、0.3.8 原位升级和卸载需以独立 runner 验收记录为准。物理断电、真实云端模型和代码签名仍需另行确认。合成检索基准覆盖 20 万片段、384 和 1024 维，具体条件见[容量实测](docs/检索容量实测_2026-10-11.md)。
+0.4.0 在 0.3.9 基础上完成服务依赖、状态订阅、导图模块和界面一致性的收口。
 
-本版延续 0.3.7 的写作界面：暖纸/自然绿与森林夜色、正文优先布局、清晰的专注入口、章节进度默认收起、可行动的 AI 示例，以及专注模式中的完整进度与任务操作。
+- **服务依赖**：删除共享 IPC 依赖桶，12 个 IPC 域改为逐域最小依赖；顶层服务循环从 17 条降为 0，并新增无环与逐域依赖门禁。
+- **状态订阅**：聊天消息、会话和 AI 进度改由 ChatPanel 按域订阅，编辑区和目录树使用稳定回调与 memo；流式回答期间编辑区渲染实测 0 次。
+- **导图模块**：内置导图改为注册表挂载，支持注销、重新挂载和卸载守卫；新增未注册模块构建启动验证，导图数据保留，进度网格等规划功能可用。
+- **界面**：规划页签统一为“规划与进度”，功能面板可直达导图、进度网格和统筹网；设置页按职责分组，接口说明折叠，保存失败聚焦错误提示；导图弹窗接入焦点围栏；主题令牌、弹窗外壳和反馈组件统一，导图与网格专属样式拆分。
+- **XMind 接入核验**：XMind 8（3.7.8）没有 CLI、COM 或可嵌入编辑 API；xmind-mcp 1.0.0（MIT）只提供文件级 MCP 工具和外部启动，XMind 8 XML 路径不保留样式、主题和图片。因此本版不把 XMind 作为平台内导图 UI 的替换实现；文件桥或外部打开仍为条件项。
 
-思维导图在本版完成「可编辑性」改造：任意两节点之间可建立关系线，文字与备注直接显示在连线上，支持撤销/重做、多选与框选、右键菜单、复制粘贴子树、节点自由摆放；XMind 8 的 relationships 与 styles.xml 可导入为可编辑关系线（绝对像素控制点不导入）；支持多个独立中心主题与从父主题断开成块。画布显示边界按实际内容动态计算，节点拖到边缘也不会截断连线。独立编辑窗口可调整尺寸、拖动并切换全屏；主界面工具栏折叠精简，导图列表支持搜索与折叠。
-
-最终验证（2026-11-10）：`npm run test:ui-visual` 与 `npm run test:ui-planning-boards` 在真实 Windows 桌面通过——视觉回归 `status: pass`（弹窗画布高度 502、无横向溢出），桌面验证 22 条断言全量通过；静态门禁 build / lint / check:quality / check:modules / check:services / scan:privacy / gen:preload --verify 全部 exit 0，全量回归 186 个服务单测 + 18/18 + 21/21 + 11/11 + UI 按钮审计 9 PASS。便携版与安装版均已重新生成并验证产物内容。测试使用合成资料，未调用用户的云端模型账户；界面走查不等于真人长期写作体验研究。
+验证（2026-11-10）：完整回归、191 项服务单测、33 项桌面回归、导图/网格 22 项、视觉回归和未注册模块构建启动均通过；生产依赖审计 0 漏洞；build、lint、typecheck、check:modules、check:services、check:quality、scan:privacy 通过。安装器原位升级与卸载仍以 GitHub Windows runner 的独立验收记录为准；程序未做 Authenticode 签名。
 
 ### 12. 开发与许可
 
@@ -243,12 +245,12 @@ AI tools retrieve relevant material, discuss plot ideas, prepare plans, and prop
 
 ### 2. Download, install, and upgrade
 
-Download the files from the [0.3.9 release](https://github.com/MC-freshman/ai-novel-writing-platform/releases/tag/v0.3.9). The installation and upgrade instructions are included below.
+Download the files from the [0.4.0 release](https://github.com/MC-freshman/ai-novel-writing-platform/releases/tag/v0.4.0). The installation and upgrade instructions are included below.
 
 | File | Purpose | How to use it |
 | --- | --- | --- |
-| [AI-Novel-Writing-Platform-Setup-0.3.9-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.3.9/AI-Novel-Writing-Platform-Setup-0.3.9-x64.exe) | Windows x64 installer | Run the wizard, choose an installation location, then launch from the desktop or Start menu. Suitable for regular use on one computer. |
-| [AI-Novel-Writing-Platform-Portable-0.3.9-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.3.9/AI-Novel-Writing-Platform-Portable-0.3.9-x64.exe) | Windows x64 portable application | Download and run it directly. The runtime is bundled; Node.js is not required. Your novel remains in a separate project directory. |
+| [AI-Novel-Writing-Platform-Setup-0.4.0-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.4.0/AI-Novel-Writing-Platform-Setup-0.4.0-x64.exe) | Windows x64 installer | Run the wizard, choose an installation location, then launch from the desktop or Start menu. Suitable for regular use on one computer. |
+| [AI-Novel-Writing-Platform-Portable-0.4.0-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.4.0/AI-Novel-Writing-Platform-Portable-0.4.0-x64.exe) | Windows x64 portable application | Download and run it directly. The runtime is bundled; Node.js is not required. Your novel remains in a separate project directory. |
 | SHA256SUMS.txt | Download verification | Download it alongside the application and compare its entries with PowerShell `Get-FileHash -Algorithm SHA256`. |
 | latest.yml and `.blockmap` | Release/update metadata | Ordinary users do not need to open these files manually. They describe the release artifacts and update information. **Do not delete them from the release directory: the checksum manifest depends on them.** |
 
@@ -265,7 +267,7 @@ This release provides Windows x64 applications. Real Electron interface and writ
 
 1. Save the current chapter and any character, worldbuilding, or planning-network edits in the old version.
 2. Use `更多 → 备份项目` (More → Back up project) and keep the original project directory.
-3. Close the old version, then run the 0.3.9 installer or the new portable executable.
+3. Close the old version, then run the 0.4.0 installer or the new portable executable.
 4. Click `打开` (Open) in the new version and select the existing novel directory. You do not need to copy chapters into the application's installation directory.
 5. Continue using your existing chapters, reference material, progress, and planning networks. If the old interface still appears, check that you launched the new file rather than an old shortcut.
 
@@ -393,7 +395,7 @@ The candidate scan limit and sent-excerpt limit are separate ceilings, not an in
 
 **The application opened an unfamiliar novel.** It may be the default project. Use `打开` to select your existing novel directory and check the path displayed at the bottom of the left panel.
 
-**The interface did not change after upgrading.** Check the executable and shortcut. Save and close the old application, then open the 0.3.9 installed or portable version.
+**The interface did not change after upgrading.** Check the executable and shortcut. Save and close the old application, then open the 0.4.0 installed or portable version.
 
 **I need tasks in focus mode.** The chapter progress strip remains at the bottom. Expand it to read tasks, mark completion, and change status. `Esc` returns to the normal layout.
 
@@ -403,15 +405,17 @@ The candidate scan limit and sent-excerpt limit are separate ceilings, not an in
 
 **Saving reports a conflict.** Current input may still be in a recovery draft. Preserve/export it, reload the latest content, and compare history. Do not delete project files to bypass the protection.
 
-### 11. Changes and validation in 0.3.9
+### 11. Changes and validation in 0.4.0
 
-This maintenance release adds restart recovery for multi-file transactions, moves App state into Zustand domains, splits App control logic, the analysis page, shared types, IPC and analysis/story/task services into domains, and strengthens service tests and quality gates. Crash tests use process termination; they do not certify physical power-loss recovery. Synthetic retrieval benchmarks cover up to 200,000 chunks at 384 and 1024 dimensions; see docs/检索容量实测_2026-10-11.md.
+0.4.0 closes the service-dependency, state-subscription, mind-map module and interface-consistency work started after 0.3.9.
 
-0.3.9 also includes the writing-interface changes since the public 0.3.7 release: warm paper/natural green and forest-night themes, a manuscript-first layout, a clearer focus entry, a collapsed-by-default chapter strip, and editable AI examples.
+- **Service dependencies:** the shared IPC dependency barrel was removed, all 12 IPC domains use per-domain imports, and top-level service cycles dropped from 17 to 0 with new boundary gates.
+- **State subscriptions:** chat messages, sessions and AI progress are subscribed by ChatPanel; the editor and chapter tree use stable callbacks and memoization. The editor rendered 0 times during a streaming answer in the automated check.
+- **Mind-map module:** the built-in module is registered through a registry and can be unregistered, restored, and guarded by a save barrier. A build with no registered module starts successfully, keeps map data, and leaves progress-grid planning available.
+- **Interface:** the planning tab is named `规划与进度`; the function panel links directly to mind maps, progress grid and story network; settings are grouped by responsibility with collapsible help and focused save errors; the mind-map modal has a focus trap; theme tokens, modal surfaces and feedback components are centralized, and mind-map/grid styles are separated.
+- **XMind assessment:** XMind 8 (3.7.8) has no CLI, COM, or embeddable editing API. xmind-mcp 1.0.0 (MIT) provides file-level MCP tools and external launch only; the XMind 8 XML path does not preserve styles, themes, or images. XMind is therefore not used as an in-app UI replacement in this release; a file bridge or external-open integration remains conditional.
 
-Mind maps gained full editability in this release: relations can be drawn between any two nodes, with the label and note rendered directly on the line; undo/redo, multi-select and box selection, context menus, subtree copy/paste and free node placement are available. XMind 8 relationships and styles.xml import as editable relations (absolute-pixel control points are not imported). Multiple independent centre topics are supported, and a subtree can be detached into its own block. Canvas bounds are computed from actual content, so dragging nodes to the edge no longer clips relations. The editor window is resizable, draggable and can toggle full screen; the main toolbar is compact and collapsible, and the map list supports search and folding.
-
-Final validation (2026-11-10): `npm run test:ui-visual` passed on a real Windows desktop (modal canvas height 502, no horizontal overflow) and `npm run test:ui-planning-boards` passed all 22 desktop assertions. Static gates (build, lint, check:quality, check:modules, check:services, scan:privacy, gen:preload --verify) all exited 0; the full regression suite ran 186 service tests plus 18/18, 21/21, 11/11 and a 9-PASS UI button audit. Both the portable and installer executables were rebuilt offline and their contents verified. Tests use synthetic material and do not call a user's remote model account; these checks are not a long-term study with real writers.
+Validation (2026-11-10): the full regression suite, 191 service tests, 33 desktop checks, 22 mind-map/grid checks, visual regression, and the no-module build startup all passed. Production dependency audit found 0 vulnerabilities; build, lint, typecheck, check:modules, check:services, check:quality, and scan:privacy passed. Installer in-place upgrade and uninstall still require the isolated GitHub Windows runner record. The executables are not Authenticode-signed.
 
 ### 12. Development and license
 

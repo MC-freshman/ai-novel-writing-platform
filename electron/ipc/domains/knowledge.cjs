@@ -13,7 +13,7 @@ const {
   repairMaintenance,
   saveMaterial,
   updateKnowledgeItems,
-} = require("../dependencies.cjs");
+} = require("../domain-dependencies/knowledge.cjs");
 
 function registerDomain() {
   registerIpcHandler("knowledge:list", async () => {

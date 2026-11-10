@@ -38,6 +38,8 @@ export interface UiConfig {
   autosaveMs: number;
   backupOnSave: boolean;
   recoveryEnabled: boolean;
+  /** 关闭后只停用导图界面，导图数据保留。 */
+  mindMapEnabled?: boolean;
 }
 
 export interface AgentConfig {

@@ -43,6 +43,16 @@ export function useAppBindings() {
     "networkOpenRequest",
   );
 
+  const [progressOpenRequest, setProgressOpenRequest] = useStoreField(
+    stores.navigation,
+    "progressOpenRequest",
+  );
+
+  const [progressOpenMode, setProgressOpenMode] = useStoreField(
+    stores.navigation,
+    "progressOpenMode",
+  );
+
   const [showSettings, setShowSettings] = useStoreField(
     stores.navigation,
     "showSettings",
@@ -102,39 +112,17 @@ export function useAppBindings() {
     "contextMenu",
   );
 
-  const [chatMessages, setChatMessages] = useStoreField(
-    stores.chat,
-    "chatMessages",
-  );
-
-  const [chatSessions, setChatSessions] = useStoreField(
-    stores.chat,
-    "chatSessions",
-  );
-
-  const [activeChatSessionId, setActiveChatSessionId] = useStoreField(
-    stores.chat,
-    "activeChatSessionId",
-  );
-
-  const [aiProjectMemory, setAiProjectMemory] = useStoreField(
-    stores.chat,
-    "aiProjectMemory",
-  );
-
-  const [chatRetrievalMode, setChatRetrievalMode] = useStoreField(
-    stores.chat,
-    "chatRetrievalMode",
-  );
-
-  const [chatLoaded, setChatLoaded] = useStoreField(stores.chat, "chatLoaded");
-
-  const [activeAiRequestId, setActiveAiRequestId] = useStoreField(
-    stores.chat,
-    "activeAiRequestId",
-  );
-
-  const [aiProgress, setAiProgress] = useStoreField(stores.chat, "aiProgress");
+  // 聊天状态由 ChatPanel 直接订阅；控制器只保留命令所需的稳定 setter。
+  const {
+    chatMessages: setChatMessages,
+    chatSessions: setChatSessions,
+    activeChatSessionId: setActiveChatSessionId,
+    aiProjectMemory: setAiProjectMemory,
+    chatRetrievalMode: setChatRetrievalMode,
+    chatLoaded: setChatLoaded,
+    activeAiRequestId: setActiveAiRequestId,
+    aiProgress: setAiProgress,
+  } = stores.chat.setters;
 
   const [draggingChapterId, setDraggingChapterId] = useStoreField(
     stores.tasks,
@@ -219,6 +207,10 @@ export function useAppBindings() {
     setView,
     networkOpenRequest,
     setNetworkOpenRequest,
+    progressOpenRequest,
+    setProgressOpenRequest,
+    progressOpenMode,
+    setProgressOpenMode,
     showSettings,
     setShowSettings,
     showQuickPanel,
@@ -245,21 +237,13 @@ export function useAppBindings() {
     setEditorReviews,
     contextMenu,
     setContextMenu,
-    chatMessages,
     setChatMessages,
-    chatSessions,
     setChatSessions,
-    activeChatSessionId,
     setActiveChatSessionId,
-    aiProjectMemory,
     setAiProjectMemory,
-    chatRetrievalMode,
     setChatRetrievalMode,
-    chatLoaded,
     setChatLoaded,
-    activeAiRequestId,
     setActiveAiRequestId,
-    aiProgress,
     setAiProgress,
     draggingChapterId,
     setDraggingChapterId,

@@ -185,7 +185,7 @@ async function main() {
   await until("!document.querySelector('.settings-modal')");
   report.checks.push("设置可打开，Esc 正常关闭弹窗");
   await click('.pane-tabs button[title="分析"]');
-  await cdp.evaluate("[...document.querySelectorAll('.analysis-tabs button')].find(b => b.textContent.trim() === '进度').click()");
+  await cdp.evaluate("[...document.querySelectorAll('.analysis-tabs button')].find(b => b.textContent.trim() === '规划与进度').click()");
   await until("document.querySelectorAll('.progress-cell').length >= 30");
   await click('button[title="切换主题"]');
   await until("document.documentElement.dataset.theme === 'dark'");

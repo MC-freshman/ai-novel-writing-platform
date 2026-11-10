@@ -433,7 +433,7 @@ async function main() {
     });
     if (!openedAnalysis.result?.value) throw new Error("没有找到分析入口。");
     await wait(450);
-    await cdp.call("Runtime.evaluate", { expression: `(() => { const button = [...document.querySelectorAll('.analysis-tabs button')].find((item) => item.textContent.trim() === '进度'); button?.click(); return Boolean(button); })()`, returnByValue: true });
+    await cdp.call("Runtime.evaluate", { expression: `(() => { const button = [...document.querySelectorAll('.analysis-tabs button')].find((item) => item.textContent.trim() === '规划与进度'); button?.click(); return Boolean(button); })()`, returnByValue: true });
     await wait(400);
     await cdp.call("Runtime.evaluate", { expression: `(() => { const button = [...document.querySelectorAll('.progress-workspace-modes button')].find((item) => item.textContent.trim() === '思维导图'); button?.click(); return Boolean(button); })()`, returnByValue: true });
     await wait(450);

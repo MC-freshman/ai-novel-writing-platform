@@ -1,7 +1,7 @@
 // 本文件源自P2主进程拆分；后续维护与行为修复见Git历史。
 "use strict";
 
-const { writeFileAtomic, withProjectTransaction } = require("./project-storage.cjs");
+const { withProjectTransaction } = require("./project-storage.cjs");
 const projectArchives = require("./project-archives.cjs");
 const __dep0 = require("./project-files.cjs");
 const __dep1 = require("./project-config.cjs");
@@ -9,9 +9,7 @@ const __dep2 = require("./knowledge-index.cjs");
 const __dep3 = require("./creative-agent.cjs");
 const __dep4 = require("./project-exchange.cjs");
 const __dep5 = require("./project-content.cjs");
-const path = require("node:path");
 
-function ensureDir(...args) { return __dep0.ensureDir(...args); }
 function loadConfigUnlocked(...args) { return __dep0.loadConfigUnlocked(...args); }
 function ensureProjectStructureUnlocked(...args) { return __dep1.ensureProjectStructureUnlocked(...args); }
 function saveConfigUnlocked(...args) { return __dep1.saveConfigUnlocked(...args); }
@@ -30,13 +28,7 @@ function buildAppStateUnlocked(...args) { return __dep5.buildAppStateUnlocked(..
 function restoreChapterVersionUnlocked(...args) { return __dep5.restoreChapterVersionUnlocked(...args); }
 
 async function createBackupUnlocked(projectPath, targetFile = "") {
-  await ensureDir(path.join(projectPath, "backups"));
-  const config = await loadConfig(projectPath);
-  const stamp = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
-  const filePath = targetFile || path.join(projectPath, "backups", `backup_${stamp}.zip`);
-  const zip = await projectArchives.buildBackupZip(projectPath, config.title);
-  await writeFileAtomic(filePath, zip.toBuffer());
-  return filePath;
+  return projectArchives.createBackupArchive(projectPath, targetFile);
 }
 
 
@@ -61,7 +53,10 @@ function updateKnowledgeItems(projectPath, ...args) {
 }
 
 function repairProjectHealth(projectPath, ...args) {
-  return withProjectTransaction(projectPath, () => repairProjectHealthUnlocked(projectPath, ...args));
+  return withProjectTransaction(projectPath, async () => {
+    const result = await repairProjectHealthUnlocked(projectPath, ...args);
+    return { ...result, state: await __dep5.buildAppStateUnlocked(projectPath) };
+  });
 }
 
 function importDocumentIntoProject(projectPath, ...args) {

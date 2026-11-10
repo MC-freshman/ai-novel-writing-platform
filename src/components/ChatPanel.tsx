@@ -1,22 +1,18 @@
 // Extracted from src/App.tsx by the P3 refactor (cut-paste, no logic changes).
 import { useEffect, useRef, useState } from "react";
 import { Activity, Bot, Copy, Leaf, Maximize2, Minimize2, MessageSquarePlus, Send, Sparkles, Square, Trash2, TriangleAlert } from "lucide-react";
-import type { AppState, ChatMessage, ChatSession, RetrievalMode, RetrievalDiagnostics } from "../types";
+import type { AppState, ChatMessage, RetrievalMode } from "../types";
+import type { AppStores } from "../stores/app-stores";
+import { useStoreField } from "../stores/use-app-stores";
 import { sourceLabel, formatDateTime, getErrorMessage } from "../lib/text-utils";
 import { QUICK_PROMPTS, RETRIEVAL_MODE_OPTIONS } from "../lib/chat-utils";
 import { SidebarCreativeAdvisor } from "./SidebarCreativeAdvisor";
 
 export function ChatPanel({
   state,
+  stores,
   selectedChapterId,
-  messages,
-  sessions,
-  activeSessionId,
-  projectMemory,
-  retrievalMode,
   selectedText,
-  generating,
-  progress,
   onSend,
   onRetryWithSources,
   onStop,
@@ -33,15 +29,9 @@ export function ChatPanel({
   onOpenStoryCenter,
 }: {
   state: AppState;
+  stores: AppStores;
   selectedChapterId: string;
-  messages: ChatMessage[];
-  sessions: ChatSession[];
-  activeSessionId: string;
-  projectMemory: string;
-  retrievalMode: RetrievalMode;
   selectedText: string;
-  generating: boolean;
-  progress: { phase: string; stopped?: boolean; streamedChars: number; retrieval?: RetrievalDiagnostics } | null;
   onSend: (question: string, retrievalMode: RetrievalMode) => void;
   onRetryWithSources: (question: string, sourceIds: string[], retrievalMode: RetrievalMode) => void;
   onStop: () => void;
@@ -57,6 +47,14 @@ export function ChatPanel({
   onToggleExpanded: () => void;
   onOpenStoryCenter: () => void;
 }) {
+  const [messages] = useStoreField(stores.chat, "chatMessages");
+  const [sessions] = useStoreField(stores.chat, "chatSessions");
+  const [activeSessionId] = useStoreField(stores.chat, "activeChatSessionId");
+  const [projectMemory] = useStoreField(stores.chat, "aiProjectMemory");
+  const [retrievalMode] = useStoreField(stores.chat, "chatRetrievalMode");
+  const [activeAiRequestId] = useStoreField(stores.chat, "activeAiRequestId");
+  const [progress] = useStoreField(stores.chat, "aiProgress");
+  const generating = Boolean(activeAiRequestId);
   const [input, setInput] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState("");
   const [assistantTab, setAssistantTab] = useState<"chat" | "advisor">("chat");

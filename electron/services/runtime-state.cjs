@@ -19,6 +19,7 @@ const state = {
   projectSessions: new Map(),
   credentialSecretsCache: new Map(),
   registeredIpcChannels: new Set(),
+  embeddingFallback: { active: false, message: "", at: "" },
 };
 
 function sendRendererEvent(channel, payload) {

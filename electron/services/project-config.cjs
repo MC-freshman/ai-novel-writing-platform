@@ -3,7 +3,7 @@
 
 const { app } = require("electron");
 const { existsSync } = require("node:fs");
-const { writeFileAtomic, writeProjectFiles } = require("./project-storage.cjs");
+const { writeFileAtomic, writeProjectFiles, withProjectTransaction } = require("./project-storage.cjs");
 const storyState = require("./story-state.cjs");
 const projectSnapshots = require("./project-snapshots.cjs");
 const creativeWorkspace = require("./creative-workspace.cjs");
@@ -14,8 +14,6 @@ const { DEFAULT_PROJECT_NAME, MAX_CHAT_TOKENS, MAX_RETRIEVAL_TOP_K, MAX_RETRIEVA
 const { state } = require("./runtime-state.cjs");
 const __dep0 = require("./project-files.cjs");
 const __dep1 = require("./credentials.cjs");
-const __dep2 = require("./project-content.cjs");
-const __dep3 = require("./project-ops.cjs");
 const path = require("node:path");
 const fs = require("node:fs/promises");
 
@@ -37,12 +35,7 @@ function getChapterVersionContentPath(...args) { return __dep0.getChapterVersion
 function listChapterVersions(...args) { return __dep0.listChapterVersions(...args); }
 function defaultConfig(...args) { return __dep0.defaultConfig(...args); }
 function runtimeSecret(...args) { return __dep1.runtimeSecret(...args); }
-function calculateTotalWords(...args) { return __dep2.calculateTotalWords(...args); }
-function ensureProjectStructure(...args) { return __dep3.ensureProjectStructure(...args); }
-function loadConfig(...args) { return __dep3.loadConfig(...args); }
-function saveConfig(...args) { return __dep3.saveConfig(...args); }
-function buildAppState(...args) { return __dep3.buildAppState(...args); }
-
+function calculateTotalWords(...args) { return __dep0.calculateTotalWords(...args); }
 async function ensureProjectStructureUnlocked(projectPath, title) {
   await ensureDir(projectPath);
   await ensureDir(path.join(projectPath, "chapters"));
@@ -147,7 +140,7 @@ function assertExpectedChapterRevision(expectedRevision, currentContent) {
 
 
 async function inspectProjectHealth(projectPath) {
-  const config = await loadConfig(projectPath);
+  const config = await __dep0.loadConfigUnlocked(projectPath);
   const issues = [];
   const idGroups = new Map();
   const fileGroups = new Map();
@@ -217,7 +210,7 @@ async function inspectProjectHealth(projectPath) {
 
 
 async function repairProjectHealthUnlocked(projectPath) {
-  const config = await loadConfig(projectPath);
+  const config = await __dep0.loadConfigUnlocked(projectPath);
   await repairSharedChapterFiles(projectPath, config);
   for (const chapter of config.chapters) {
     if (existsSync(getChapterPath(projectPath, chapter))) continue;
@@ -240,21 +233,44 @@ async function repairProjectHealthUnlocked(projectPath) {
   for (const chapterId of orphanChapterIds) await creativeWorkspace.removeChapterReferences(projectPath, chapterId);
   await projectMigrations.migrateProject(projectPath, { createSnapshot: (payload) => projectSnapshots.createSnapshot(projectPath, payload) });
   await calculateTotalWords(projectPath, config);
-  await saveConfig(projectPath, config);
-  return { health: await inspectProjectHealth(projectPath), state: await buildAppState(projectPath) };
+  await saveConfigUnlocked(projectPath, config);
+  return { health: await inspectProjectHealth(projectPath) };
+}
+
+
+let projectSwitchQueue = Promise.resolve();
+
+
+function runProjectSwitch(action) {
+  const operation = projectSwitchQueue.catch(() => null).then(action);
+  projectSwitchQueue = operation.then(() => undefined, () => undefined);
+  return operation;
 }
 
 
 async function activateProjectSession(projectPath) {
   const key = path.resolve(projectPath);
   if (state.projectSessions.has(key)) return state.projectSessions.get(key);
+  // Start the new session first so a failed switch leaves the old project usable.
+  const result = await operationJournal.startSession(projectPath, app.getVersion?.() || "");
   for (const [otherPath, session] of state.projectSessions) {
+    if (otherPath === key) continue;
     await operationJournal.endSession(otherPath, session.id).catch(() => null);
     state.projectSessions.delete(otherPath);
   }
-  const result = await operationJournal.startSession(projectPath, app.getVersion?.() || "");
   state.projectSessions.set(key, result.session);
   return result.session;
+}
+
+
+async function switchCurrentProject(projectPath, title) {
+  const target = path.resolve(projectPath);
+  return runProjectSwitch(async () => {
+    await ensureProjectStructureUnlocked(target, title);
+    await activateProjectSession(target);
+    state.currentProjectPath = target;
+    return target;
+  });
 }
 
 
@@ -284,10 +300,12 @@ async function withJournalOperation(projectPath, payload, action, summarize = (_
 
 
 async function ensureCurrentProject() {
-  if (!state.currentProjectPath) state.currentProjectPath = await getDefaultProjectPath();
-  await ensureProjectStructure(state.currentProjectPath);
-  await activateProjectSession(state.currentProjectPath);
-  return state.currentProjectPath;
+  const projectPath = state.currentProjectPath || (state.currentProjectPath = await getDefaultProjectPath());
+  const key = path.resolve(projectPath);
+  await withProjectTransaction(projectPath, () => ensureProjectStructureUnlocked(projectPath));
+  // A project switch may have started during the await; never activate a stale project.
+  if (path.resolve(state.currentProjectPath) === key) await activateProjectSession(projectPath);
+  return projectPath;
 }
 
 
@@ -301,6 +319,7 @@ const __moduleExports = {
   inspectProjectHealth,
   repairProjectHealthUnlocked,
   activateProjectSession,
+  switchCurrentProject,
   finishProjectSessions,
   withJournalOperation,
   ensureCurrentProject,

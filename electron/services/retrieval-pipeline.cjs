@@ -9,8 +9,11 @@ const retrievalPlanner = require("./retrieval-planner.cjs");
 const { MAX_RETRIEVAL_TOP_K, MAX_RETRIEVAL_SCAN_K, DEFAULT_RETRIEVAL_SCAN_K, CHAT_CONTEXT_MIN_CHUNKS, CHAT_CONTEXT_CHAR_BUDGET, CHAT_API_TIMEOUT_MS, CHAT_HISTORY_MESSAGE_MAX_CHARS, CHAT_HISTORY_TOTAL_MAX_CHARS, USER_QUESTION_SYSTEM_PREVIEW_CHARS, SELECTED_TEXT_PROMPT_MAX_CHARS } = require("./constants.cjs");
 const __dep0 = require("./project-files.cjs");
 const __dep1 = require("./knowledge-index.cjs");
-const __dep2 = require("./project-ops.cjs");
+const httpDiagnostics = require("./http-diagnostics.cjs");
 
+function safeEndpointLabel(...args) { return httpDiagnostics.safeEndpointLabel(...args); }
+function describeFetchError(...args) { return httpDiagnostics.describeFetchError(...args); }
+function fetchJsonWithDiagnostics(...args) { return httpDiagnostics.fetchJsonWithDiagnostics(...args); }
 function normalizeCategory(...args) { return __dep0.normalizeCategory(...args); }
 function clampNumber(...args) { return __dep0.clampNumber(...args); }
 function formatBytes(...args) { return __dep0.formatBytes(...args); }
@@ -24,7 +27,7 @@ function compactSearchText(...args) { return __dep1.compactSearchText(...args); 
 function lexicalRelevanceScore(...args) { return __dep1.lexicalRelevanceScore(...args); }
 function loadKnowledgeSummaries(...args) { return __dep1.loadKnowledgeSummaries(...args); }
 function searchRelevantChunks(...args) { return __dep1.searchRelevantChunks(...args); }
-function loadConfig(...args) { return __dep2.loadConfig(...args); }
+function loadConfig(...args) { return __dep0.loadConfigUnlocked(...args); }
 
 const RETRIEVAL_MODE_LABELS = {
   auto: "自动判断",
@@ -35,32 +38,6 @@ const RETRIEVAL_MODE_LABELS = {
   current: "当前文档",
   normal: "普通问答",
 };
-
-
-function safeEndpointLabel(url) {
-  try {
-    const parsed = new URL(url);
-    return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
-  } catch {
-    return String(url || "");
-  }
-}
-
-
-function describeFetchError(error) {
-  const parts = [];
-  if (error?.name) parts.push(error.name);
-  if (error?.message) parts.push(error.message);
-  const cause = error?.cause;
-  if (cause) {
-    const causeParts = [cause.code, cause.name, cause.message].filter(Boolean);
-    if (causeParts.length) parts.push(`底层原因：${causeParts.join(" / ")}`);
-    const networkParts = [cause.syscall, cause.address, cause.port].filter(Boolean);
-    if (networkParts.length) parts.push(`网络信息：${networkParts.join(" ")}`);
-  }
-  if (!parts.length) parts.push(String(error || "未知网络错误"));
-  return [...new Set(parts)].join("；");
-}
 
 
 function compactChatHistory(history = []) {
@@ -78,30 +55,6 @@ function compactChatHistory(history = []) {
     usedChars += content.length;
   }
   return compact.reverse();
-}
-
-
-async function fetchJsonWithDiagnostics(url, payload, headers, label, options = {}) {
-  const body = JSON.stringify(payload);
-  const bodyBytes = Buffer.byteLength(body, "utf8");
-  const timeoutMs = Math.max(0, Number(CHAT_API_TIMEOUT_MS) || 0);
-  const controller = timeoutMs > 0 ? new AbortController() : null;
-  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
-  try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers,
-      body,
-      signal: options.signal || controller?.signal,
-    });
-    return { response, bodyBytes };
-  } catch (error) {
-    const timeoutHint = error?.name === "AbortError" && timeoutMs > 0 ? `请求超过 ${Math.round(timeoutMs / 1000)} 秒未完成，已自动中断。` : "";
-    const sizeHint = bodyBytes > 1024 * 1024 ? "请求体超过 1MB，可能被本地代理、网关或安全软件中断。" : "如果问题很长，可减少引用片段上限或拆成几次提问。";
-    throw new Error(`${label}本地连接失败：${describeFetchError(error)}\n请求地址：${safeEndpointLabel(url)}\n请求体大小：${formatBytes(bodyBytes)}。${timeoutHint}${sizeHint}`, { cause: error });
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
 }
 
 

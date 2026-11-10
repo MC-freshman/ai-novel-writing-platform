@@ -4,11 +4,12 @@
 const windowsCredentials = require("./windows-credentials.cjs");
 const { CREDENTIAL_CHAT_REF, CREDENTIAL_EMBEDDING_REF } = require("./constants.cjs");
 const { state } = require("./runtime-state.cjs");
-const __dep0 = require("./project-files.cjs");
+const { writeJsonAtomic } = require("./project-storage.cjs");
 const path = require("node:path");
 
-function writeJson(...args) { return __dep0.writeJson(...args); }
-function getConfigPath(...args) { return __dep0.getConfigPath(...args); }
+function getConfigPath(projectPath) {
+  return path.join(projectPath, "novel.config.json");
+}
 
 function encodeSecret(value) {
   if (!value) return "";
@@ -64,7 +65,7 @@ async function loadCredentialSecrets(projectPath, config) {
         config.api.embeddingApiKey = CREDENTIAL_EMBEDDING_REF;
       }
       state.credentialSecretsCache.set(cacheKey, cached);
-      if (legacyChat || legacyEmbedding) await writeJson(getConfigPath(projectPath), config);
+      if (legacyChat || legacyEmbedding) await writeJsonAtomic(getConfigPath(projectPath), config);
     }
   } catch (error) {
     credentialError = error?.message || String(error);

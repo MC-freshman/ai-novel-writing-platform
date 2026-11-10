@@ -1,18 +1,28 @@
 // Extracted from src/App.tsx by the P3 refactor (cut-paste, no logic changes).
 import { useEffect, useRef } from "react";
 
-export function useDialogFocus(onClose: () => void) {
+export function useDialogFocus(
+  onClose: () => void,
+  enabled = true,
+  shouldCloseOnEscape?: (event: KeyboardEvent) => boolean,
+) {
   const dialogRef = useRef<HTMLElement | null>(null);
   const closeRef = useRef(onClose);
+  const escapeRef = useRef(shouldCloseOnEscape);
   useEffect(() => {
     closeRef.current = onClose;
   }, [onClose]);
   useEffect(() => {
+    escapeRef.current = shouldCloseOnEscape;
+  }, [shouldCloseOnEscape]);
+  useEffect(() => {
+    if (!enabled) return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const dialog = dialogRef.current;
     window.requestAnimationFrame(() => dialog?.focus());
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        if (escapeRef.current && !escapeRef.current(event)) return;
         event.preventDefault();
         closeRef.current();
         return;
@@ -41,6 +51,6 @@ export function useDialogFocus(onClose: () => void) {
       document.removeEventListener("keydown", onKeyDown);
       if (previous?.isConnected) previous.focus();
     };
-  }, []);
+  }, [enabled]);
   return dialogRef;
 }

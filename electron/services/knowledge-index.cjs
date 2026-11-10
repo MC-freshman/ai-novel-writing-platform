@@ -7,14 +7,14 @@ const creativeWorkspace = require("./creative-workspace.cjs");
 const retrievalPlanner = require("./retrieval-planner.cjs");
 const knowledgeFreshness = require("./knowledge-freshness.cjs");
 const { VECTOR_DIMENSIONS, CHUNK_SIZE, CHUNK_OVERLAP, MAX_RETRIEVAL_TOP_K, MAX_RETRIEVAL_SCAN_K, DEFAULT_RETRIEVAL_SCAN_K, CHAT_CONTEXT_CHAR_BUDGET, EMBEDDING_INDEX_CONCURRENCY } = require("./constants.cjs");
-const { sendRendererEvent } = require("./runtime-state.cjs");
+const { sendRendererEvent, state } = require("./runtime-state.cjs");
 const __dep0 = require("./project-files.cjs");
 const __dep1 = require("./credentials.cjs");
-const __dep2 = require("./retrieval-pipeline.cjs");
+const __dep2 = require("./http-diagnostics.cjs");
 const __dep3 = require("./analysis-tools.cjs");
-const __dep4 = require("./project-content.cjs");
 const __dep5 = require("./task-runtime.cjs");
-const __dep6 = require("./project-ops.cjs");
+const projectConfig = require("./project-config.cjs");
+const projectState = require("./project-state.cjs");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 
@@ -50,14 +50,14 @@ function runtimeSecret(...args) { return __dep1.runtimeSecret(...args); }
 function safeEndpointLabel(...args) { return __dep2.safeEndpointLabel(...args); }
 function fetchJsonWithDiagnostics(...args) { return __dep2.fetchJsonWithDiagnostics(...args); }
 function queryTokens(...args) { return __dep3.queryTokens(...args); }
-function calculateTotalWords(...args) { return __dep4.calculateTotalWords(...args); }
+function calculateTotalWords(...args) { return __dep0.calculateTotalWords(...args); }
 function getProjectTaskCenter(...args) { return __dep5.getProjectTaskCenter(...args); }
-function loadConfig(...args) { return __dep6.loadConfig(...args); }
-function saveConfig(...args) { return __dep6.saveConfig(...args); }
-function buildAppState(...args) { return __dep6.buildAppState(...args); }
-function indexSources(...args) { return __dep6.indexSources(...args); }
-function updateKnowledgeSummaries(...args) { return __dep6.updateKnowledgeSummaries(...args); }
-function removeSourceFromKnowledgeSummaries(...args) { return __dep6.removeSourceFromKnowledgeSummaries(...args); }
+function loadConfig(...args) { return __dep0.loadConfigUnlocked(...args); }
+function saveConfig(...args) { return projectConfig.saveConfigUnlocked(...args); }
+function buildAppState(...args) { return projectState.buildAppStateUnlocked(...args); }
+function indexSources(...args) { return indexSourcesUnlocked(...args); }
+function updateKnowledgeSummaries(...args) { return updateKnowledgeSummariesUnlocked(...args); }
+function removeSourceFromKnowledgeSummaries(...args) { return removeSourceFromKnowledgeSummariesUnlocked(...args); }
 
 function chapterToKnowledgeItem(chapter) {
   return {
@@ -488,22 +488,22 @@ async function getEmbedding(text, apiConfig, options = {}) {
   try {
     const remote = await remoteEmbedding(text, apiConfig, options);
     if (remote) {
-      embeddingFallback.active = false;
-      embeddingFallback.message = "";
+      state.embeddingFallback.active = false;
+      state.embeddingFallback.message = "";
       return { vector: remote, source: "api", identity: embeddingIdentity(apiConfig, "api"), warning: "" };
     }
   } catch (error) {
     if (options.signal?.aborted || error?.name === "AbortError") throw Object.assign(new Error("任务已停止"), { name: "AbortError" });
-    embeddingFallback.active = true;
-    embeddingFallback.message = String(error.message || error).slice(0, 400);
-    embeddingFallback.at = nowIso();
-    return { vector: localEmbedding(text), source: "local", identity: embeddingIdentity(apiConfig, "local"), warning: embeddingFallback.message };
+    state.embeddingFallback.active = true;
+    state.embeddingFallback.message = String(error.message || error).slice(0, 400);
+    state.embeddingFallback.at = nowIso();
+    return { vector: localEmbedding(text), source: "local", identity: embeddingIdentity(apiConfig, "local"), warning: state.embeddingFallback.message };
   }
   return { vector: localEmbedding(text), source: "local", identity: embeddingIdentity(apiConfig, "local"), warning: "" };
 }
 
 
-const embeddingFallback = { active: false, message: "", at: "" };
+const embeddingFallback = state.embeddingFallback;
 
 
 function embeddingIdentity(apiConfig = {}, source = "local") {

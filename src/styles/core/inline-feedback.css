@@ -1,0 +1,44 @@
+.inline-feedback {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel) 82%, var(--bg));
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.inline-feedback[data-tone="error"] {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 38%, var(--line));
+}
+
+.inline-feedback[data-tone="warning"] {
+  color: #9b671a;
+  border-color: color-mix(in srgb, #9b671a 34%, var(--line));
+}
+
+.inline-feedback span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.inline-feedback button {
+  margin-left: auto;
+  min-height: 26px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.knowledge-feedback,
+.knowledge-feedback + .inline-feedback {
+  flex: 0 0 100%;
+}
+
+.search-feedback {
+  margin-bottom: 8px;
+}

@@ -14,7 +14,7 @@ const {
   nowIso,
   saveAnalysisState,
   saveIssueStatuses,
-} = require("../dependencies.cjs");
+} = require("../domain-dependencies/analysis.cjs");
 
 function registerDomain() {
   registerIpcHandler("global:search", async (_event, payload) => {

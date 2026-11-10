@@ -5,7 +5,7 @@ export interface PageSaveHandle {
   protect: () => Promise<boolean>;
 }
 export type EntityDraftKind = "character" | "world" | "novel-network";
-export type PageSaveKind = EntityDraftKind | "mind-map" | "progress-grid";
+export type PageSaveKind = EntityDraftKind | "mind-map" | "progress-grid" | "knowledge";
 
 type Entity = { id?: string; name?: string; title?: string; category?: string };
 const entityKey = (value: Entity) => value.id || "new";

@@ -6,7 +6,7 @@ const {
   loadConfig,
   refreshLocalStoryState,
   storyState,
-} = require("../dependencies.cjs");
+} = require("../domain-dependencies/story.cjs");
 
 function registerDomain() {
   registerIpcHandler("story:get-overview", async (_event, payload) => {

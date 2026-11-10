@@ -6,7 +6,7 @@ const {
   getProjectTaskCenter,
   projectSnapshots,
   queueKnowledgeRebuildAfterRestore,
-} = require("../dependencies.cjs");
+} = require("../domain-dependencies/snapshots.cjs");
 
 function registerDomain() {
   registerIpcHandler("snapshots:list", async () => {

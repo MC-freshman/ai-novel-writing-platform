@@ -1,5 +1,5 @@
 // Extracted from src/App.tsx by the P3 refactor (cut-paste, no logic changes).
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, IndentDecrease, IndentIncrease, ListTree, Plus, Trash2, Upload } from "lucide-react";
 import type { Chapter } from "../types";
 
@@ -31,7 +31,7 @@ function flattenOutlineKeys(node: OutlineTreeNode): string[] {
   return [node.key, ...node.children.flatMap((child) => flattenOutlineKeys(child))];
 }
 
-export function ChapterTree({
+function ChapterTreeComponent({
   projectPath,
   chapters,
   selectedId,
@@ -325,3 +325,5 @@ export function ChapterTree({
     </div>
   );
 }
+
+export const ChapterTree = memo(ChapterTreeComponent);

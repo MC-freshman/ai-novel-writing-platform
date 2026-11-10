@@ -11,12 +11,10 @@ const projectMigrations = require("./project-migrations.cjs");
 const { DEFAULT_CHAT_BASE_URL, DEFAULT_EMBEDDING_BASE_URL, DEFAULT_PROJECT_NAME, DEFAULT_RETRIEVAL_SCAN_K, DEFAULT_CATEGORY } = require("./constants.cjs");
 const { state } = require("./runtime-state.cjs");
 const __dep0 = require("./credentials.cjs");
-const __dep1 = require("./project-ops.cjs");
 const path = require("node:path");
 const fs = require("node:fs/promises");
 
 function loadCredentialSecrets(...args) { return __dep0.loadCredentialSecrets(...args); }
-function loadConfig(...args) { return __dep1.loadConfig(...args); }
 
 function nowIso() {
   return new Date().toISOString();
@@ -636,7 +634,7 @@ async function listChapterVersions(projectPath, chapterId) {
 
 
 async function loadProjectSources(projectPath) {
-  const config = await loadConfig(projectPath);
+  const config = await loadConfigUnlocked(projectPath);
   const chapters = config.chapters.slice().sort((a, b) => a.order - b.order);
   const sources = [];
   for (const chapter of chapters) {
@@ -734,7 +732,7 @@ async function loadWorldDocs(projectPath) {
 
 
 async function loadChapterContent(projectPath, chapterId) {
-  const config = await loadConfig(projectPath);
+  const config = await loadConfigUnlocked(projectPath);
   const requestedChapterId = String(chapterId || "");
   const chapter = requestedChapterId ? config.chapters.find((item) => item.id === requestedChapterId) : config.chapters[0];
   if (requestedChapterId && !chapter) throw new Error("要打开的章节已经不存在，已停止加载，当前章节不会改变。");
@@ -750,6 +748,31 @@ async function loadChapterContent(projectPath, chapterId) {
     throw new Error(`章节正文读取失败，已停止打开以保护原稿：${error.message}。可在恢复中心检查历史版本。`, { cause: error });
   }
   return { chapter, content, revision };
+}
+
+
+async function calculateTotalWords(projectPath, config) {
+  let total = 0;
+  for (const chapter of config.chapters) {
+    const filePath = getChapterPath(projectPath, chapter);
+    try {
+      const stat = await fs.stat(filePath);
+      const signature = `${stat.size}|${stat.mtimeMs}|${stat.ctimeMs}`;
+      if (chapter.contentSignature !== signature || !chapter.contentRevision) {
+        const content = await fs.readFile(filePath, "utf8");
+        chapter.wordCount = countWords(content);
+        chapter.outline = extractOutline(content);
+        chapter.contentRevision = contentRevision(content);
+        chapter.contentSignature = signature;
+      }
+      total += chapter.wordCount;
+    } catch {
+      chapter.wordCount = chapter.wordCount || 0;
+      chapter.outline = chapter.outline || [];
+      total += chapter.wordCount;
+    }
+  }
+  config.stats.totalWords = total;
 }
 
 
@@ -817,6 +840,7 @@ function defaultConfig(title = DEFAULT_PROJECT_NAME) {
       autosaveMs: 1800,
       backupOnSave: false,
       recoveryEnabled: true,
+      mindMapEnabled: true,
     },
     agent: {
       autoLocalAnalysis: true,
@@ -963,6 +987,7 @@ const __moduleExports = {
   extractOutline,
   defaultConfig,
   loadConfigUnlocked,
+  calculateTotalWords,
   getKnowledgeRole,
   knowledgeRoleLabel,
   normalizeKnowledgeRole,

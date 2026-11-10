@@ -7,7 +7,7 @@ const {
   log,
   state,
   verifyIpcContract,
-} = require("./dependencies.cjs");
+} = require("./core-dependencies.cjs");
 const { registerIpcHandler } = require("./register.cjs");
 
 function registerIpcHandlers() {

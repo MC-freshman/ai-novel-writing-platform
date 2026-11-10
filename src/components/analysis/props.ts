@@ -5,6 +5,8 @@ export type AnalysisPanelProps = {
   state: AppState;
   onRegisterSave: (kind: PageSaveKind, handle: PageSaveHandle | null) => void;
   networkOpenRequest: number;
+  progressOpenRequest: number;
+  progressOpenMode: "chapters" | "network" | "mindmap" | "grid" | "";
   selectedChapterId: string;
   onSelectChapter: (chapterId: string) => void;
   onOpenSource: (result: GlobalSearchResult) => void;

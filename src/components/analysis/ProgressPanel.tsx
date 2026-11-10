@@ -5,6 +5,8 @@ export function ProgressPanel(
   context: Pick<
     AnalysisContext,
     | "networkOpenRequest"
+    | "progressOpenMode"
+    | "progressOpenRequest"
     | "onApplyState"
     | "onRegisterSave"
     | "onSelectChapter"
@@ -17,6 +19,8 @@ export function ProgressPanel(
 ) {
   const {
     networkOpenRequest,
+    progressOpenMode,
+    progressOpenRequest,
     onApplyState,
     onSelectChapter,
     onStatus,
@@ -30,6 +34,8 @@ export function ProgressPanel(
       state={state}
       onRegisterSave={registerNetworkSave}
       networkOpenRequest={networkOpenRequest}
+      progressOpenRequest={progressOpenRequest}
+      progressOpenMode={progressOpenMode}
       selectedChapterId={selectedChapter?.id || ""}
       onSelectChapter={onSelectChapter}
       onApplyState={onApplyState}
