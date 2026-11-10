@@ -44,12 +44,12 @@
 
 | 实测项 | 结果 |
 |---|---|
-| 用户给的路径 | 是**目录** `E:\电子取证软件\软件包\02 常用软件工具\07 流程图工具\Xmind\XMind`；真实 exe 为 `…\XMind\XMind.exe`（319,488 字节，VersionInfo 全空） |
+| 用户给的路径 | 是**目录** `<XMind 安装目录>`；真实 exe 为 `…\XMind\XMind.exe`（319,488 字节，VersionInfo 全空） |
 | 架构 | **PE_MACHINE = 0x014C → x86 32 位** Eclipse RCP；`configuration/features/plugins/jre/p2/thirdparty`；自带 JRE；插件版本 `3.7.8.201807240049`；readme RELEASE NOTES 标注 XMind 8 (v3.8.0) |
 | 规模 | `plugins/` **1761 条目 / 1742 个 jar**；含 `menus.pro`（32 个 Pro 命令）、`gantt`、`presentation`、`fishbone`、`spreadsheet`、`spellcheck`、PDF/SVG 导出、`evernote` 等 |
 | 许可 | readme.txt 声明 XMind 3 双许可 **EPL v1.0 / LGPL v3**，**Plus/Pro 为专有许可**；目录含 `epl-v10.html` / `lgpl-3.0.html`；中文语言包实测 `About_Copyright=版权(C) 2006-2018, XMind Ltd.`、`About_ProSubscriptionTitle= Pro订阅版`、`About_LicenseType_Unactivated=未激活状态.` |
-| 关联 | `HKCR\.xmind = XMind.Workbook.3`；`C:\Users\wk\AppData\Roaming\XMind\workspace-cathy` 存在（被实际使用过） |
-| 启动参数 | `XMind.ini`：`--launcher.defaultAction openFile`、`-data @user.home/…/workspace-cathy`（单 workspace）、`-Xmx1024m` |
+| 关联 | `HKCR\.xmind = XMind.Workbook.3`；`<用户目录>\AppData\Roaming\XMind\<工作区名>` 存在（被实际使用过） |
+| 启动参数 | `XMind.ini`：`--launcher.defaultAction openFile`、`-data @user.home/…/<工作区名>`（单 workspace）、`-Xmx1024m` |
 | 中文文案基准 | `*_nl_zh_CN_*.jar` 内 `.properties` 可**离线静态提取**（`unzip -p` + `\uXXXX` 解码）；16 种结构名；`command.showFormat.label=格式` 与 `command.showProperties.label=格式` 同名不同命令；**助记符 `(&X)` 就在 label 字符串内、可静态比对**（实测 134 处，`&S` 出现 9 次，`子主题(&S)` 与 `选中子主题(&S)` 冲突可静态发现）；无需启动 GUI。**数字口径统一**：`bundle_zh_CN.properties` 解码后 `chars=9723`；`split(/\r?\n/)=260`（含末尾空行）／去空行 `259`；`label 赋值行=199`（`^key\.label\s*=`）／含 label 子串行 `208`／QA 另一口径 `206`；**分项 `command.*.label=10`、`menu.command.*.label=60`、`handledtoolitem.label.*=7` 三方一致**，作为可复现基准（v2.3 起不再写无口径裸数字） |
 | 官方格式基线 | `plugins/org.xmind.ui.resources_3.7.8.201807240049/templates/` 共 **26 个 `*.xmt`**（business 13 / education 7 / personal 6）；单个模板 5 类条目：`content.xml`、`META-INF/manifest.xml`、`meta.xml`、`styles.xml`、`Thumbnails/thumbnail.png`；26/26 含 manifest，16 个另含 `attachments/*`/`extensions/*` 且 manifest 逐一登记；`content.xml` 实测含 `structure-class`(7)/`marker-refs`(10)/`marker-ref`(15)/`style-id`(16)/`theme`(1)/`summary`(2)/`detached`(1) |
 
@@ -96,7 +96,7 @@
 ## 4. 两种候选方案（原始表述如实保留）
 
 ### 4.1 P47 方案 A（原始）
-> 用户原话：编辑时**以弹窗形式打开**本机路径 `E:\电子取证软件\软件包\02 常用软件工具\07 流程图工具\Xmind\XMind` 对应的 XMind。
+> 用户原话：编辑时**以弹窗形式打开**本机路径 `<XMind 安装目录>` 对应的 XMind。
 > 产品侧理解需新增：程序定位与唤起、编辑对象打开与回传、结果回写 `state.json` 的同步约定、窗口/焦点/关闭/保存协同、未安装或路径变化时的行为。
 
 ### 4.2 P48 方案 B（原始）
@@ -418,7 +418,7 @@
 | E5 | `org.xmind.ui.menus_…jar` plugin.xml 85024 字符 / 143 `<command>` / 18 `<menuContribution>`；`menus.pro` 20887 字符 / 32 `<command>` | 架构师实测 |
 | E6 | `scripts/gen-preload.cjs:1-5/:86-93` 契约单源 + `--verify`；`scripts/test/service-coverage-map.json:67-70` 登记先例 | 仓库只读 |
 | E7 | 官方模板 26 个 `*.xmt`（13/7/6）；5 类条目；manifest 7 个 `file-entry`；16/26 含 attachments/extensions；`content.xml` 特性计数；`meta.xml`/`styles.xml` 命名空间；模板目录无独立 LICENSE；工作区无真实 `.xmind`；测试样例仅 content.xml / 占位 meta.xml | 架构师 v2.1 + 主理人独立复核（`sed`/`find`/`grep`） |
-| M1 | XMind.exe PE 0x014C（x86）、319488 字节、VersionInfo 全空；XMind.ini 参数；`HKCR\.xmind=XMind.Workbook.3`；`C:\Users\wk\AppData\Roaming\XMind` 存在 | 主理人 PowerShell 只读实测 |
+| M1 | XMind.exe PE 0x014C（x86）、319488 字节、VersionInfo 全空；XMind.ini 参数；`HKCR\.xmind=XMind.Workbook.3`；`<用户目录>\AppData\Roaming\XMind` 存在 | 主理人 PowerShell 只读实测 |
 | M2 | 平台侧：`main.cjs:75-80` 沙箱三开关、`index.html:5` CSP、`ipc-channels.cjs:73` 单通道、`preload.cjs:95`、`test-ui-planning-boards.cjs:109-158` 断言清单、`更新日志_0.3.9.md:24` 与 `docs/模块化验收_2026-10-12.md:47` 的 agent 环境门禁登记 | 主理人 + QA 只读复核 |
 
 **E9（QA v2 独立复跑汇总，主理人核对）**：① 26 个 `*.xmt` **26/26 齐备 5 类**、`dirs=26 / files=0`；② 4 命名空间固定、manifest 7 个 `full-path` 含 `META-INF/`、`Thumbnails/` 两个目录条目与 `password-hint=""`；③ `bundle_zh_CN.properties` `chars=9723` / `260↔259` 行 / `199↔208↔206` label 行 / 分项 `10-60-7`；④ 38 个中文按钮样本 **37 命中、1 项校正** `收 缩(&C)` → `收缩(&C)`；⑤ 助记符 134 处、`&S` 出现 9 次；⑥ 版本指纹三处（`3.7.0.qualifier` / `3.7.8.201807240049` / `XMind 8 (v3.8.0)`）；⑦ 模板含 `<Author>lyn</Author>`、`<Creator>XMind 3.7.0.qualifier</Creator>`、`org.xmind.ui.*` 专有 ID、`XMind Ltd.` 版权串，`templates.xml` 显示模板为插件资源；⑧ **26 模板黄金语料覆盖率**：`relationship` 7/26（按 `<relationship ` 元素计数，本轮复核）、`boundary` 2/26、`marker-ref` 16/26、`structure-class` 25/26、`style-id` 23/26、`theme` 26/26。全部只读命令（`unzip -Z1` / `grep` / `wc -l` / `find`），**未启动 GUI、未改动文件**。

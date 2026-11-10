@@ -12,6 +12,8 @@ A Windows desktop application for long-form fiction. Keep manuscripts, outlines,
 
 The application uses Chinese interface labels. This README includes complete Chinese and English instructions; the English guide quotes the actual Chinese labels so you can find each control.
 
+Updates are checked manually from Settings; the application does not install updates in the background and does not consume the release package's latest.yml or .blockmap files. There is no in-app language switch. See docs/整改验收_2026-10-11.md for these scope decisions. 0.3.6 was a local iteration folded into the public 0.3.7 release.
+
 ---
 
 ## 中文说明
@@ -31,7 +33,7 @@ AI 功能用于检索相关资料、讨论情节、生成规划和提出修订�
 | [AI-Novel-Writing-Platform-Setup-0.3.9-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.3.9/AI-Novel-Writing-Platform-Setup-0.3.9-x64.exe) | Windows 64 位安装版 | 运行安装向导，选择安装位置，之后从桌面或开始菜单打开。适合日常固定使用。 |
 | [AI-Novel-Writing-Platform-Portable-0.3.9-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.3.9/AI-Novel-Writing-Platform-Portable-0.3.9-x64.exe) | Windows 64 位便携版 | 下载后直接运行，程序包含所需运行环境，无需安装 Node.js。项目数据仍保存在独立项目目录。 |
 | SHA256SUMS.txt | 文件校验 | 与程序一起下载，用 PowerShell 的 `Get-FileHash -Algorithm SHA256` 对照其中的哈希值。 |
-| latest.yml、`.blockmap` | 发布更新元数据 | 普通使用者不需要手动打开；它们用于记录发布包和更新信息。 |
+| latest.yml、`.blockmap` | 发布更新元数据 | 普通使用者不需要手动打开；它们用于记录发布包和更新信息，**但请勿从发布目录删除：校验和表依赖它们**。 |
 
 本次发布提供 Windows x64 程序，已在 Windows 上执行实际 Electron 界面与写作操作检查。安装版和便携版使用同一套应用内容。本版本的程序未做 Authenticode 代码签名，Windows 首次运行可能显示安全提示；请从本仓库的正式发布页下载，并按需核对校验值。
 
@@ -114,13 +116,13 @@ AI 功能用于检索相关资料、讨论情节、生成规划和提出修订�
 
 **思维导图与进度网格：**同一个「分析 → 进度」下还有两个可随时切换的规划视图。
 
-- 点击「思维导图」→「新建思维导图」，会以中心主题为起点创建一张左右双向展开的导图。列表列出之前创建的全部导图（含主题数与更新时间），点击即可切回继续编辑。选中节点后可在属性区改文字、备注、颜色和分支方向；Tab 加子主题、Enter 加同级、F2 改名、Delete 删除，双击节点也可改名。滚轮缩放、拖动空白处平移，「展开编辑区」可放大到全窗口。
+- 点击「思维导图」→「新建思维导图」，会以中心主题为起点创建一张左右双向展开的导图。列表列出之前创建的全部导图（含主题数与更新时间），点击即可切回继续编辑；列表带搜索框与折叠按钮，数量多时可按名称快速定位。选中节点后可在属性区改文字、备注、颜色和分支方向；Tab 加子主题、Enter 加同级、F2 改名、Delete 删除，双击节点也可改名。滚轮缩放、拖动空白处平移，「展开编辑区」可放大到全窗口。画布空白处右键可「新建独立中心主题」，选中节点右键可「从父主题断开，独立成块」——多个中心各自成块、互不连线。
 - 点击「进度网格」→「新建网格」，可创建多张自定义网格：增删行列、改列名与列类型（文字 / 状态 / 关联章节）、填写单元格、调整行顺序并绑定实际章节。顶部按状态统计完成率，「同步章节状态」把已绑定章节的进度写回网格。左侧列表可随时切回之前的网格。
 - 点击「导入 XMind」可把已有的 `.xmind` 文件转成思维导图：新版 `content.json` 和 XMind 8 的 `content.xml` 都支持，先显示文件名、画布数与主题数预览，可选择导入全部画布或指定画布，确认后每个画布生成一张可继续编辑的导图，原有文件不会被改写。单文件上限 16 MB、每张导图最多 2000 个主题，超出会明确提示截断。XMind 8 的自由连线（relationship）会一并转成可编辑的关系线；导入预览会标注绝对像素控制点不导入。
-- **关系线可编辑：**选中节点后点「添加关系线」再点目标节点，即可在任意两节点之间连线（跨分支、跨层、指向中心主题都可以）。连线可单独设置文字、备注、颜色、虚实线、箭头方向、线宽与字型，点选后可改可删，与父子树边在视觉上区分。XMind 8 导入的关系线同样可编辑。
+- **关系线可编辑：**选中节点后点「添加关系线」再点目标节点，即可在任意两节点之间连线（跨分支、跨层、指向中心主题都可以）。连线可单独设置文字、备注、颜色、虚实线、箭头方向、线宽与字型，点选后可改可删，与父子树边在视觉上区分。XMind 8 导入的关系线同样可编辑。文字与备注直接显示在连线上方的圆角标签里（主行文字、副行备注），未填写时显示淡色「未命名关系」占位；标签不遮挡连线，终点箭头完整可见。
 - **常用编辑操作：**`Ctrl+Z` / `Ctrl+Y` 撤销重做（最多 50 步）、`Ctrl+A` 全选、按住 `Shift` 拖动框选、批量删除与改色、节点/连线/空白处三类右键菜单、`Ctrl+C` / `Ctrl+V` 复制粘贴子树；直接拖动节点可自由摆放，「重置位置」复原。单图最多 2000 个节点与 2000 条关系线。
 - 原「分析 → 关系网」已并入这里：点击「从角色关系生成」会把角色卡中的人物与关系转成一张可继续编辑的思维导图（分析页不再保留独立的关系网标签，原先写在角色卡里的关系数据不变）。
-- 画布区域较小时点击「弹窗编辑」打开独立弹窗：画布占满窗口、属性区移到右侧，也可用「精简属性区」把属性栏收成一行；按 `Esc` 或「关闭弹窗」返回。改动在弹窗内外同样会自动保存。
+- 点击「弹窗编辑」打开独立的浮动编辑窗口：右下角可调整尺寸、拖动标题栏可移动窗口、右上角「全屏显示 / 还原窗口」可切换全屏，按 `Esc` 或「关闭弹窗」返回；属性区在右侧，可用「精简属性区」收起。工具栏压紧成一行，次要操作收在「更多」里；画布显示边界随节点拖动动态扩展，连线不会被截断。改动在弹窗内外同样会自动保存。
 - 改动会在短暂停顿后自动写盘；切换视图、按 `Ctrl+S` 或关闭窗口时也会先保存。数据存放在项目目录 `analysis/creative-workspace/state.json`，随项目快照、备份和项目交换一起保存；每项目最多 60 张导图、60 张网格，达到上限会拒绝新建而不是覆盖旧数据。
 
 ### 7. AI 对话、模型设置与检索
@@ -182,11 +184,13 @@ AI 功能用于检索相关资料、讨论情节、生成规划和提出修订�
 
 ### 11. 0.3.9 本次更新与验证
 
-0.3.9 在0.3.8的存储恢复、Zustand与样式拆分基础上，按领域拆分App控制逻辑、分析页面、共享类型、IPC和分析/剧情/任务服务；补充服务测试并修正并发剧情记录丢失。真实Windows安装、0.3.8原位升级和卸载需以独立runner验收记录为准。物理断电、真实云端模型和代码签名仍需另行确认。合成检索基准覆盖20万片段、384和1024维，具体条件见[容量实测](docs/检索容量实测_2026-10-11.md)。
+0.3.9 在 0.3.8 的存储恢复、Zustand 与样式拆分基础上，按领域拆分 App 控制逻辑、分析页面、共享类型、IPC 和分析/剧情/任务服务；补充服务测试并修正并发剧情记录丢失。真实 Windows 安装、0.3.8 原位升级和卸载需以独立 runner 验收记录为准。物理断电、真实云端模型和代码签名仍需另行确认。合成检索基准覆盖 20 万片段、384 和 1024 维，具体条件见[容量实测](docs/检索容量实测_2026-10-11.md)。
 
-本版延续0.3.7的写作界面：暖纸/自然绿与森林夜色、正文优先布局、清晰的专注入口、章节进度默认收起、可行动的 AI 示例，以及专注模式中的完整进度与任务操作。
+本版延续 0.3.7 的写作界面：暖纸/自然绿与森林夜色、正文优先布局、清晰的专注入口、章节进度默认收起、可行动的 AI 示例，以及专注模式中的完整进度与任务操作。
 
-这次验证覆盖构建、自动回归、章节保存与撤销隔离、角色/世界表单、小说统筹网、现有界面回归，以及 37 章合成项目在 1440×900 和 1180×720 窗口中的进度布局。便携版经过实际启动、编辑保存、专注进入/退出、任务勾选和批量进度操作检查。测试使用合成资料，未调用用户的云端模型账户；界面走查不等于真人长期写作体验研究。
+思维导图在本版完成「可编辑性」改造：任意两节点之间可建立关系线，文字与备注直接显示在连线上，支持撤销/重做、多选与框选、右键菜单、复制粘贴子树、节点自由摆放；XMind 8 的 relationships 与 styles.xml 可导入为可编辑关系线（绝对像素控制点不导入）；支持多个独立中心主题与从父主题断开成块。画布显示边界按实际内容动态计算，节点拖到边缘也不会截断连线。独立编辑窗口可调整尺寸、拖动并切换全屏；主界面工具栏折叠精简，导图列表支持搜索与折叠。
+
+最终验证（2026-11-10）：`npm run test:ui-visual` 与 `npm run test:ui-planning-boards` 在真实 Windows 桌面通过——视觉回归 `status: pass`（弹窗画布高度 502、无横向溢出），桌面验证 22 条断言全量通过；静态门禁 build / lint / check:quality / check:modules / check:services / scan:privacy / gen:preload --verify 全部 exit 0，全量回归 186 个服务单测 + 18/18 + 21/21 + 11/11 + UI 按钮审计 9 PASS。便携版与安装版均已重新生成并验证产物内容。测试使用合成资料，未调用用户的云端模型账户；界面走查不等于真人长期写作体验研究。
 
 ### 12. 开发与许可
 
@@ -201,6 +205,8 @@ npm run start
 
 `npm run dev` 只启动 Vite 前端；完整桌面功能依赖 Electron 的本地接口，日常开发和测试请使用 `npm run start`。项目未随源码包含作者的小说数据或接口密钥。
 
+仓库主要目录：`src/`（React 界面、组件与样式）、`electron/`（主进程与本地服务）、`shared/`（IPC 契约）、`scripts/`（测试、门禁与构建脚本）、`docs/`（验收与实测记录）、`dist/`（Vite 前端产物，桌面运行时需要）、`release/`（安装版与便携版 exe）；根目录存放配置、许可、启动脚本与中英双语说明。`node_modules/`、`.test-runs/`、小说数据、`novel.config.json`、向量库与密钥文件均不纳入版本控制。
+
 ```powershell
 npm run build
 npm run test:regression
@@ -210,6 +216,7 @@ npm run check:services
 npm run test:services:coverage
 npm run typecheck:electron
 npm run test:ui-plan
+npm run test:ui-planning-boards
 npm run test:ui-novel-network
 npm run test:ui-visual
 npm run test:ui-serene
@@ -243,7 +250,7 @@ Download the files from the [0.3.9 release](https://github.com/MC-freshman/ai-no
 | [AI-Novel-Writing-Platform-Setup-0.3.9-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.3.9/AI-Novel-Writing-Platform-Setup-0.3.9-x64.exe) | Windows x64 installer | Run the wizard, choose an installation location, then launch from the desktop or Start menu. Suitable for regular use on one computer. |
 | [AI-Novel-Writing-Platform-Portable-0.3.9-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.3.9/AI-Novel-Writing-Platform-Portable-0.3.9-x64.exe) | Windows x64 portable application | Download and run it directly. The runtime is bundled; Node.js is not required. Your novel remains in a separate project directory. |
 | SHA256SUMS.txt | Download verification | Download it alongside the application and compare its entries with PowerShell `Get-FileHash -Algorithm SHA256`. |
-| latest.yml and `.blockmap` | Release/update metadata | Ordinary users do not need to open these files manually. They describe the release artifacts and update information. |
+| latest.yml and `.blockmap` | Release/update metadata | Ordinary users do not need to open these files manually. They describe the release artifacts and update information. **Do not delete them from the release directory: the checksum manifest depends on them.** |
 
 This release provides Windows x64 applications. Real Electron interface and writing checks were performed on Windows. The installer and portable application contain the same application payload. The executables do not have an Authenticode signature, so Windows may show a security prompt on first launch. Use this repository's official release and check the supplied hashes when needed.
 
@@ -326,16 +333,16 @@ Limits: 20 networks per project; 80 tables, 10,000 records, 32 columns, 30 impor
 
 **Mind maps and progress grids:** The same `分析 → 进度` (Analysis → Progress) workspace has two more switchable views.
 
-- `思维导图` (Mind maps) creates a two-sided map from a central topic. A list shows every map created earlier with its topic count and last update, so you can switch back and keep editing. Select a node to edit its text, notes, colour, and branch side; `Tab` adds a child, `Enter` adds a sibling, `F2` renames, `Delete` removes, and double-click also renames. Use the wheel to zoom, drag empty space to pan, and `展开编辑区` to enlarge the canvas.
+- `思维导图` (Mind maps) creates a two-sided map from a central topic. A list shows every map created earlier with its topic count and last update, so you can switch back and keep editing; the list has a search box and a collapse toggle for large collections. Select a node to edit its text, notes, colour, and branch side; `Tab` adds a child, `Enter` adds a sibling, `F2` renames, `Delete` removes, and double-click also renames. Use the wheel to zoom, drag empty space to pan, and `展开编辑区` to enlarge the canvas. Right-click blank canvas to add another independent centre, or right-click a node to detach it into its own block; blocks do not connect to one another.
 - `进度网格` (Progress grids) creates multiple custom grids: add or remove rows and columns, rename columns, choose a column type (text / status / linked chapter), fill cells, reorder rows, and bind real chapters. The summary bar counts each status and shows a completion rate; `同步章节状态` copies chapter progress back into linked rows. The list switches between previously created grids.
 
 `导入 XMind` (Import XMind) turns an existing `.xmind` file into editable maps. Both the newer `content.json` and XMind 8 `content.xml` formats are supported; a preview shows the file name, sheet count, and topic count, and you can import all sheets or just one. Each sheet becomes one editable map and the source file is never modified. Files are limited to 16 MB and each map to 2,000 topics, with an explicit truncation warning. Free relationships from XMind 8 become editable relations; the preview notes that absolute-pixel control points are not imported.
 
-**Editable relations:** select a node, click `添加关系线` (Add relation), then click a target node to draw a line between any two nodes — across branches, levels, or back to the centre. Each relation has its own label, note, colour, dash pattern, arrow direction, width, and label style, and can be selected, edited, or deleted independently of the tree edges. Imported relations are editable too.
+**Editable relations:** select a node, click `添加关系线` (Add relation), then click a target node to draw a line between any two nodes — across branches, levels, or back to the centre. Each relation has its own label, note, colour, dash pattern, arrow direction, width, and label style, and can be selected, edited, or deleted independently of the tree edges. Imported relations are editable too. The label and note render together in a rounded chip above the line (primary line for the label, second line for the note); an empty relation shows a muted placeholder. The chip never covers the line and the arrowhead stays visible.
 
 **Editing shortcuts:** `Ctrl+Z` / `Ctrl+Y` undo and redo (50 steps), `Ctrl+A` select all, `Shift` + drag for box selection, bulk delete and recolour, three context menus (node / relation / blank canvas), `Ctrl+C` / `Ctrl+V` to copy and paste a subtree, and drag a node to place it freely with `重置位置` to reset. Each map holds up to 2,000 nodes and 2,000 relations.
 
-The former `关系网` (relationship graph) tab has been merged into mind maps: `从角色关系生成` turns characters and their relations from character cards into an editable map. The standalone tab is gone; relationship data stored in character cards is untouched. `弹窗编辑` opens a large modal with a full-height canvas and a side inspector; `精简属性区` collapses the inspector to a single row, and `Esc` closes the modal.
+The former `关系网` (relationship graph) tab has been merged into mind maps: `从角色关系生成` turns characters and their relations from character cards into an editable map. The standalone tab is gone; relationship data stored in character cards is untouched. `弹窗编辑` opens a resizable floating window: drag its title bar to move it, resize from the bottom-right corner, and use `全屏显示` / `还原窗口` to toggle full screen. `精简属性区` collapses the side inspector; `Esc` or `关闭弹窗` closes the window. The toolbar is a compact single row with secondary actions under `更多`, and canvas bounds grow with dragged nodes so relations are never clipped.
 
 Edits are saved automatically after a short pause, and are flushed when switching views, pressing `Ctrl+S`, or closing the window. Both are stored in `analysis/creative-workspace/state.json` inside the project directory and are included in snapshots, backups, and project exchange. Each project holds up to 60 maps and 60 grids; exceeding the limit rejects the new item instead of overwriting older ones.
 
@@ -398,11 +405,13 @@ The candidate scan limit and sent-excerpt limit are separate ceilings, not an in
 
 ### 11. Changes and validation in 0.3.9
 
-This maintenance release adds restart recovery for multi-file transactions, moves App state into six Zustand domains, splits the core stylesheet while preserving its cascade, adds accessible button names, and strengthens service tests and quality gates. Crash tests use process termination; they do not certify physical power-loss recovery. Synthetic retrieval benchmarks cover up to 200,000 chunks at 384 and 1024 dimensions.
+This maintenance release adds restart recovery for multi-file transactions, moves App state into Zustand domains, splits App control logic, the analysis page, shared types, IPC and analysis/story/task services into domains, and strengthens service tests and quality gates. Crash tests use process termination; they do not certify physical power-loss recovery. Synthetic retrieval benchmarks cover up to 200,000 chunks at 384 and 1024 dimensions; see docs/检索容量实测_2026-10-11.md.
 
-0.3.9 also includes the writing-interface changes since the public 0.3.5 release: warm paper/natural green and forest-night themes, a manuscript-first layout, a clearer focus entry, a collapsed-by-default chapter strip, and editable AI examples. It also fixes crowded/overlapping progress navigation and keeps complete chapter/task controls available in focus mode.
+0.3.9 also includes the writing-interface changes since the public 0.3.7 release: warm paper/natural green and forest-night themes, a manuscript-first layout, a clearer focus entry, a collapsed-by-default chapter strip, and editable AI examples.
 
-Validation covered the build, automated regression suite, saving and undo isolation, character/world forms, planning networks, existing UI regression, and progress layout with 37 synthetic chapters at 1440×900 and 1180×720. The portable executable was exercised for startup, editing/saving, focus entry/exit, checking tasks, and batch progress operations. Tests use synthetic material and do not call a user's remote model account. These checks are not a long-term study with real writers.
+Mind maps gained full editability in this release: relations can be drawn between any two nodes, with the label and note rendered directly on the line; undo/redo, multi-select and box selection, context menus, subtree copy/paste and free node placement are available. XMind 8 relationships and styles.xml import as editable relations (absolute-pixel control points are not imported). Multiple independent centre topics are supported, and a subtree can be detached into its own block. Canvas bounds are computed from actual content, so dragging nodes to the edge no longer clips relations. The editor window is resizable, draggable and can toggle full screen; the main toolbar is compact and collapsible, and the map list supports search and folding.
+
+Final validation (2026-11-10): `npm run test:ui-visual` passed on a real Windows desktop (modal canvas height 502, no horizontal overflow) and `npm run test:ui-planning-boards` passed all 22 desktop assertions. Static gates (build, lint, check:quality, check:modules, check:services, scan:privacy, gen:preload --verify) all exited 0; the full regression suite ran 186 service tests plus 18/18, 21/21, 11/11 and a 9-PASS UI button audit. Both the portable and installer executables were rebuilt offline and their contents verified. Tests use synthetic material and do not call a user's remote model account; these checks are not a long-term study with real writers.
 
 ### 12. Development and license
 
@@ -417,6 +426,8 @@ npm run start
 
 `npm run dev` starts only the Vite frontend. Full desktop features use Electron's local bridge; use `npm run start` for desktop development and testing. Source does not include the author's novel projects or API credentials.
 
+Repository layout: `src/` (React UI, components and styles), `electron/` (main process and local services), `shared/` (IPC contract), `scripts/` (tests, quality gates and build helpers), `docs/` (acceptance and benchmark notes), `dist/` (Vite frontend output required at runtime), and `release/` (installer and portable executables). The root holds configuration, the license, the launcher script and the bilingual guides. `node_modules/`, `.test-runs/`, novel data, `novel.config.json`, vector stores and credential files are excluded from version control.
+
 ```powershell
 npm run build
 npm run test:regression
@@ -426,6 +437,7 @@ npm run check:services
 npm run test:services:coverage
 npm run typecheck:electron
 npm run test:ui-plan
+npm run test:ui-planning-boards
 npm run test:ui-novel-network
 npm run test:ui-visual
 npm run test:ui-serene
