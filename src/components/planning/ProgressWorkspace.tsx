@@ -7,6 +7,7 @@ import { useDialogFocus } from "../../hooks/useDialogFocus";
 import { ProgressGrids } from "./ProgressGrids";
 import { describeMindMapModuleProblem } from "../../modules/mindmap/contract";
 import { setMindMapModuleUnloadGuard, useMindMapModule } from "../../modules/mindmap/registry";
+import { isModuleEnabled } from "../../lib/modules";
 
 type ProgressMode = "chapters" | "network" | "mindmap" | "grid";
 
@@ -106,7 +107,7 @@ export function ProgressWorkspace({ state, selectedChapterId, onSelectChapter, o
   }, [mindmapModal, maximized]);
 
   const mindMapModule = useMindMapModule();
-  const mindMapEnabled = state.config.ui.mindMapEnabled !== false;
+  const mindMapEnabled = isModuleEnabled(state.config, "mindmap");
   const mindMapProblem = !mindMapEnabled
     ? "思维导图模块已停用；导图数据保留，可在设置中重新启用。正文和其他规划功能不受影响。"
     : mindMapModule

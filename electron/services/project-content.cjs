@@ -15,6 +15,7 @@ const __dep3 = require("./analysis-tools.cjs");
 const __dep4 = require("./task-runtime.cjs");
 const projectArchives = require("./project-archives.cjs");
 const projectState = require("./project-state.cjs");
+const writingStats = require("./writing-stats.cjs");
 const path = require("node:path");
 const fs = require("node:fs/promises");
 
@@ -355,6 +356,13 @@ async function saveChapterContent(projectPath, payload = {}) {
       { path: filePath, content: nextContent },
       { path: getConfigPath(projectPath), content: JSON.stringify(config, null, 2) },
     ]);
+
+    // P75 写作统计：与 todayWords 同口径；统计失败不阻断正文保存，后续保存会继续累计。
+    await writingStats.recordSave(projectPath, {
+      date: config.stats.todayDate,
+      netWords: Math.max(0, chapter.wordCount - previousWords),
+      at: config.updatedAt,
+    }).catch(() => {});
 
     let indexWarning = "";
     const indexResult = await indexSource(projectPath, {

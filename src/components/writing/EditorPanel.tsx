@@ -5,20 +5,28 @@ import type {
   EditorScrollAnchor,
   RecoveryDraft,
 } from "../../types";
-import { memo } from "react";
+import { memo, useEffect, useState } from "react";
 import type { InlineReviewItem } from "../../lib/editor-ops";
 import type { AppStores } from "../../stores/app-stores";
+import { TtsPlayer } from "./TtsPlayer";
+import { ReferencePane } from "./ReferencePane";
+import "../../modules/tts/slot";
+import { isModuleEnabled } from "../../lib/modules";
+import { useStoreField } from "../../stores/use-app-stores";
 import {
   Eye,
   EyeOff,
   FileText,
   Maximize2,
+  PanelRight,
   RefreshCcw,
   Search,
+  ShieldAlert,
+  Volume2,
 } from "lucide-react";
 import { ChapterProgressStrip } from "../planning/ProgressBoard";
 import { RichDocumentEditor } from "./RichDocumentEditor";
-import { countWords, formatDateTime } from "../../lib/text-utils";
+import { countWords, contentToPlainText, formatDateTime } from "../../lib/text-utils";
 
 function EditorPanelComponent({
   selectedChapter,
@@ -60,6 +68,7 @@ function EditorPanelComponent({
   onOpenReview,
   onApplyState,
   onStatus,
+  onOpenChapter,
 }: {
   selectedChapter: Chapter | null;
   chapterTitle: string;
@@ -100,7 +109,65 @@ function EditorPanelComponent({
   onOpenReview: (review: InlineReviewItem) => void;
   onApplyState: (state: AppState) => void;
   onStatus: (message: string) => void;
+  onOpenChapter: (chapterId: string) => void;
 }) {
+  const [showTts, setShowTts] = useState(false);
+  const ttsEnabled = isModuleEnabled(stores.project.store.getState().state?.config, "tts");
+  const [referenceChapterId, setReferenceChapterId] = useStoreField(stores.layout, "referenceChapterId");
+  const [referenceChapterIds, setReferenceChapterIds] = useStoreField(stores.layout, "referenceChapterIds");
+  const [focusMode] = useStoreField(stores.layout, "focusMode");
+  const referenceChapters = stores.project.store.getState().state?.chapters || [];
+  const referencePanels = referenceChapterIds.length ? referenceChapterIds : (referenceChapterId ? [referenceChapterId] : []);
+  function addReferencePanel() {
+    const candidate = selectedChapter?.id || referenceChapters[0]?.id || "";
+    if (!candidate) return;
+    const next = referencePanels.length ? [...referencePanels] : [];
+    if (next.length >= 4) {
+      onStatus("参考面板最多 4 个，请先关闭一个。");
+      return;
+    }
+    next.push(candidate);
+    setReferenceChapterIds(next);
+    setReferenceChapterId(next[0] || "");
+  }
+  function removeReferencePanel(index: number) {
+    const next = referencePanels.filter((_, itemIndex) => itemIndex !== index);
+    setReferenceChapterIds(next);
+    setReferenceChapterId(next[0] || "");
+  }
+  function switchReferencePanel(index: number, chapterId: string) {
+    const next = referencePanels.map((item, itemIndex) => (itemIndex === index ? chapterId : item));
+    setReferenceChapterIds(next);
+    setReferenceChapterId(next[0] || "");
+  }
+  const [sensitiveHighlight, setSensitiveHighlight] = useState(false);
+  const [sensitiveMarks, setSensitiveMarks] = useState<InlineReviewItem[]>([]);
+  useEffect(() => {
+    if (!sensitiveHighlight || !selectedChapter?.id) {
+      setSensitiveMarks([]);
+      return;
+    }
+    let active = true;
+    void (async () => {
+      try {
+        const report = await window.novelAPI.scanSensitive({ chapterIds: [selectedChapter.id] });
+        if (!active) return;
+        const chapterResult = report.results.find((item) => item.chapterId === selectedChapter.id);
+        const seen = new Set<string>();
+        const marks: InlineReviewItem[] = [];
+        for (const hit of chapterResult?.hits || []) {
+          if (seen.has(hit.word)) continue;
+          seen.add(hit.word);
+          marks.push({ id: `sens_${hit.word}`, kind: "sensitive", quote: hit.word, label: `敏感词提示：${hit.word}`, status: "敏感词" });
+        }
+        setSensitiveMarks(marks);
+      } catch {
+        if (active) setSensitiveMarks([]);
+      }
+    })();
+    return () => { active = false; };
+  }, [sensitiveHighlight, selectedChapter?.id]);
+  const mergedReviews = sensitiveMarks.length ? [...editorReviews, ...sensitiveMarks] : editorReviews;
   const debugWindow = window as Window & {
     __NOVEL_RENDER_DEBUG__?: boolean;
     __editorRenderCount?: number;
@@ -163,6 +230,29 @@ function EditorPanelComponent({
           >
             <Search size={17} />
           </button>
+          {ttsEnabled && (
+            <button
+              title="朗读校对（系统语音，离线）"
+              className={showTts ? "active" : ""}
+              onClick={() => setShowTts((value) => !value)}
+            >
+              <Volume2 size={17} />
+            </button>
+          )}
+          <button
+            title="分屏参考（只读对照，最多 4 个面板）"
+            className={referencePanels.length ? "active" : ""}
+            onClick={addReferencePanel}
+          >
+            <PanelRight size={17} />
+          </button>
+          <button
+            title="敏感词高亮（只读提示，不改正文）"
+            className={sensitiveHighlight ? "active" : ""}
+            onClick={() => setSensitiveHighlight((value) => !value)}
+          >
+            <ShieldAlert size={17} />
+          </button>
           <button title="全屏专注" onClick={onToggleFocus}>
             <Maximize2 size={17} />
           </button>
@@ -211,6 +301,7 @@ function EditorPanelComponent({
           </span>
         </div>
       )}
+      <div className={`editor-split${referencePanels.length > 1 ? " multi-reference" : ""}`}>
       <div className="editor-body">
         {preview ? (
           <textarea
@@ -237,7 +328,7 @@ function EditorPanelComponent({
             fontSize={fontSize}
             lineHeight={lineHeight}
             scrollAnchor={scrollAnchor}
-            reviews={editorReviews}
+            reviews={mergedReviews}
             onChange={(documentId, next) => {
               if (
                 !documentId ||
@@ -255,6 +346,20 @@ function EditorPanelComponent({
           />
         )}
       </div>
+      {referencePanels.length > 0 && !focusMode && referencePanels.map((chapterId, index) => (
+        <ReferencePane
+          key={`${chapterId}-${index}`}
+          chapterId={chapterId}
+          chapters={referenceChapters}
+          onClose={() => removeReferencePanel(index)}
+          onOpenChapter={onOpenChapter}
+          onSwitch={(nextChapterId) => switchReferencePanel(index, nextChapterId)}
+        />
+      ))}
+      </div>
+      {showTts && ttsEnabled && (
+        <TtsPlayer text={contentToPlainText(chapterContent)} title={chapterTitle} onClose={() => setShowTts(false)} />
+      )}
       {selectedChapter && (
         <ChapterProgressStrip
           chapter={selectedChapter}

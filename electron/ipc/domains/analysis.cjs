@@ -8,15 +8,102 @@ const {
   buildTimelineEvents,
   buildWorldMap,
   ensureCurrentProject,
+  getWritingOverview,
   globalSearch,
   loadAnalysisState,
+  loadConfig,
   loadIssueStatuses,
+  multiExport,
+  nameGen,
   nowIso,
+  projectSearch,
   saveAnalysisState,
   saveIssueStatuses,
+  sensitiveCheck,
+  styleCheck,
 } = require("../domain-dependencies/analysis.cjs");
 
 function registerDomain() {
+  registerIpcHandler("writing-stats:get", async () => {
+    const projectPath = await ensureCurrentProject();
+    const config = await loadConfig(projectPath);
+    return getWritingOverview(projectPath, { dailyGoal: config.ui?.dailyWordGoal || 0 });
+  });
+
+  registerIpcHandler("export:formats", async () => multiExport.listExportFormats());
+
+  registerIpcHandler("export:run", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return multiExport.runFormatExport(projectPath, payload || {});
+  });
+
+  registerIpcHandler("sensitive:get-state", async () => {
+    const projectPath = await ensureCurrentProject();
+    return sensitiveCheck.getState(projectPath);
+  });
+
+  registerIpcHandler("sensitive:import-dictionary", async () => {
+    const projectPath = await ensureCurrentProject();
+    return sensitiveCheck.importDictionary(projectPath);
+  });
+
+  registerIpcHandler("sensitive:toggle-dictionary", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return sensitiveCheck.toggleDictionary(projectPath, payload?.id, payload?.enabled);
+  });
+
+  registerIpcHandler("sensitive:delete-dictionary", async (_event, dictionaryId) => {
+    const projectPath = await ensureCurrentProject();
+    return sensitiveCheck.deleteDictionary(projectPath, String(dictionaryId || ""));
+  });
+
+  registerIpcHandler("sensitive:update-ignore", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return sensitiveCheck.updateIgnore(projectPath, payload?.word, payload?.remove === true);
+  });
+
+  registerIpcHandler("sensitive:scan", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return sensitiveCheck.scan(projectPath, payload || {});
+  });
+
+  registerIpcHandler("sensitive:ai-review", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return sensitiveCheck.aiReview(projectPath, payload || {});
+  });
+
+  registerIpcHandler("search:book", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return projectSearch.searchBook(projectPath, payload || {});
+  });
+
+  registerIpcHandler("search:replace-plan", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return projectSearch.buildReplacePlan(projectPath, payload || {});
+  });
+
+  registerIpcHandler("search:replace-execute", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return projectSearch.executeReplace(projectPath, payload || {});
+  });
+
+  registerIpcHandler("style:analyze", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return styleCheck.analyzeBook(projectPath, payload || {});
+  });
+
+  registerIpcHandler("style:get-report", async () => {
+    const projectPath = await ensureCurrentProject();
+    return styleCheck.getReport(projectPath);
+  });
+
+  registerIpcHandler("names:generate", async (_event, payload) => nameGen.generateNames(payload || {}));
+
+  registerIpcHandler("names:generate-ai", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return nameGen.generateNamesAi(projectPath, payload || {});
+  });
+
   registerIpcHandler("global:search", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     return globalSearch(projectPath, payload?.query || "");

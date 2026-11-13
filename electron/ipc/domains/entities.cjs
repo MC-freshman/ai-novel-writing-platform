@@ -46,6 +46,7 @@ function registerDomain() {
         background: payload.background || "",
         relationships: payload.relationships || "",
         notes: payload.notes || "",
+        ...(payload.avatar ? { avatar: String(payload.avatar) } : previous?.avatar ? { avatar: previous.avatar } : {}),
         fileName,
         updatedAt: nowIso(),
       };

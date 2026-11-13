@@ -60,7 +60,8 @@
   "knowledge-index.cjs": [
     "scripts/test/services/domain-behavior.test.cjs",
     "scripts/test-core-regression.cjs",
-    "scripts/test-agent-platform.cjs"
+    "scripts/test-agent-platform.cjs",
+    "scripts/test/services/embedding-diagnostics.test.cjs"
   ],
   "logger.cjs": [
     "scripts/test/services/logger.test.cjs"
@@ -231,5 +232,65 @@
   "project-state.cjs": [
     "scripts/test/services/project-state.test.cjs",
     "scripts/test-core-regression.cjs"
+  ],
+  "external-mcp.cjs": [
+    "scripts/test/services/external-mcp.test.cjs"
+  ],
+  "writing-stats.cjs": [
+    "scripts/test/services/writing-stats.test.cjs"
+  ],
+  "prompt-templates.cjs": [
+    "scripts/test/services/prompt-templates.test.cjs"
+  ],
+  "multi-export.cjs": [
+    "scripts/test/services/multi-export.test.cjs"
+  ],
+  "export-providers/registry.cjs": [
+    "scripts/test/services/multi-export.test.cjs"
+  ],
+  "export-providers/shared.cjs": [
+    "scripts/test/services/multi-export.test.cjs"
+  ],
+  "export-providers/epub.cjs": [
+    "scripts/test/services/multi-export.test.cjs"
+  ],
+  "export-providers/txt.cjs": [
+    "scripts/test/services/multi-export.test.cjs"
+  ],
+  "export-providers/pdf.cjs": [
+    "scripts/test/services/multi-export.test.cjs"
+  ],
+  "sensitive-check.cjs": [
+    "scripts/test/services/sensitive-check.test.cjs"
+  ],
+  "ai-ledger.cjs": [
+    "scripts/test/services/ai-ledger.test.cjs"
+  ],
+  "project-search.cjs": [
+    "scripts/test/services/project-search.test.cjs"
+  ],
+  "style-check.cjs": [
+    "scripts/test/services/style-check.test.cjs"
+  ],
+  "name-gen.cjs": [
+    "scripts/test/services/name-gen.test.cjs"
+  ],
+  "persona.cjs": [
+    "scripts/test/services/persona.test.cjs"
+  ],
+  "import-providers.cjs": [
+    "scripts/test/services/import-providers.test.cjs"
+  ],
+  "cloud-backup.cjs": [
+    "scripts/test/services/cloud-backup.test.cjs"
+  ],
+  "file-bridge.cjs": [
+    "scripts/test/services/file-bridge.test.cjs"
+  ],
+  "image-gen.cjs": [
+    "scripts/test/services/image-gen.test.cjs"
+  ],
+  "tts-config.cjs": [
+    "scripts/test/services/tts-config.test.cjs"
   ]
 }

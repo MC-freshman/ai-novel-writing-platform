@@ -136,6 +136,75 @@ const channels = [
   { method: "extractWorldCardsFromOutline", channel: "ai:extract-world-cards", kind: "invoke", arg: "payload" },
   { method: "saveWorldCardCandidates", channel: "ai:save-world-card-candidates", kind: "invoke", arg: "payload" },
   { method: "rebuildIndex", channel: "index:rebuild", kind: "invoke", arg: null },
+  // ---- 外部 MCP 接入（P81）：发现/配置/只读自检，不代理外部服务字节 ----
+  { method: "getMcpIntegrationStatus", channel: "mcp:get-status", kind: "invoke", arg: null },
+  { method: "pickMcpServerDirectory", channel: "mcp:pick-directory", kind: "invoke", arg: null },
+  { method: "saveMcpSettings", channel: "mcp:save-settings", kind: "invoke", arg: "payload" },
+  { method: "buildMcpClientConfig", channel: "mcp:build-config", kind: "invoke", arg: "payload" },
+  { method: "selfTestMcp", channel: "mcp:self-test", kind: "invoke", arg: "payload" },
+  // ---- 写作统计（P75） ----
+  { method: "getWritingOverview", channel: "writing-stats:get", kind: "invoke", arg: null },
+  // ---- 自定义 AI 指令模板（P82） ----
+  { method: "listPromptTemplates", channel: "templates:list", kind: "invoke", arg: null },
+  { method: "savePromptTemplate", channel: "templates:save", kind: "invoke", arg: "payload" },
+  { method: "deletePromptTemplate", channel: "templates:delete", kind: "invoke", arg: "templateId" },
+  { method: "exportPromptTemplates", channel: "templates:export", kind: "invoke", arg: null },
+  { method: "importPromptTemplates", channel: "templates:import", kind: "invoke", arg: null },
+  // ---- 多格式导出（P79） ----
+  { method: "listExportFormats", channel: "export:formats", kind: "invoke", arg: null },
+  { method: "runFormatExport", channel: "export:run", kind: "invoke", arg: "payload" },
+  // ---- 敏感词自查（P77） ----
+  { method: "getSensitiveState", channel: "sensitive:get-state", kind: "invoke", arg: null },
+  { method: "importSensitiveDictionary", channel: "sensitive:import-dictionary", kind: "invoke", arg: null },
+  { method: "toggleSensitiveDictionary", channel: "sensitive:toggle-dictionary", kind: "invoke", arg: "payload" },
+  { method: "deleteSensitiveDictionary", channel: "sensitive:delete-dictionary", kind: "invoke", arg: "dictionaryId" },
+  { method: "updateSensitiveIgnore", channel: "sensitive:update-ignore", kind: "invoke", arg: "payload" },
+  { method: "scanSensitive", channel: "sensitive:scan", kind: "invoke", arg: "payload" },
+  { method: "aiReviewSensitive", channel: "sensitive:ai-review", kind: "invoke", arg: "payload" },
+  // ---- AI 辅助台账与创作证据（P78） ----
+  { method: "getAiLedgerOverview", channel: "ledger:get-overview", kind: "invoke", arg: null },
+  { method: "exportCreationEvidence", channel: "ledger:export-evidence", kind: "invoke", arg: "payload" },
+  // ---- 全书搜索与批量替换（P76） ----
+  { method: "searchBook", channel: "search:book", kind: "invoke", arg: "payload" },
+  { method: "buildReplacePlan", channel: "search:replace-plan", kind: "invoke", arg: "payload" },
+  { method: "executeBookReplace", channel: "search:replace-execute", kind: "invoke", arg: "payload" },
+  // ---- 文风自查（P85） ----
+  { method: "analyzeStyle", channel: "style:analyze", kind: "invoke", arg: "payload" },
+  { method: "getStyleReport", channel: "style:get-report", kind: "invoke", arg: null },
+  // ---- 起名助手（P90） ----
+  { method: "generateNames", channel: "names:generate", kind: "invoke", arg: "payload" },
+  { method: "generateNamesAi", channel: "names:generate-ai", kind: "invoke", arg: "payload" },
+  // ---- TTS 引擎配置（P94） ----
+  { method: "getTtsConfig", channel: "tts:get-config", kind: "invoke", arg: null },
+  { method: "saveTtsConfig", channel: "tts:save-config", kind: "invoke", arg: "payload" },
+  // ---- 素材图片读取（P95 头像） ----
+  { method: "readMaterialImage", channel: "materials:read-image", kind: "invoke", arg: "payload" },
+  // ---- 向量连接诊断（P89） ----
+  { method: "testEmbeddingConnection", channel: "embedding:test", kind: "invoke", arg: "payload" },
+  // ---- 外部项目导入（P91） ----
+  { method: "previewVaultImport", channel: "import:preview-vault", kind: "invoke", arg: null },
+  { method: "runVaultImport", channel: "import:run-vault", kind: "invoke", arg: "payload" },
+  { method: "previewNwxImport", channel: "import:preview-nwx", kind: "invoke", arg: null },
+  { method: "runNwxImport", channel: "import:run-nwx", kind: "invoke", arg: "payload" },
+  { method: "previewScrivImport", channel: "import:preview-scriv", kind: "invoke", arg: null },
+  { method: "runScrivImport", channel: "import:run-scriv", kind: "invoke", arg: "payload" },
+  // ---- 云备份（P80） ----
+  { method: "getCloudBackupStatus", channel: "backup:cloud-status", kind: "invoke", arg: null },
+  { method: "saveCloudBackupSettings", channel: "backup:cloud-save-settings", kind: "invoke", arg: "payload" },
+  { method: "uploadCloudBackup", channel: "backup:cloud-upload", kind: "invoke", arg: null },
+  { method: "listCloudBackups", channel: "backup:cloud-list", kind: "invoke", arg: null },
+  { method: "restoreCloudBackupPreview", channel: "backup:cloud-restore", kind: "invoke", arg: "payload" },
+  { method: "saveCloudBackupSchedule", channel: "backup:cloud-schedule", kind: "invoke", arg: "payload" },
+  // ---- 外部软件文件桥（P74） ----
+  { method: "exportForBridge", channel: "bridge:export", kind: "invoke", arg: "payload" },
+  { method: "openBridgeFile", channel: "bridge:open", kind: "invoke", arg: "payload" },
+  { method: "checkBridgeChanges", channel: "bridge:check", kind: "invoke", arg: null },
+  { method: "previewBridgeReimport", channel: "bridge:reimport-preview", kind: "invoke", arg: "payload" },
+  { method: "confirmBridgeReimport", channel: "bridge:reimport-confirm", kind: "invoke", arg: "payload" },
+  // ---- 图像生成（P88） ----
+  { method: "getImageGenConfig", channel: "image:get-config", kind: "invoke", arg: null },
+  { method: "saveImageGenConfig", channel: "image:save-config", kind: "invoke", arg: "payload" },
+  { method: "generateImage", channel: "image:generate", kind: "invoke", arg: "payload" },
 ];
 
 // main 进程必须注册 handler 的通道集合（invoke + send）；event 通道由 main 主动推送、无需注册。

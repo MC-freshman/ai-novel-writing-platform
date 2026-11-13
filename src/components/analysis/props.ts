@@ -19,4 +19,5 @@ export type AnalysisPanelProps = {
   }) => void;
   onApplyState: (state: AppState) => void;
   onStatus: (message: string) => void;
+  saveCurrentPage: () => Promise<boolean>;
 };

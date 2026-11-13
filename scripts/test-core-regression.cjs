@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { listenSafe } = require("./lib/safe-port.cjs");
 const fs = require("node:fs/promises");
 const http = require("node:http");
 const path = require("node:path");
@@ -135,7 +136,7 @@ async function testCancelableStreaming() {
       response.end("data: [DONE]\n\n");
     }, 180);
   });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await listenSafe(server);
   const port = server.address().port;
   const controller = new AbortController();
   try {
@@ -166,7 +167,7 @@ async function testClaudeHistoryVectorCompatibilityAndBackups() {
     response.writeHead(200, { "Content-Type": "application/json" });
     response.end(JSON.stringify({ content: [{ text: "保留上下文的回答" }] }));
   });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await listenSafe(server);
   const port = server.address().port;
   try {
     const answer = await platform.callChatApi(

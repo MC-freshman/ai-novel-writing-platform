@@ -63,6 +63,26 @@ export function useAppBindings() {
     "showQuickPanel",
   );
 
+  const [showNameGen, setShowNameGen] = useStoreField(
+    stores.navigation,
+    "showNameGen",
+  );
+
+  const [showImportProject, setShowImportProject] = useStoreField(
+    stores.navigation,
+    "showImportProject",
+  );
+
+  const [showFileBridge, setShowFileBridge] = useStoreField(
+    stores.navigation,
+    "showFileBridge",
+  );
+
+  const [showImageGen, setShowImageGen] = useStoreField(
+    stores.navigation,
+    "showImageGen",
+  );
+
   const [showStoryCenter, setShowStoryCenter] = useStoreField(
     stores.navigation,
     "showStoryCenter",
@@ -173,6 +193,11 @@ export function useAppBindings() {
     "aiChatOpenRequest",
   );
 
+  const [promptTemplatesOpenRequest, setPromptTemplatesOpenRequest] = useStoreField(
+    stores.navigation,
+    "promptTemplatesOpenRequest",
+  );
+
   const [previewWidth, setPreviewWidth] = useStoreField(
     stores.layout,
     "previewWidth",
@@ -215,6 +240,14 @@ export function useAppBindings() {
     setShowSettings,
     showQuickPanel,
     setShowQuickPanel,
+    showNameGen,
+    setShowNameGen,
+    showImportProject,
+    setShowImportProject,
+    showFileBridge,
+    setShowFileBridge,
+    showImageGen,
+    setShowImageGen,
     showStoryCenter,
     setShowStoryCenter,
     storyCenterInitialTab,
@@ -267,6 +300,8 @@ export function useAppBindings() {
     setAiExpanded,
     aiChatOpenRequest,
     setAiChatOpenRequest,
+    promptTemplatesOpenRequest,
+    setPromptTemplatesOpenRequest,
     previewWidth,
     setPreviewWidth,
     recoveryDrafts,

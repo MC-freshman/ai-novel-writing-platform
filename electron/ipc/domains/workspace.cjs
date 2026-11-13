@@ -7,6 +7,7 @@ const {
   crypto,
   dialog,
   ensureCurrentProject,
+  fileBridge,
   fs,
   getCreativeWorkspaceView,
   loadConfig,
@@ -21,6 +22,30 @@ const {
 } = require("../domain-dependencies/workspace.cjs");
 
 function registerDomain() {
+  registerIpcHandler("bridge:export", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return fileBridge.exportForBridge(projectPath, payload || {});
+  });
+
+  registerIpcHandler("bridge:open", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return fileBridge.openExternal(projectPath, payload || {});
+  });
+
+  registerIpcHandler("bridge:check", async () => {
+    const projectPath = await ensureCurrentProject();
+    return fileBridge.checkChanges(projectPath);
+  });
+
+  registerIpcHandler("bridge:reimport-preview", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return fileBridge.reimportPreview(projectPath, payload || {});
+  });
+
+  registerIpcHandler("bridge:reimport-confirm", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return fileBridge.reimportConfirm(projectPath, payload || {});
+  });
   registerIpcHandler("workspace:get", async () => {
     const projectPath = await ensureCurrentProject();
     return getCreativeWorkspaceView(projectPath);

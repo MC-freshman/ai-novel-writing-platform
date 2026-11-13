@@ -639,3 +639,574 @@
   resize: vertical;
 }
 
+
+/* 写作统计面板（P75） */
+.writing-stats {
+  display: grid;
+  gap: 12px;
+  padding: 12px 16px;
+  overflow: auto;
+}
+
+.writing-stats-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.writing-stats-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 29px;
+}
+
+.writing-stats-note {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 0;
+}
+
+.writing-stats-error {
+  color: var(--danger);
+  font-size: 12px;
+  margin: 0;
+}
+
+.writing-stats-empty {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+  margin: 0;
+}
+
+.writing-stats-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.writing-stats-card {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.writing-stats-card span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.writing-stats-card strong {
+  font-size: 15px;
+}
+
+.writing-stats-card em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.writing-stats-card em[data-met="true"] {
+  color: var(--accent);
+}
+
+.writing-stats-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 140px;
+  padding: 8px 4px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.writing-bar-slot {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 3px;
+}
+
+.writing-bar {
+  width: 100%;
+  max-width: 26px;
+  border-radius: 3px 3px 0 0;
+  background: var(--line);
+}
+
+.writing-bar[data-met="true"] {
+  background: var(--accent);
+}
+
+.writing-bar-slot span {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+/* 多格式导出（P79） */
+.multi-format-export {
+  display: grid;
+  gap: 8px;
+  padding: 8px 0 4px;
+}
+
+.multi-format-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.multi-format-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.multi-format-row label {
+  display: grid;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.multi-format-row button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+}
+
+/* 敏感词自查（P77） */
+.sensitive-panel {
+  display: grid;
+  gap: 12px;
+  padding: 12px 16px;
+  overflow: auto;
+}
+
+.sensitive-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sensitive-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 29px;
+}
+
+.sensitive-note {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 0;
+  line-height: 1.6;
+}
+
+.sensitive-section {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--panel);
+}
+
+.sensitive-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sensitive-section-head button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  font-size: 11px;
+}
+
+.sensitive-dict-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.sensitive-dict-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sensitive-dict-list li > label {
+  flex: 1;
+  min-width: 180px;
+}
+
+.sensitive-dict-meta {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sensitive-delete-confirm {
+  color: var(--danger);
+  font-size: 11px;
+}
+
+.sensitive-ignore-row {
+  display: flex;
+  gap: 6px;
+}
+
+.sensitive-ignore-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.sensitive-ignore-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.sensitive-ignore-chips button {
+  min-height: 24px;
+  font-size: 11px;
+  border-radius: 999px;
+  color: var(--muted);
+}
+
+.sensitive-report-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.sensitive-report-chapter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sensitive-report-chapter button {
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.sensitive-hit-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.sensitive-hit-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  flex-wrap: wrap;
+}
+
+.sensitive-hit-list mark {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
+  border-radius: 3px;
+  padding: 0 3px;
+}
+
+.sensitive-hit-context {
+  flex: 1;
+  min-width: 160px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.sensitive-hit-list li > button {
+  min-height: 22px;
+  font-size: 10px;
+}
+
+/* 全书批量替换（P76） */
+.book-replace {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--panel);
+}
+
+.book-replace-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.book-replace-note {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.book-replace-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.book-replace-form input[type="text"],
+.book-replace-form input:not([type]) {
+  flex: 1;
+  min-width: 140px;
+}
+
+.book-replace-form button {
+  min-height: 30px;
+}
+
+.book-replace-results {
+  display: grid;
+  gap: 6px;
+}
+
+.book-replace-results-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.book-replace-results-head button {
+  min-height: 28px;
+  font-size: 11px;
+}
+
+.book-replace-chapters {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.book-replace-chapters li {
+  display: grid;
+  gap: 2px;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.book-replace-sample {
+  color: var(--muted);
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.book-replace-plan {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.book-replace-plan button {
+  min-height: 30px;
+}
+
+/* 文风自查（P85） */
+.style-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px 16px;
+  overflow: auto;
+}
+
+.style-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.style-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 29px;
+}
+
+.style-note {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 0;
+  line-height: 1.6;
+}
+
+.style-summary {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.style-summary strong {
+  color: var(--text);
+}
+
+.style-chapter-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.style-chapter-list li {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--panel);
+}
+
+.style-chapter-list li[data-flagged="true"] {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
+}
+
+.style-chapter-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.style-chapter-head button {
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.style-metrics {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.style-flags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.style-flag {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+
+.style-paragraphs summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--accent-strong);
+}
+
+.style-paragraphs ul {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.style-paragraphs li {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  font-size: 11px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.style-paragraphs mark {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
+  border-radius: 3px;
+  padding: 0 3px;
+}
+
+.book-replace-scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.book-replace-scope select {
+  font-size: 11px;
+}
+
+.sensitive-verdicts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.sensitive-verdicts li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  flex-wrap: wrap;
+}
+
+.sensitive-verdicts mark {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent-strong);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+
+.sensitive-verdicts mark[data-verdict="确认"] {
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  color: var(--danger);
+}
+
+.sensitive-verdicts li button {
+  min-height: 22px;
+  font-size: 10px;
+}

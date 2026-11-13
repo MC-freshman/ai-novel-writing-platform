@@ -3,6 +3,7 @@
 
 const storyState = require("./story-state.cjs");
 const creativeWorkspace = require("./creative-workspace.cjs");
+const aiLedger = require("./ai-ledger.cjs");
 const novelAgent = require("./novel-agent.cjs");
 const { MAX_RETRIEVAL_TOP_K, STRUCTURING_CONTEXT_CHAR_BUDGET } = require("./constants.cjs");
 require("./runtime-state.cjs");
@@ -515,6 +516,8 @@ async function applySafeRevisionUnlocked(projectPath, revisionId) {
   const nextContent = replaceUniqueSelection(previousContent, revision.original, revision.replacement);
   await saveChapterContent(projectPath, { chapterId: chapter.id, content: nextContent, expectedRevision: contentRevision(previousContent) });
   await creativeWorkspace.upsertItem(projectPath, "revisions", { ...revision, status: "已采纳", appliedAt: nowIso(), error: "" });
+  // P78 台账：记录采纳事件；失败不阻断采纳。
+  await aiLedger.recordAdoption(projectPath, { chapterId: chapter.id, chapterTitle: chapter.title, revisionId: revision.id, mode: "full", adoptedWords: countWords(revision.replacement), at: nowIso() }).catch(() => {});
   return { state: await buildAppState(projectPath, chapter.id), revision: { ...revision, status: "已采纳" } };
 }
 
@@ -545,6 +548,8 @@ async function applySafeRevisionPartUnlocked(projectPath, payload = {}) {
     acceptedParts: [...(revision.acceptedParts || []), { original: originalPart, replacement: replacementPart, appliedAt }],
     error: "",
   });
+  // P78 台账：记录局部采纳事件；失败不阻断采纳。
+  await aiLedger.recordAdoption(projectPath, { chapterId: chapter.id, chapterTitle: chapter.title, revisionId: revision.id, mode: "part", adoptedWords: countWords(replacementPart), at: appliedAt }).catch(() => {});
   return { state: await buildAppState(projectPath, chapter.id), revision: updated, workspace: await getCreativeWorkspaceView(projectPath) };
 }
 

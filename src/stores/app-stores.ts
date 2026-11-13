@@ -1,6 +1,6 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import type { SetStateAction } from "react";
-import type { AppState, Chapter, BackgroundTask, EditorScrollAnchor, ChatMessage, ChatSession, RetrievalMode, RetrievalDiagnostics, ProgressState, RecoveryDraft } from "../types";
+import type { AppState, Chapter, BackgroundTask, EditorScrollAnchor, ChatMessage, ChatSession, RetrievalMode, RetrievalDiagnostics, ProgressState, RecoveryDraft, FocusLockSession } from "../types";
 import type { CreativeWorkspaceTab } from "../components/story/CreativeWorkspace";
 import type { StoryCenterTab } from "../components/story/StoryCenterModal";
 import type { InlineReviewItem } from "../lib/editor-ops";
@@ -42,6 +42,9 @@ type ChatState = {
 
 type LayoutState = {
   focusMode: boolean;
+  focusLock: FocusLockSession | null;
+  referenceChapterId: string;
+  referenceChapterIds: string[];
   preview: boolean;
   leftWidth: number;
   rightWidth: number;
@@ -57,11 +60,16 @@ type NavigationState = {
   progressOpenMode: "chapters" | "network" | "mindmap" | "grid" | "";
   showSettings: boolean;
   showQuickPanel: boolean;
+  showNameGen: boolean;
+  showImportProject: boolean;
+  showFileBridge: boolean;
+  showImageGen: boolean;
   showStoryCenter: boolean;
   storyCenterInitialTab: StoryCenterTab;
   workspaceInitialTab: CreativeWorkspaceTab;
   showTaskCenter: boolean;
   aiChatOpenRequest: number;
+  promptTemplatesOpenRequest: number;
 };
 
 type TasksState = {
@@ -108,6 +116,9 @@ export function createAppStores(viewportWidth = 1024) {
     }),
     layout: createDomain<LayoutState>({
       focusMode: false,
+      focusLock: null,
+      referenceChapterId: "",
+      referenceChapterIds: [],
       preview: false,
       leftWidth: 256,
       rightWidth: 360,
@@ -122,11 +133,16 @@ export function createAppStores(viewportWidth = 1024) {
       progressOpenMode: "",
       showSettings: false,
       showQuickPanel: false,
+      showNameGen: false,
+      showImportProject: false,
+      showFileBridge: false,
+      showImageGen: false,
       showStoryCenter: false,
       storyCenterInitialTab: "facts",
       workspaceInitialTab: "planning",
       showTaskCenter: false,
       aiChatOpenRequest: 0,
+      promptTemplatesOpenRequest: 0,
     }),
     tasks: createDomain<TasksState>({
       backgroundTasks: [],

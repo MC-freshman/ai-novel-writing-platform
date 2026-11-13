@@ -45,6 +45,28 @@ import type {
   RecoveryDraft,
   RecoveryStatus,
   OperationJournalItem,
+  McpIntegrationStatus,
+  McpDirectoryPick,
+  McpSettings,
+  McpClientConfig,
+  McpSelfTestReport,
+  WritingOverview,
+  PromptTemplateList,
+  PromptTemplateImportResult,
+  PromptTemplateExportResult,
+  ExportFormatInfo,
+  FormatExportResult,
+  SensitiveState,
+  SensitiveReport,
+  AiLedgerOverview,
+  EvidenceExportResult,
+  BookSearchResult,
+  ReplacePlan,
+  ReplaceExecutionResult,
+  StyleReport,
+  NameGenResult,
+  ImportPreview,
+  ImportRunResult,
 } from "./types";
 
 declare global {
@@ -225,6 +247,7 @@ declare global {
         retrievalMode?: RetrievalMode;
         selectedChapterId?: string;
         additionalSourceIds?: string[];
+        persona?: { characterId: string; name: string };
       }) => Promise<{
         answer: string;
         context: AppState extends never ? never : import("./types").RetrievedChunk[];
@@ -268,6 +291,59 @@ declare global {
         titles: string[];
       }>;
       rebuildIndex: () => Promise<{ chunks: number; state: AppState }>;
+      getMcpIntegrationStatus: () => Promise<McpIntegrationStatus>;
+      pickMcpServerDirectory: () => Promise<McpDirectoryPick>;
+      saveMcpSettings: (payload: Partial<McpSettings>) => Promise<McpIntegrationStatus>;
+      buildMcpClientConfig: (payload?: { directory?: string; projectPath?: string; runtimeKind?: McpSettings["runtimeKind"] }) => Promise<McpClientConfig>;
+      selfTestMcp: (payload?: { directory?: string; projectPath?: string }) => Promise<McpSelfTestReport>;
+      getWritingOverview: () => Promise<WritingOverview>;
+      listPromptTemplates: () => Promise<PromptTemplateList>;
+      savePromptTemplate: (payload: { id?: string; title: string; body: string }) => Promise<PromptTemplateList>;
+      deletePromptTemplate: (templateId: string) => Promise<PromptTemplateList>;
+      exportPromptTemplates: () => Promise<PromptTemplateExportResult>;
+      importPromptTemplates: () => Promise<PromptTemplateImportResult>;
+      listExportFormats: () => Promise<{ formats: ExportFormatInfo[] }>;
+      runFormatExport: (payload: { format: string; options?: { byVolume?: boolean; titleLine?: boolean } }) => Promise<FormatExportResult>;
+      getSensitiveState: () => Promise<SensitiveState>;
+      importSensitiveDictionary: () => Promise<{ canceled: boolean; dictionary?: { id: string; name: string; wordCount: number } }>;
+      toggleSensitiveDictionary: (payload: { id: string; enabled: boolean }) => Promise<SensitiveState>;
+      deleteSensitiveDictionary: (dictionaryId: string) => Promise<SensitiveState>;
+      updateSensitiveIgnore: (payload: { word: string; remove?: boolean }) => Promise<SensitiveState>;
+      scanSensitive: (payload?: { chapterIds?: string[] }) => Promise<SensitiveReport>;
+      aiReviewSensitive: (payload: { hits: Array<{ word: string; context?: string }> }) => Promise<{ verdicts: Array<{ word: string; verdict: string; reason: string }>; raw: string }>;
+      getAiLedgerOverview: () => Promise<AiLedgerOverview>;
+      exportCreationEvidence: (payload?: { includeVersionContent?: boolean }) => Promise<EvidenceExportResult>;
+      searchBook: (payload: { query: string; caseSensitive?: boolean; wholeWord?: boolean; useRegex?: boolean; scope?: "chapters" | "cards" | "all" }) => Promise<BookSearchResult>;
+      buildReplacePlan: (payload: { query: string; replacement: string; caseSensitive?: boolean; wholeWord?: boolean; useRegex?: boolean; scope?: "chapters" | "cards" | "all"; chapterIds?: string[]; cardIds?: string[] }) => Promise<ReplacePlan>;
+      executeBookReplace: (payload: { query: string; replacement: string; caseSensitive?: boolean; wholeWord?: boolean; useRegex?: boolean; scope?: "chapters" | "cards" | "all"; selections: Array<{ chapterId: string; occurrenceIndices?: number[] }>; cardSelections?: Array<{ cardType: string; cardId: string }>; expectedRevisions?: Record<string, string> }) => Promise<ReplaceExecutionResult>;
+      analyzeStyle: (payload?: { chapterIds?: string[]; thresholds?: Record<string, number> }) => Promise<StyleReport>;
+      getStyleReport: () => Promise<StyleReport | null>;
+      generateNames: (payload: { type: string; style?: string; count?: number; seed?: string }) => Promise<NameGenResult>;
+      generateNamesAi: (payload: { type: string; style?: string; count?: number; theme?: string }) => Promise<NameGenResult & { source: string }>;
+      getTtsConfig: () => Promise<{ engine: "system" | "external"; externalUrl: string }>;
+      saveTtsConfig: (payload: { engine: string; externalUrl?: string }) => Promise<{ engine: "system" | "external"; externalUrl: string }>;
+      readMaterialImage: (payload: { path: string }) => Promise<{ dataUrl: string }>;
+      testEmbeddingConnection: (payload?: { embeddingBaseUrl?: string; embeddingModel?: string }) => Promise<{ ok: boolean; configured: boolean; dimensions?: number; latencyMs: number; error?: string }>;
+      previewVaultImport: () => Promise<ImportPreview>;
+      runVaultImport: (payload: { directory: string }) => Promise<ImportRunResult>;
+      previewNwxImport: () => Promise<ImportPreview>;
+      runNwxImport: (payload: { filePath: string }) => Promise<ImportRunResult>;
+      previewScrivImport: () => Promise<ImportPreview>;
+      runScrivImport: (payload: { filePath: string }) => Promise<ImportRunResult>;
+      getCloudBackupStatus: () => Promise<{ settings: { targetType: "local" | "webdav"; localDir: string; webdavUrl: string; webdavDir: string; username: string }; hasPassword: boolean; schedule: { enabled: boolean; intervalHours: number; lastRunAt: string; lastError: string; lastFile: string } }>;
+      saveCloudBackupSettings: (payload: { targetType: string; localDir?: string; webdavUrl?: string; webdavDir?: string; username?: string; password?: string; clearPassword?: boolean }) => Promise<{ settings: { targetType: "local" | "webdav"; localDir: string; webdavUrl: string; webdavDir: string; username: string }; hasPassword: boolean }>;
+      uploadCloudBackup: () => Promise<{ fileName: string; size: number; target: string }>;
+      listCloudBackups: () => Promise<{ backups: Array<{ name: string; size: number; lastmod: string }> }>;
+      restoreCloudBackupPreview: (payload: { name: string }) => Promise<{ token: string; preview: { conflicts?: { chapters?: string[]; characters?: string[]; worldDocs?: string[] } }; tempFile: string }>;
+      saveCloudBackupSchedule: (payload: { enabled: boolean; intervalHours: number }) => Promise<{ enabled: boolean; intervalHours: number; lastRunAt: string; lastError: string; lastFile: string }>;
+      exportForBridge: (payload: { kind: "mindmap" | "chapter"; id: string }) => Promise<{ files: string[]; primary: string }>;
+      openBridgeFile: (payload: { filePath: string }) => Promise<{ opened: boolean }>;
+      checkBridgeChanges: () => Promise<{ changed: Array<{ kind: string; sourceId: string; sourceTitle: string; filePath: string; lossy?: string }> }>;
+      previewBridgeReimport: (payload: { bridgeFile: string }) => Promise<{ kind: string; sourceId: string; sourceTitle: string; nodeCount?: number; sheets?: Array<{ title: string; rootText: string; nodeCount: number }>; conflict?: boolean; preview?: string; lossy?: string }>;
+      confirmBridgeReimport: (payload: { bridgeFile: string; sheetIndex?: number }) => Promise<{ kind: string; id: string; nodeCount?: number; wordCount?: number }>;
+      getImageGenConfig: () => Promise<{ settings: { baseUrl: string; model: string; size: string }; hasKey: boolean }>;
+      saveImageGenConfig: (payload: { baseUrl?: string; model?: string; size?: string; apiKey?: string; clearKey?: boolean }) => Promise<{ settings: { baseUrl: string; model: string; size: string }; hasKey: boolean }>;
+      generateImage: (payload: { prompt: string; size?: string; n?: number }) => Promise<{ files: Array<{ path: string; materialId: string; dataUrl: string }>; prompt: string; model: string; size: string }>;
     };
   }
 }

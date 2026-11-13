@@ -6,7 +6,9 @@ export type BackgroundTaskType =
   | "knowledge-rebuild"
   | "snapshot"
   | "agent-workflow"
-  | "creative-statistics";
+  | "creative-statistics"
+  | "book-replace"
+  | "image-gen";
 
 export type BackgroundTaskStatus =
   | "等待中"

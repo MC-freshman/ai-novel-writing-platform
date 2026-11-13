@@ -142,7 +142,10 @@ export function RichDocumentEditor({
       onContextMenu={onContextMenu}
       onClick={(event) => {
         const marker = (event.target as HTMLElement).closest<HTMLElement>("[data-review-id]");
-        if (marker?.dataset.reviewId) setActiveReviewId(marker.dataset.reviewId);
+        if (!marker?.dataset.reviewId) return;
+        const item = reviews.find((review) => review.id === marker.dataset.reviewId);
+        if (item?.kind === "sensitive") return;
+        setActiveReviewId(marker.dataset.reviewId);
       }}
     >
       <RichEditorToolbar editor={editor} />

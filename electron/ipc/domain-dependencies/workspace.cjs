@@ -15,6 +15,7 @@ const path = require("node:path");
 const { state } = require("../../services/runtime-state.cjs");
 const storyState = require("../../services/story-state.cjs");
 const { withProjectTransaction, writeFileAtomic } = require("../../services/project-storage.cjs");
+const fileBridge = require("../../services/file-bridge.cjs");
 
 module.exports = {
   buildCreativeStatistics,
@@ -22,6 +23,7 @@ module.exports = {
   crypto,
   dialog,
   ensureCurrentProject,
+  fileBridge,
   fs,
   getCreativeWorkspaceView,
   loadConfig,

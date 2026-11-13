@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { listenSafe } = require("./lib/safe-port.cjs");
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
@@ -174,7 +175,7 @@ test("P11 DONE 无需断开连接就结束，错误和截断保留回答并提�
     });
   });
   server.on("connection", (socket) => { sockets.add(socket); socket.on("close", () => sockets.delete(socket)); });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await listenSafe(server);
   t.after(async () => { for (const socket of sockets) socket.destroy(); await new Promise((resolve) => server.close(resolve)); });
   const config = (mode) => ({ api: { provider: "custom", baseUrl: `http://127.0.0.1:${server.address().port}/${mode}`, apiKey: "", chatModel: "synthetic", maxTokens: 100 } });
   const controller = new AbortController();
@@ -338,7 +339,7 @@ test("P16 CDP 无响应请求超时，连接关闭时立即拒绝等待者", asy
     const accept = crypto.createHash("sha1").update(request.headers["sec-websocket-key"] + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest("base64");
     socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
   });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await listenSafe(server);
   t.after(async () => { for (const socket of sockets) socket.destroy(); await new Promise((resolve) => server.close(resolve)); });
   const cdp = connectCdp(`ws://127.0.0.1:${server.address().port}`, { timeoutMs: 120 });
   await cdp.ready;

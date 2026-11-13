@@ -5,6 +5,11 @@ import type { AppState, AgentPermissionLevel, Provider } from "../../types";
 import { clampNumber, getErrorMessage } from "../../lib/text-utils";
 import { PROVIDER_DEFAULTS, MAX_CHAT_TOKENS, MAX_RETRIEVAL_TOP_K, MAX_RETRIEVAL_SCAN_K } from "../../lib/chat-utils";
 import { useDialogFocus } from "../../hooks/useDialogFocus";
+import { ExternalMcpPanel } from "./ExternalMcpPanel";
+import { CloudBackupPanel } from "./CloudBackupPanel";
+import { TtsEngineSettings } from "./TtsEngineSettings";
+import { listModuleSlots } from "../../modules/core/registry";
+import { isModuleEnabled } from "../../lib/modules";
 
 export function SettingsModal({
   state,
@@ -26,6 +31,8 @@ export function SettingsModal({
   const [securityStatus, setSecurityStatus] = useState("");
   const [securityBusy, setSecurityBusy] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<Awaited<ReturnType<typeof window.novelAPI.checkForUpdate>> | null>(null);
+  const [embeddingTest, setEmbeddingTest] = useState<{ ok: boolean; message: string } | null>(null);
+  const [testingEmbedding, setTestingEmbedding] = useState(false);
   const errorRef = useRef<HTMLSpanElement | null>(null);
   const provider = draft.api.provider;
 
@@ -43,6 +50,15 @@ export function SettingsModal({
 
   function updateAgent<K extends keyof typeof draft.agent>(key: K, value: (typeof draft.agent)[K]) {
     setDraft((config) => ({ ...config, agent: { ...config.agent, [key]: value } }));
+  }
+
+  function updateModule(slotId: string, enabled: boolean) {
+    setDraft((config) => ({
+      ...config,
+      modules: { ...config.modules, [slotId]: { ...config.modules?.[slotId], enabled } },
+      // mindmap 槽同步写旧字段，保持既有配置与回归断言兼容。
+      ...(slotId === "mindmap" ? { ui: { ...config.ui, mindMapEnabled: enabled } } : {}),
+    }));
   }
 
   async function save() {
@@ -93,6 +109,32 @@ export function SettingsModal({
       setSecurityStatus(`下载更新失败：${getErrorMessage(error)}`);
     } finally {
       setSecurityBusy(false);
+    }
+  }
+
+  function applyOllamaPreset() {
+    setDraft((config) => ({
+      ...config,
+      api: { ...config.api, embeddingBaseUrl: "http://127.0.0.1:11434/v1", embeddingModel: "nomic-embed-text" },
+    }));
+    setEmbeddingTest(null);
+  }
+
+  async function testEmbedding() {
+    setTestingEmbedding(true);
+    setEmbeddingTest(null);
+    try {
+      const result = await window.novelAPI.testEmbeddingConnection({
+        embeddingBaseUrl: draft.api.embeddingBaseUrl,
+        embeddingModel: draft.api.embeddingModel,
+      });
+      setEmbeddingTest(result.ok
+        ? { ok: true, message: `连接成功：${result.dimensions} 维，耗时 ${result.latencyMs}ms。保存设置后请重建索引。` }
+        : { ok: false, message: result.error || "连接失败" });
+    } catch (error) {
+      setEmbeddingTest({ ok: false, message: getErrorMessage(error) });
+    } finally {
+      setTestingEmbedding(false);
     }
   }
 
@@ -225,6 +267,11 @@ export function SettingsModal({
             向量模型
             <input value={draft.api.embeddingModel} onChange={(event) => updateApi("embeddingModel", event.target.value)} />
           </label>
+          <div className="settings-security-actions">
+            <button disabled={testingEmbedding} onClick={applyOllamaPreset}>Ollama 本地预设</button>
+            <button disabled={testingEmbedding} onClick={() => void testEmbedding()}>{testingEmbedding ? "测试中..." : "测试向量连接"}</button>
+          </div>
+          {embeddingTest && <p className="settings-security-status" data-tone={embeddingTest.ok ? "info" : "error"}>{embeddingTest.message}</p>}
           <div className="settings-group-title">编辑与保存</div>
           <label>
             字号
@@ -245,6 +292,10 @@ export function SettingsModal({
             自动保存毫秒
             <input type="number" min="600" value={draft.ui.autosaveMs} onChange={(event) => updateUi("autosaveMs", Number(event.target.value))} />
           </label>
+          <label>
+            每日字数目标（0=关闭）
+            <input type="number" min="0" step="100" value={draft.ui.dailyWordGoal ?? 0} onChange={(event) => updateUi("dailyWordGoal", Math.max(0, Math.floor(Number(event.target.value) || 0)))} />
+          </label>
           <label className="checkbox-line">
             <input type="checkbox" checked={draft.ui.backupOnSave} onChange={(event) => updateUi("backupOnSave", event.target.checked)} />
             每次保存后自动备份
@@ -253,6 +304,11 @@ export function SettingsModal({
             <input type="checkbox" checked={draft.ui.recoveryEnabled !== false} onChange={(event) => updateUi("recoveryEnabled", event.target.checked)} />
             保留异常退出恢复草稿和窗口状态
           </label>
+          <label className="checkbox-line">
+            <input type="checkbox" checked={draft.ui.focusLockEnabled === true} onChange={(event) => updateUi("focusLockEnabled", event.target.checked)} />
+            专注锁定：进入专注时设定目标，退出需确认（紧急退出始终可用）
+          </label>
+          <TtsEngineSettings />
         </div>
 
         <details className="settings-agent-panel">
@@ -282,28 +338,40 @@ export function SettingsModal({
         </details>
 
         <details className="settings-agent-panel">
-          <summary>模块与规划</summary>
+          <summary>模块管理</summary>
           <div>
-            <label className="checkbox-line">
-              <input
-                type="checkbox"
-                checked={draft.ui.mindMapEnabled !== false}
-                onChange={(event) => {
-                  const enabled = event.target.checked;
-                  void (async () => {
-                    if (!enabled && onBeforeDisableMindMap && !(await onBeforeDisableMindMap())) {
-                      setErrorText("规划草稿尚未保存，未停用思维导图模块。");
-                      return;
-                    }
-                    setErrorText("");
-                    updateUi("mindMapEnabled", enabled);
-                  })();
-                }}
-              />
-              启用内置思维导图模块
-            </label>
-            <p>关闭后思维导图入口显示停用提示，导图数据保留；重新启用即可恢复。</p>
+            {listModuleSlots().map((slot) => (
+              <label className="checkbox-line" key={slot.id}>
+                <input
+                  type="checkbox"
+                  checked={isModuleEnabled(draft, slot.id)}
+                  onChange={(event) => {
+                    const enabled = event.target.checked;
+                    void (async () => {
+                      if (!enabled && slot.id === "mindmap" && onBeforeDisableMindMap && !(await onBeforeDisableMindMap())) {
+                        setErrorText("规划草稿尚未保存，未停用思维导图模块。");
+                        return;
+                      }
+                      setErrorText("");
+                      updateModule(slot.id, enabled);
+                    })();
+                  }}
+                />
+                {slot.toggleLabel || `启用${slot.label}模块`}
+              </label>
+            ))}
+            <p>停用后对应入口显示提示，数据保留；重新启用即可恢复。内置实现可按 docs/guides/模块替换指南.md 替换为自研实现或外部接入。</p>
           </div>
+        </details>
+
+        <details className="settings-agent-panel settings-security-panel">
+          <summary>云备份与恢复</summary>
+          <CloudBackupPanel state={state} onApplyState={onSave} onStatus={(message) => setSecurityStatus(message)} />
+        </details>
+
+        <details className="settings-agent-panel settings-security-panel">
+          <summary>外部接入（MCP）</summary>
+          <ExternalMcpPanel />
         </details>
 
         <details className="settings-agent-panel settings-security-panel">

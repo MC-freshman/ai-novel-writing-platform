@@ -106,6 +106,8 @@ function registerDomain() {
       "knowledge-rebuild",
       "snapshot",
       "creative-statistics",
+      "book-replace",
+      "image-gen",
     ]);
     if (!allowedTypes.has(payload?.type))
       throw new Error("不支持的后台任务类型。");

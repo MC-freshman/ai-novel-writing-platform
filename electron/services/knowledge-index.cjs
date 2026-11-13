@@ -502,6 +502,22 @@ async function getEmbedding(text, apiConfig, options = {}) {
   return { vector: localEmbedding(text), source: "local", identity: embeddingIdentity(apiConfig, "local"), warning: "" };
 }
 
+/** 向量连接诊断（P89）：用探针文本调用配置的 embedding 接口，返回维度/耗时/错误。本地地址无需密钥。 */
+async function testEmbedding(apiConfig, options = {}) {
+  const started = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 10000);
+  try {
+    const vector = await remoteEmbedding("向量连接测试", apiConfig, { signal: controller.signal });
+    if (!vector) return { ok: false, configured: false, error: "未配置向量接口地址或模型（本地地址无需密钥）。", latencyMs: Date.now() - started };
+    return { ok: true, configured: true, dimensions: vector.length, latencyMs: Date.now() - started };
+  } catch (error) {
+    return { ok: false, configured: true, error: String(error?.message || error).slice(0, 300), latencyMs: Date.now() - started };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 
 const embeddingFallback = state.embeddingFallback;
 
@@ -968,6 +984,7 @@ const __moduleExports = {
   localEmbedding,
   remoteEmbedding,
   getEmbedding,
+  testEmbedding,
   embeddingFallback,
   embeddingIdentity,
   extractMetadata,

@@ -28,6 +28,7 @@ export function useAppEffects(
     | "exportBookDocx"
     | "exportChapterDocx"
     | "focusMode"
+    | "focusDialogsOpen"
     | "importDocument"
     | "leftWidth"
     | "openProject"
@@ -87,6 +88,7 @@ export function useAppEffects(
     exportBookDocx,
     exportChapterDocx,
     focusMode,
+    focusDialogsOpen,
     importDocument,
     leftWidth,
     openProject,
@@ -615,6 +617,7 @@ export function useAppEffects(
         showQuickPanel ||
         showStoryCenter ||
         showTaskCenter ||
+        focusDialogsOpen ||
         Boolean(contextMenu);
       if (
         (event.ctrlKey || event.metaKey) &&
@@ -643,6 +646,7 @@ export function useAppEffects(
     return () => window.removeEventListener("keydown", handler);
   }, [
     contextMenu,
+    focusDialogsOpen,
     focusMode,
     saveCurrentPage,
     setFocusMode,

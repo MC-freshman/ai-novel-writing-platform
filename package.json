@@ -1,6 +1,6 @@
 {
   "name": "ai-novel-writing-platform",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "private": true,
   "description": "本地 AI 小说创作平台，支持 Markdown 写作、本地知识库和 RAG 对话。",
   "engines": {
@@ -43,6 +43,7 @@
     "check:services": "node scripts/check-service-map.cjs",
     "test:ui-stores": "node scripts/test-store-ui.cjs",
     "check:modules": "node scripts/check-module-boundaries.cjs",
+    "verify:module": "node scripts/verify-module-package.cjs",
     "test:ui-no-mindmap": "node scripts/test-ui-no-mindmap.cjs"
   },
   "dependencies": {
@@ -64,6 +65,7 @@
     "node-html-parser": "^9.0.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "webdav": "^5.11.0",
     "zustand": "^5.0.15"
   },
   "overrides": {
@@ -104,6 +106,11 @@
       "electron/**/*",
       "shared/**/*",
       "package.json"
+    ],
+    "asarUnpack": [
+      "electron/**/*",
+      "shared/**/*",
+      "node_modules/**/*"
     ],
     "win": {
       "signAndEditExecutable": false,

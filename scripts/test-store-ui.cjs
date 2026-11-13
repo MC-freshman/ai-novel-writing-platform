@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { listenSafe } = require("./lib/safe-port.cjs");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const http = require("node:http");
@@ -56,7 +57,7 @@ async function heldRequest(question, destination, failOld = false) {
 }
 async function main() {
   await fs.mkdir(directory, { recursive: true });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await listenSafe(server);
   await platform.ensureProjectStructure(project, "Zustand合成流式验收");
   const config = await platform.loadConfig(project);
   config.agent.autoLocalAnalysis = false;

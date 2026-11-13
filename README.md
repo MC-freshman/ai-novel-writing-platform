@@ -4,7 +4,7 @@
 
 A Windows desktop application for long-form fiction. Keep manuscripts, outlines, characters, worldbuilding, progress, and AI assistance in one local project, with a quiet writing workspace and tools for checking story continuity.
 
-**当前版本 / Current release: 0.4.1 · Windows x64**
+**当前版本 / Current release: 0.4.2 · Windows x64**
 
 软件界面目前使用中文；本 README 提供完整的中文和英文操作说明，英文部分保留实际中文按钮名称，方便对照界面。
 
@@ -26,12 +26,12 @@ AI 功能用于检索相关资料、讨论情节、生成规划和提出修订�
 
 ### 2. 下载、安装与升级
 
-在 [0.4.1 发布页](https://github.com/MC-freshman/ai-novel-writing-platform/releases/tag/v0.4.1) 下载适合自己的文件。下面的说明已经包含安装和升级步骤，不需要另找教程。
+在 [0.4.2 发布页](https://github.com/MC-freshman/ai-novel-writing-platform/releases/tag/v0.4.2) 下载适合自己的文件。下面的说明已经包含安装和升级步骤，不需要另找教程。
 
 | 文件 | 用途 | 如何使用 |
 | --- | --- | --- |
-| [AI-Novel-Writing-Platform-Setup-0.4.1-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.4.1/AI-Novel-Writing-Platform-Setup-0.4.1-x64.exe) | Windows 64 位安装版 | 运行安装向导，选择安装位置，之后从桌面或开始菜单打开。适合日常固定使用。 |
-| [AI-Novel-Writing-Platform-Portable-0.4.1-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.4.1/AI-Novel-Writing-Platform-Portable-0.4.1-x64.exe) | Windows 64 位便携版 | 下载后直接运行，程序包含所需运行环境，无需安装 Node.js。项目数据仍保存在独立项目目录。 |
+| [AI-Novel-Writing-Platform-Setup-0.4.2-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.4.2/AI-Novel-Writing-Platform-Setup-0.4.2-x64.exe) | Windows 64 位安装版 | 运行安装向导，选择安装位置，之后从桌面或开始菜单打开。适合日常固定使用。 |
+| [AI-Novel-Writing-Platform-Portable-0.4.2-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.4.2/AI-Novel-Writing-Platform-Portable-0.4.2-x64.exe) | Windows 64 位便携版 | 下载后直接运行，程序包含所需运行环境，无需安装 Node.js。项目数据仍保存在独立项目目录。 |
 | SHA256SUMS.txt | 文件校验 | 与程序一起下载，用 PowerShell 的 `Get-FileHash -Algorithm SHA256` 对照其中的哈希值。 |
 | latest.yml、`.blockmap` | 发布更新元数据 | 普通使用者不需要手动打开；它们用于记录发布包和更新信息，**但请勿从发布目录删除：校验和表依赖它们**。 |
 
@@ -51,9 +51,9 @@ AI 功能用于检索相关资料、讨论情节、生成规划和提出修订�
 
 1. 在旧版中保存当前章节及正在编辑的角色、世界观或小说统筹网。
 2. 使用顶部“更多 → 备份项目”导出备份，保留原项目目录。
-3. 关闭旧版，再运行 0.4.1 安装程序或新的便携程序。
+3. 关闭旧版，再运行 0.4.2 安装程序或新的便携程序。
 4. 在新版中点击“打开”，选择原来的小说项目目录。无需把章节复制进软件安装目录。
-5. 升级后可继续使用既有正文、资料、进度和小说统筹网。若界面仍显示旧样式，确认启动的是新的 0.4.1 文件，而不是旧快捷方式。
+5. 升级后可继续使用既有正文、资料、进度和小说统筹网。若界面仍显示旧样式，确认启动的是新的 0.4.2 文件，而不是旧快捷方式。
 <img width="2125" height="1349" alt="image" src="https://github.com/user-attachments/assets/34eb4a57-6908-4907-baae-dac4307ab09d" />
 <img width="2439" height="1307" alt="70f407d4da00d1339a335bd95fbf257d" src="https://github.com/user-attachments/assets/57e52ebe-95ef-409d-a4c1-3e494dcfd821" />
 
@@ -178,7 +178,7 @@ AI 功能用于检索相关资料、讨论情节、生成规划和提出修订�
 
 **打开后不是我的小说。** 可能打开了默认项目。点击顶部“打开”，选择保存原小说的项目目录，查看左侧底部路径确认位置。
 
-**升级后界面没变。** 检查是否仍在运行旧程序或旧快捷方式。保存并关闭旧版，再打开 0.4.1 的安装版或便携版。
+**升级后界面没变。** 检查是否仍在运行旧程序或旧快捷方式。保存并关闭旧版，再打开 0.4.2 的安装版或便携版。
 
 **想在专注模式里查看任务。** 底部仍显示当前章进度条，点击箭头展开任务说明。可勾选任务、切换状态；`Esc` 返回普通布局。
 
@@ -188,15 +188,13 @@ AI 功能用于检索相关资料、讨论情节、生成规划和提出修订�
 
 **保存提示冲突。** 当前输入可能仍在恢复草稿里。先保留或导出草稿，重新读取最新内容，再对照历史版本；不要通过删除项目文件来绕过保护。
 
-### 11. 0.4.1 本次更新与验证
+### 11. 0.4.2 本次更新与验证
 
-0.4.1 是 0.4.0 的修正版，重点修复原生菜单和输入弹窗，并完成仓库整理。历史版本见[变更日志索引](更新日志.md)。
+0.4.2 完成 P 表全部 30 项功能更新（一期 P73–P91 + 二期 P92–P102）：通用模块框架与模块管理、外部 MCP 接入（自研 31 工具）、外部编辑文件桥、云备份与定时备份、写作目标统计、全书搜索替换（正则+卡片）、专注锁定、分屏参考、TTS 朗读校对、敏感词自查与 AI 复核、AI 台账与创作证据包、文风自查、角色对话、指令模板、图像生成与角色头像、EPUB/PDF/TXT 导出、Obsidian/novelWriter/Scrivener 导入、Ollama 向量预设等。完整清单见[更新日志](更新日志.md)。
 
-- **原生菜单**：修复 preload 未透传菜单动作的问题；文件、编辑、视图、设置中的新建、打开、导入、三种导出、保存、主题、专注、重建索引和设置入口均恢复。
-- **输入弹窗**：Electron不支持 window.prompt；新建项目、AI提问、进度板新建章节/备注、快照改名和创建分支改为应用内输入弹窗，支持必填校验、取消、Esc和焦点围栏。
-- **按钮收口**：静态核对99个TS/TSX文件中的345个按钮元素；只在选中章节显示目录升降级按钮；导图模块不可用时隐藏空弹窗入口；任务中心按任务类型跳转；无可见行、无选中项或无章节时禁用无效批量操作；删除不可达的关系网面板。
-- **结构整理**：`src/components`按`shell`、`writing`、`chat`、`resources`、`story`、`planning`、`analysis`、`ui`分组；历史变更日志归档到`docs/changelog/`，旧方案与验收资料归档到`docs/archive/`。
-- **验证**：完整回归、191项服务单测、33项桌面回归、22项导图/网格、15项菜单/弹窗控件、视觉回归和未注册模块构建启动均通过；生产依赖审计0漏洞；build、lint、typecheck、check:modules、check:services、check:quality、scan:privacy通过。安装器原位升级与卸载仍以GitHub Windows runner的独立验收记录为准；程序未做Authenticode签名。
+- 完整回归 11 套件通过（含真实 Electron 菜单/弹窗控件、未注册模块降级）；82 个服务全部登记测试证据；lint 0 警告；177 个 IPC 通道契约一致。
+- 真机验证：Windows 中文语音可用；PDF 生成含嵌入字体；MCP 打包形态注入验证通过。
+- 新增运行时依赖仅 webdav（MIT）；生产依赖审计 0 漏洞。程序未做 Authenticode 签名。
 
 ### 12. 开发与许可
 
@@ -250,12 +248,12 @@ AI tools retrieve relevant material, discuss plot ideas, prepare plans, and prop
 
 ### 2. Download, install, and upgrade
 
-Download the files from the [0.4.1 release](https://github.com/MC-freshman/ai-novel-writing-platform/releases/tag/v0.4.1). The installation and upgrade instructions are included below.
+Download the files from the [0.4.2 release](https://github.com/MC-freshman/ai-novel-writing-platform/releases/tag/v0.4.2). The installation and upgrade instructions are included below.
 
 | File | Purpose | How to use it |
 | --- | --- | --- |
-| [AI-Novel-Writing-Platform-Setup-0.4.1-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.4.1/AI-Novel-Writing-Platform-Setup-0.4.1-x64.exe) | Windows x64 installer | Run the wizard, choose an installation location, then launch from the desktop or Start menu. Suitable for regular use on one computer. |
-| [AI-Novel-Writing-Platform-Portable-0.4.1-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.4.1/AI-Novel-Writing-Platform-Portable-0.4.1-x64.exe) | Windows x64 portable application | Download and run it directly. The runtime is bundled; Node.js is not required. Your novel remains in a separate project directory. |
+| [AI-Novel-Writing-Platform-Setup-0.4.2-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.4.2/AI-Novel-Writing-Platform-Setup-0.4.2-x64.exe) | Windows x64 installer | Run the wizard, choose an installation location, then launch from the desktop or Start menu. Suitable for regular use on one computer. |
+| [AI-Novel-Writing-Platform-Portable-0.4.2-x64.exe](https://github.com/MC-freshman/ai-novel-writing-platform/releases/download/v0.4.2/AI-Novel-Writing-Platform-Portable-0.4.2-x64.exe) | Windows x64 portable application | Download and run it directly. The runtime is bundled; Node.js is not required. Your novel remains in a separate project directory. |
 | SHA256SUMS.txt | Download verification | Download it alongside the application and compare its entries with PowerShell `Get-FileHash -Algorithm SHA256`. |
 | latest.yml and `.blockmap` | Release/update metadata | Ordinary users do not need to open these files manually. They describe the release artifacts and update information. **Do not delete them from the release directory: the checksum manifest depends on them.** |
 
@@ -272,7 +270,7 @@ This release provides Windows x64 applications. Real Electron interface and writ
 
 1. Save the current chapter and any character, worldbuilding, or planning-network edits in the old version.
 2. Use `更多 → 备份项目` (More → Back up project) and keep the original project directory.
-3. Close the old version, then run the 0.4.1 installer or the new portable executable.
+3. Close the old version, then run the 0.4.2 installer or the new portable executable.
 4. Click `打开` (Open) in the new version and select the existing novel directory. You do not need to copy chapters into the application's installation directory.
 5. Continue using your existing chapters, reference material, progress, and planning networks. If the old interface still appears, check that you launched the new file rather than an old shortcut.
 
@@ -400,7 +398,7 @@ The candidate scan limit and sent-excerpt limit are separate ceilings, not an in
 
 **The application opened an unfamiliar novel.** It may be the default project. Use `打开` to select your existing novel directory and check the path displayed at the bottom of the left panel.
 
-**The interface did not change after upgrading.** Check the executable and shortcut. Save and close the old application, then open the 0.4.1 installed or portable version.
+**The interface did not change after upgrading.** Check the executable and shortcut. Save and close the old application, then open the 0.4.2 installed or portable version.
 
 **I need tasks in focus mode.** The chapter progress strip remains at the bottom. Expand it to read tasks, mark completion, and change status. `Esc` returns to the normal layout.
 
@@ -410,9 +408,13 @@ The candidate scan limit and sent-excerpt limit are separate ceilings, not an in
 
 **Saving reports a conflict.** Current input may still be in a recovery draft. Preserve/export it, reload the latest content, and compare history. Do not delete project files to bypass the protection.
 
-### 11. Changes and validation in 0.4.1
+### 11. Changes and validation in 0.4.2
 
-0.4.1 is a correction release for 0.4.0, focused on native-menu and input-dialog fixes plus repository cleanup. See the [changelog index](更新日志.md) for earlier versions.
+0.4.2 delivers all 30 P-table feature updates (phase 1 P73–P91 + phase 2 P92–P102): a general module framework with module management, external MCP integration (self-built 31-tool server), an external-editor file bridge, cloud backup with scheduling, writing goals and statistics, book-wide search and replace (regex + cards), focus lock, split reference panes, TTS proofreading, sensitive-word self-check with AI review, an AI-assistance ledger with creation-evidence export, style self-check, character chat, prompt templates, image generation with character avatars, EPUB/PDF/TXT export, Obsidian/novelWriter/Scrivener import, and Ollama embedding presets. See the [changelog](更新日志.md) for the full list.
+
+- Full regression (11 suites) passes, including real Electron menu/dialog controls and unregistered-module degradation; all 82 services have registered test evidence; lint reports 0 warnings; all 177 IPC channels match the contract.
+- Real-device checks: Windows Chinese TTS voice available; PDF generation with embedded fonts; MCP packaged-mode injection verified.
+- Only one new runtime dependency (webdav, MIT); production dependency audit reports 0 vulnerabilities. Executables are not Authenticode-signed.
 
 - **Native menu:** preload now forwards the menu action payload; New, Open, Import, the three export actions, Save, Theme, Focus, Rebuild Index and Settings all trigger their real handlers again.
 - **Input dialogs:** Electron does not support `window.prompt`. New project, AI selection questions, progress-board chapter creation and notes, snapshot rename and branch creation now use an in-app prompt with validation, cancel, Escape, and focus trapping.

@@ -13,11 +13,14 @@ const { sanitizeFileName } = require("../../services/project-files.cjs");
 const { saveCredentialSecrets } = require("../../services/credentials.cjs");
 const { sendRendererEvent, state } = require("../../services/runtime-state.cjs");
 const { withProjectTransaction } = require("../../services/project-storage.cjs");
+const importProviders = require("../../services/import-providers.cjs");
+const cloudBackup = require("../../services/cloud-backup.cjs");
 
 module.exports = {
   buildAppState,
   switchCurrentProject,
   calculateTotalWords,
+  cloudBackup,
   configFromRenderer,
   createBackup,
   dialog,
@@ -25,6 +28,7 @@ module.exports = {
   exportBookDocumentsToDirectory,
   exportProjectExchange,
   getProjectTaskCenter,
+  importProviders,
   importDocumentIntoProject,
   importProjectExchange,
   indexSources,

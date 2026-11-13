@@ -41,6 +41,8 @@ export interface CharacterCard {
   notes: string;
   fileName?: string;
   updatedAt: string;
+  /** 头像（P95）：项目 materials/images 下的相对路径。 */
+  avatar?: string;
 }
 
 export interface WorldDoc {

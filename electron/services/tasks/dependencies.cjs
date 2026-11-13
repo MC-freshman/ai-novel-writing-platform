@@ -9,6 +9,14 @@ const { state, sendRendererEvent } = require("../runtime-state.cjs");
 const __dep0 = require("../project-files.cjs");
 const fs = require("node:fs/promises");
 
+function executeBookReplace(...args) {
+  return require("../project-search.cjs").executeReplace(...args);
+}
+
+function generateImage(...args) {
+  return require("../image-gen.cjs").generate(...args);
+}
+
 function nowIso(...args) {
   return __dep0.nowIso.apply(null, args);
 }
@@ -124,4 +132,6 @@ module.exports = {
   getCreativeWorkspaceView,
   executeCreativeAgentRun,
   loadConfig,
+  executeBookReplace,
+  generateImage,
 };

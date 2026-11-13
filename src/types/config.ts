@@ -40,6 +40,18 @@ export interface UiConfig {
   recoveryEnabled: boolean;
   /** 关闭后只停用导图界面，导图数据保留。 */
   mindMapEnabled?: boolean;
+  /** 每日字数目标（P75）；0 或缺省=关闭目标与连续天数。 */
+  dailyWordGoal?: number;
+  /** 专注锁定（P86）：进入专注时设定目标，退出需确认；默认关闭，紧急退出始终可用。 */
+  focusLockEnabled?: boolean;
+}
+
+/** 专注锁定会话（P86）：目标字数/分钟（0=不限），起点字数用于计算净增。 */
+export interface FocusLockSession {
+  goalWords: number;
+  goalMinutes: number;
+  startedAt: number;
+  startWords: number;
 }
 
 export interface AgentConfig {
@@ -64,6 +76,8 @@ export interface NovelConfig {
   api: ApiConfig;
   ui: UiConfig;
   agent: AgentConfig;
+  /** 模块开关（P73）：缺省=启用；mindmap 槽兼容旧 ui.mindMapEnabled 字段。 */
+  modules?: Record<string, { enabled?: boolean }>;
   stats: {
     todayDate: string;
     todayWords: number;

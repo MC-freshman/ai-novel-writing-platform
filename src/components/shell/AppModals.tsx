@@ -2,9 +2,15 @@ import type {
   AppState,
   BackgroundTask,
 } from "../../types";
+import type { AppStores } from "../../stores/app-stores";
+import { useStoreField } from "../../stores/use-app-stores";
 import type { CreativeWorkspaceTab } from "../story/CreativeWorkspace";
 import type { StoryCenterTab } from "../story/StoryCenterModal";
 import { QuickPanelModal } from "./QuickPanelModal";
+import { NameGeneratorModal } from "./NameGeneratorModal";
+import { ImportProjectModal } from "./ImportProjectModal";
+import { FileBridgeModal } from "./FileBridgeModal";
+import { ImageGenModal } from "./ImageGenModal";
 import { PromptDialog } from "./PromptDialog";
 import { SettingsModal } from "./SettingsModal";
 import { StoryCenterModal } from "../story/StoryCenterModal";
@@ -12,6 +18,7 @@ import { TaskCenterDrawer } from "./TaskCenterDrawer";
 
 export function AppModals({
   state,
+  stores,
   selectedChapterId,
   selectedText,
   chapterRevision,
@@ -26,6 +33,7 @@ export function AppModals({
   onCloseSettings,
   onSaveSettings,
   onCloseQuickPanel,
+  onOpenTemplates,
   onOpenView,
   onOpenProgress,
   onImportDocument,
@@ -46,6 +54,7 @@ export function AppModals({
   onBeforeDisableMindMap,
 }: {
   state: AppState;
+  stores: AppStores;
   selectedChapterId: string;
   selectedText: string;
   chapterRevision: string;
@@ -60,6 +69,7 @@ export function AppModals({
   onCloseSettings: () => void;
   onSaveSettings: (state: AppState) => void;
   onCloseQuickPanel: () => void;
+  onOpenTemplates: () => void;
   onOpenView: (
     view: "chapters" | "characters" | "world" | "knowledge" | "analysis",
   ) => void;
@@ -81,6 +91,14 @@ export function AppModals({
   onOpenStoryCenter: (tab: "facts" | "board") => void;
   onBeforeDisableMindMap?: () => Promise<boolean>;
 }) {
+  const [showNameGen, setShowNameGen] = useStoreField(stores.navigation, "showNameGen");
+  const [showImportProject, setShowImportProject] = useStoreField(stores.navigation, "showImportProject");
+  const [showFileBridge, setShowFileBridge] = useStoreField(stores.navigation, "showFileBridge");
+  const [showImageGen, setShowImageGen] = useStoreField(stores.navigation, "showImageGen");
+  const openModal = (setter: (value: boolean) => void) => {
+    onCloseQuickPanel();
+    setter(true);
+  };
   return (
     <>
       {showSettings && (
@@ -97,6 +115,11 @@ export function AppModals({
           state={state}
           currentView={view}
           onClose={onCloseQuickPanel}
+          onOpenTemplates={onOpenTemplates}
+          onOpenNameGen={() => openModal(setShowNameGen)}
+          onOpenImportProject={() => openModal(setShowImportProject)}
+          onOpenFileBridge={() => openModal(setShowFileBridge)}
+          onOpenImageGen={() => openModal(setShowImageGen)}
           onOpenView={onOpenView}
           onOpenProgress={onOpenProgress}
           onImport={onImportDocument}
@@ -132,6 +155,10 @@ export function AppModals({
           onStatus={onStatus}
         />
       )}
+      {showNameGen && <NameGeneratorModal onClose={() => setShowNameGen(false)} onStatus={onStatus} />}
+      {showImportProject && <ImportProjectModal onClose={() => setShowImportProject(false)} onStatus={onStatus} />}
+      {showFileBridge && <FileBridgeModal state={state} onClose={() => setShowFileBridge(false)} onStatus={onStatus} />}
+      {showImageGen && <ImageGenModal state={state} onClose={() => setShowImageGen(false)} onStatus={onStatus} />}
       <PromptDialog />
     </>
   );

@@ -11,9 +11,13 @@ const {
   path,
   releasePrivacy,
   state,
+  ttsConfig,
 } = require("../domain-dependencies/application.cjs");
 
 function registerDomain() {
+  registerIpcHandler("tts:get-config", async () => ttsConfig.getConfig());
+
+  registerIpcHandler("tts:save-config", async (_event, payload) => ttsConfig.saveConfig(payload || {}));
   registerIpcHandler("app:get-state", async () => {
     const projectPath = await ensureCurrentProject();
     return buildAppState(projectPath);

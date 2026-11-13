@@ -7,8 +7,9 @@ import { appPrompt } from "../../lib/app-prompt";
 import { useDialogFocus } from "../../hooks/useDialogFocus";
 import { CreativeWorkspace } from "./CreativeWorkspace";
 import type { CreativeWorkspaceTab } from "./CreativeWorkspace";
+import { AiLedgerPanel } from "./AiLedgerPanel";
 
-export type StoryCenterTab = "facts" | "characters" | "foreshadows" | "board" | "snapshots" | "workspace";
+export type StoryCenterTab = "facts" | "characters" | "foreshadows" | "board" | "snapshots" | "workspace" | "ledger";
 
 export function StoryCenterModal({
   state,
@@ -488,6 +489,7 @@ export function StoryCenterModal({
     { id: "board", label: "下一章筹备", count: board?.items.length },
     { id: "snapshots", label: "快照与分支", count: snapshots.length },
     { id: "workspace", label: "创作工作台", count: (overview?.counts.boards || 0) + (overview?.counts.foreshadows || 0) },
+    { id: "ledger", label: "AI 台账" },
   ];
 
   return (
@@ -669,6 +671,9 @@ export function StoryCenterModal({
               onOpenChapter={onOpenChapter}
               onStatus={onStatus}
             />
+          )}
+          {tab === "ledger" && (
+            <AiLedgerPanel state={state} onStatus={onStatus} onOpenChapter={onOpenChapter} />
           )}
         </div>
         {entryEditor && (

@@ -1,6 +1,7 @@
 import { FileDown, Wand2 } from "lucide-react";
 import { contentToPlainText } from "../../lib/text-utils";
 import { ExperimentalTools } from "./ExperimentalTools";
+import { MultiFormatExport } from "./MultiFormatExport";
 import type { AnalysisContext } from "./context";
 
 export function ExportPanel(
@@ -18,6 +19,7 @@ export function ExportPanel(
     | "materials"
     | "onExportBook"
     | "onExportBookWithOptions"
+    | "onStatus"
     | "prepareWorldCandidates"
     | "saveMaterialDraft"
     | "saveSelectedCandidates"
@@ -43,6 +45,7 @@ export function ExportPanel(
     materials,
     onExportBook,
     onExportBookWithOptions,
+    onStatus,
     prepareWorldCandidates,
     saveMaterialDraft,
     saveSelectedCandidates,
@@ -199,6 +202,7 @@ export function ExportPanel(
           ))}
         </div>
       )}
+      <MultiFormatExport onStatus={onStatus} />
       <details className="experimental-card">
         <summary>试验功能</summary>
         <ExperimentalTools

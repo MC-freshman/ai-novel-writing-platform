@@ -4,8 +4,10 @@ const { ensureCurrentProject } = require("../../services/project-config.cjs");
 const { getStoryOverviewForProject, refreshLocalStoryState } = require("../../services/analysis-tools.cjs");
 const { loadConfig } = require("../../services/project-ops.cjs");
 const storyState = require("../../services/story-state.cjs");
+const aiLedger = require("../../services/ai-ledger.cjs");
 
 module.exports = {
+  aiLedger,
   ensureCurrentProject,
   getStoryOverviewForProject,
   loadConfig,

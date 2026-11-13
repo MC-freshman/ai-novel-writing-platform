@@ -1,40 +1,38 @@
-import { useSyncExternalStore } from "react";
+// 思维导图模块注册表：委托通用注册表（P73），对外 API 与 window.novelModules 契约保持不变。
+import { createModuleRegistry, declareModuleSlot } from "../core/registry";
 import type { MindMapModule } from "./contract";
 
-let registeredModule: MindMapModule | null = null;
-let unloadGuard: (() => Promise<boolean>) | null = null;
-const listeners = new Set<() => void>();
+const registry = createModuleRegistry<MindMapModule>();
 
-function emit() {
-  for (const listener of listeners) listener();
-}
+declareModuleSlot({
+  id: "mindmap",
+  label: "思维导图",
+  description: "规划与进度中的思维导图视图；停用后入口显示提示，导图数据保留。",
+  toggleLabel: "启用内置思维导图模块",
+});
 
 export function registerMindMapModule(module: MindMapModule | null) {
-  registeredModule = module;
-  emit();
+  registry.register(module);
 }
 
 export function getMindMapModule(): MindMapModule | null {
-  return registeredModule;
+  return registry.get();
 }
 
 export async function unregisterMindMapModule(): Promise<boolean> {
-  if (unloadGuard && !(await unloadGuard())) return false;
-  registerMindMapModule(null);
-  return true;
+  return registry.unregister();
 }
 
 export function setMindMapModuleUnloadGuard(guard: (() => Promise<boolean>) | null) {
-  unloadGuard = guard;
+  registry.setUnloadGuard(guard);
 }
 
 export function subscribeMindMapModule(listener: () => void) {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
+  return registry.subscribe(listener);
 }
 
 export function useMindMapModule(): MindMapModule | null {
-  return useSyncExternalStore(subscribeMindMapModule, getMindMapModule, () => null);
+  return registry.useModule();
 }
 
 declare global {

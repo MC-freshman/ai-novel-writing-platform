@@ -72,8 +72,8 @@ export function useAppChat(
     saveChatDraft(nextSessions, activeId);
   }
 
-  function createChatSession() {
-    const session = makeChatSession();
+  function createChatSession(persona?: { characterId: string; name: string }) {
+    const session = makeChatSession(persona ? `与${persona.name}对话` : "新会话", [], persona);
     const nextSessions = keepRecentChatSessions(
       [session, ...chatState().chatSessions],
       session.id,
@@ -82,7 +82,7 @@ export function useAppChat(
     setActiveChatSessionId(session.id);
     setChatMessages([]);
     saveChatDraft(nextSessions, session.id);
-    setStatus("已新建 AI 会话");
+    setStatus(persona ? `已新建与「${persona.name}」的角色对话（虚构推演，不写正文）` : "已新建 AI 会话");
   }
 
   function switchChatSession(sessionId: string) {
@@ -170,6 +170,7 @@ export function useAppChat(
         retrievalMode,
         selectedChapterId: selectedChapter?.id || "",
         additionalSourceIds,
+        persona: chatState().chatSessions.find((session) => session.id === chatState().activeChatSessionId)?.persona,
       });
       if (
         !isCurrentEpoch(stores, requestEpoch) ||

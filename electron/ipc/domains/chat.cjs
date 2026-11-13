@@ -2,15 +2,18 @@
 const { registerIpcHandler } = require("../register.cjs");
 const {
   buildChatRetrievalPackage,
+  buildPersonaPrompt,
   buildProjectMemorySummary,
   buildSystemPrompt,
   callChatApi,
   contextFromChunks,
   ensureCurrentProject,
   loadAnalysisState,
+  loadCharacters,
   loadConfig,
   makeId,
   nowIso,
+  promptTemplates,
   saveAnalysisState,
   sendRendererEvent,
   state,
@@ -63,6 +66,14 @@ function registerDomain() {
       retrieval,
       inventorySummary,
     });
+    // P83 角色对话：persona 会话追加角色扮演提示（虚构推演，不写正文）。
+    let finalSystemPrompt = systemPrompt;
+    if (payload?.persona?.characterId) {
+      const characters = await loadCharacters(projectPath);
+      const character = characters.find((item) => item.id === String(payload.persona.characterId));
+      const personaPrompt = buildPersonaPrompt(character);
+      if (personaPrompt) finalSystemPrompt = `${systemPrompt}\n${personaPrompt}`;
+    }
 
     let streamedChars = 0;
     let partialAnswer = "";
@@ -81,7 +92,7 @@ function registerDomain() {
     try {
       const answer = await callChatApi(
         config,
-        systemPrompt,
+        finalSystemPrompt,
         question,
         payload.history || [],
         {
@@ -166,6 +177,31 @@ function registerDomain() {
     if (!controller) return { canceled: false };
     controller.abort(new Error("user-canceled"));
     return { canceled: true };
+  });
+
+  registerIpcHandler("templates:list", async () => {
+    const projectPath = await ensureCurrentProject();
+    return promptTemplates.listTemplates(projectPath);
+  });
+
+  registerIpcHandler("templates:save", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return promptTemplates.saveTemplate(projectPath, payload || {});
+  });
+
+  registerIpcHandler("templates:delete", async (_event, templateId) => {
+    const projectPath = await ensureCurrentProject();
+    return promptTemplates.deleteTemplate(projectPath, String(templateId || ""));
+  });
+
+  registerIpcHandler("templates:export", async () => {
+    const projectPath = await ensureCurrentProject();
+    return promptTemplates.exportTemplates(projectPath);
+  });
+
+  registerIpcHandler("templates:import", async () => {
+    const projectPath = await ensureCurrentProject();
+    return promptTemplates.importTemplates(projectPath);
   });
 }
 module.exports = { registerDomain };

@@ -8,6 +8,7 @@ const operationJournal = require("../../services/operation-journal.cjs");
 const path = require("node:path");
 const releasePrivacy = require("../../services/release-privacy.cjs");
 const { state } = require("../../services/runtime-state.cjs");
+const ttsConfig = require("../../services/tts-config.cjs");
 
 module.exports = {
   IPC_DIRECTORY,
@@ -20,4 +21,5 @@ module.exports = {
   path,
   releasePrivacy,
   state,
+  ttsConfig,
 };

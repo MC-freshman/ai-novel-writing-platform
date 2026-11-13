@@ -1,6 +1,7 @@
 import { Search } from "lucide-react";
 import { sourceLabel } from "../../lib/text-utils";
 import { InlineFeedback } from "../ui/InlineFeedback";
+import { BookReplace } from "./BookReplace";
 import type { AnalysisContext } from "./context";
 
 export function SearchPanel(
@@ -8,8 +9,10 @@ export function SearchPanel(
     AnalysisContext,
     | "busy"
     | "onOpenSource"
+    | "onStatus"
     | "query"
     | "runSearch"
+    | "saveCurrentPage"
     | "searchError"
     | "searchResults"
     | "searchedQuery"
@@ -19,8 +22,10 @@ export function SearchPanel(
   const {
     busy,
     onOpenSource,
+    onStatus,
     query,
     runSearch,
+    saveCurrentPage,
     searchError,
     searchResults,
     searchedQuery,
@@ -81,6 +86,7 @@ export function SearchPanel(
           </div>
         )}
       </div>
+      <BookReplace onStatus={onStatus} saveCurrentPage={saveCurrentPage} />
     </div>
   );
 }

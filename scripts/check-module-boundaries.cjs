@@ -26,6 +26,16 @@ if (/modules\/mindmap\/builtin/.test(source("src/components/planning/ProgressWor
   throw Error("导图宿主不得静态依赖内置模块，必须通过注册表挂载");
 if (!/registerMindMapModule\(builtinMindMapModule\)/.test(source("src/main.tsx")))
   throw Error("内置导图模块必须通过注册表显式注册");
+// P73 泛化模块边界：任何宿主组件不得静态导入任何槽位的内置实现；通用注册表必须存在。
+function walkComponents(directory) {
+  return fs.readdirSync(path.join(root, directory), { withFileTypes: true }).flatMap((entry) =>
+    entry.isDirectory() ? walkComponents(`${directory}/${entry.name}`) : /\.(tsx|ts)$/.test(entry.name) ? [`${directory}/${entry.name}`] : []);
+}
+for (const file of walkComponents("src/components"))
+  if (/modules\/[a-z0-9-]+\/builtin/.test(source(file)))
+    throw Error(`模块宿主不得静态依赖内置实现，必须通过注册表挂载: ${file}`);
+if (!fs.existsSync(path.join(root, "src/modules/core/registry.ts")))
+  throw Error("缺少通用模块注册表 src/modules/core/registry.ts");
 const domains = fs
   .readdirSync(path.join(root, "electron/ipc/domains"))
   .filter((f) => f.endsWith(".cjs"));

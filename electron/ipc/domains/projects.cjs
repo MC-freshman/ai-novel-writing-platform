@@ -11,6 +11,8 @@ const {
   exportBookDocumentsToDirectory,
   exportProjectExchange,
   getProjectTaskCenter,
+  importProviders,
+  cloudBackup,
   importDocumentIntoProject,
   importProjectExchange,
   indexSources,
@@ -43,6 +45,54 @@ async function switchProjectAndBuild(target, title) {
 }
 
 function registerDomain() {
+  registerIpcHandler("import:preview-vault", async () => importProviders.previewVaultImport());
+
+  registerIpcHandler("import:run-vault", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return importProviders.runVaultImport(projectPath, payload || {});
+  });
+
+  registerIpcHandler("import:preview-nwx", async () => importProviders.previewNwxImport());
+
+  registerIpcHandler("import:run-nwx", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return importProviders.runNwxImport(projectPath, payload || {});
+  });
+
+  registerIpcHandler("import:preview-scriv", async () => importProviders.previewScrivImport());
+
+  registerIpcHandler("import:run-scriv", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return importProviders.runScrivImport(projectPath, payload || {});
+  });
+
+  registerIpcHandler("backup:cloud-status", async () => {
+    const projectPath = await ensureCurrentProject();
+    return cloudBackup.getStatus(projectPath);
+  });
+
+  registerIpcHandler("backup:cloud-save-settings", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return cloudBackup.saveSettings(projectPath, payload || {});
+  });
+
+  registerIpcHandler("backup:cloud-upload", async () => {
+    const projectPath = await ensureCurrentProject();
+    return cloudBackup.upload(projectPath);
+  });
+
+  registerIpcHandler("backup:cloud-list", async () => {
+    const projectPath = await ensureCurrentProject();
+    return cloudBackup.list(projectPath);
+  });
+
+  registerIpcHandler("backup:cloud-restore", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return cloudBackup.restorePreview(projectPath, payload || {});
+  });
+
+  registerIpcHandler("backup:cloud-schedule", async (_event, payload) => cloudBackup.saveSchedule(payload || {}));
+
   registerIpcHandler("project:create", async (_event, payload) => {
     const result = await dialog.showOpenDialog(state.mainWindow, {
       title: "选择新小说项目保存位置",

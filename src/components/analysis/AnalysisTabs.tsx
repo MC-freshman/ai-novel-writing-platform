@@ -1,10 +1,13 @@
 import {
+  BarChart3,
   FileDown,
   FileText,
   ListTree,
   LayoutGrid,
   RefreshCcw,
   Search,
+  ShieldCheck,
+  Waves,
 } from "lucide-react";
 import type { AnalysisTab } from "../../types";
 
@@ -16,6 +19,9 @@ const ANALYSIS_TABS: { key: AnalysisTab; label: string; Icon: typeof LayoutGrid 
     { key: "consistency", label: "一致性", Icon: RefreshCcw },
     { key: "versions", label: "版本对比", Icon: FileText },
     { key: "export", label: "导出/提取", Icon: FileDown },
+    { key: "writing", label: "写作统计", Icon: BarChart3 },
+    { key: "sensitive", label: "敏感词自查", Icon: ShieldCheck },
+    { key: "style", label: "文风自查", Icon: Waves },
   ];
 
 export function AnalysisTabs({

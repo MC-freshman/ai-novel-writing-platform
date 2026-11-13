@@ -7,6 +7,9 @@ import { TimelinePanel } from "./TimelinePanel";
 import { ConsistencyPanel } from "./ConsistencyPanel";
 import { VersionsPanel } from "./VersionsPanel";
 import { ExportPanel } from "./ExportPanel";
+import { WritingStatsPanel } from "./WritingStatsPanel";
+import { SensitivePanel } from "./SensitivePanel";
+import { StylePanel } from "./StylePanel";
 
 export function AnalysisPanel(props: AnalysisPanelProps) {
   const context = useAnalysisContext(props);
@@ -22,6 +25,9 @@ export function AnalysisPanel(props: AnalysisPanelProps) {
       {tab === "consistency" && <ConsistencyPanel {...context} />}
       {tab === "versions" && <VersionsPanel {...context} />}
       {tab === "export" && <ExportPanel {...context} />}
+      {tab === "writing" && <WritingStatsPanel {...context} />}
+      {tab === "sensitive" && <SensitivePanel {...context} />}
+      {tab === "style" && <StylePanel {...context} />}
     </section>
   );
 }

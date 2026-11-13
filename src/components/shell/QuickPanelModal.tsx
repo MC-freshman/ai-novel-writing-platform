@@ -1,5 +1,5 @@
 // Extracted from src/App.tsx by the P3 refactor (cut-paste, no logic changes).
-import { BookOpen, Boxes, Download, FileDown, ListTree, RefreshCcw, Search, Settings, Upload, UserRound } from "lucide-react";
+import { BookOpen, Boxes, Download, ExternalLink, FileDown, FolderInput, ImagePlus, ListTree, RefreshCcw, Search, Settings, Shuffle, Sparkles, Upload, UserRound } from "lucide-react";
 import type { AppState } from "../../types";
 import { useDialogFocus } from "../../hooks/useDialogFocus";
 
@@ -9,6 +9,11 @@ export function QuickPanelModal({
   onClose,
   onOpenView,
   onOpenProgress,
+  onOpenTemplates,
+  onOpenNameGen,
+  onOpenImportProject,
+  onOpenFileBridge,
+  onOpenImageGen,
   onImport,
   onExportChapter,
   onExportBook,
@@ -21,6 +26,11 @@ export function QuickPanelModal({
   onClose: () => void;
   onOpenView: (view: "chapters" | "characters" | "world" | "knowledge" | "analysis") => void;
   onOpenProgress: (tool: "mindmap" | "network" | "grid") => void;
+  onOpenTemplates: () => void;
+  onOpenNameGen: () => void;
+  onOpenImportProject: () => void;
+  onOpenFileBridge: () => void;
+  onOpenImageGen: () => void;
   onImport: () => void;
   onExportChapter: () => void;
   onExportBook: () => void;
@@ -67,6 +77,26 @@ export function QuickPanelModal({
           <button onClick={() => onOpenProgress("network")}>
             <Boxes size={17} />
             小说统筹网
+          </button>
+          <button onClick={onOpenTemplates}>
+            <Sparkles size={17} />
+            指令模板
+          </button>
+          <button onClick={onOpenNameGen}>
+            <Shuffle size={17} />
+            起名助手
+          </button>
+          <button onClick={onOpenImportProject}>
+            <FolderInput size={17} />
+            导入外部项目
+          </button>
+          <button onClick={onOpenFileBridge}>
+            <ExternalLink size={17} />
+            外部编辑桥
+          </button>
+          <button onClick={onOpenImageGen}>
+            <ImagePlus size={17} />
+            图像生成
           </button>
           <button onClick={onImport}>
             <Upload size={17} />

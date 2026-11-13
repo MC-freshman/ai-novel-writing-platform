@@ -7,6 +7,7 @@ import { useStoreField } from "../../stores/use-app-stores";
 import { sourceLabel, formatDateTime, getErrorMessage } from "../../lib/text-utils";
 import { QUICK_PROMPTS, RETRIEVAL_MODE_OPTIONS } from "../../lib/chat-utils";
 import { SidebarCreativeAdvisor } from "./SidebarCreativeAdvisor";
+import { PromptTemplatesModal } from "./PromptTemplatesModal";
 
 export function ChatPanel({
   state,
@@ -58,6 +59,8 @@ export function ChatPanel({
   const [input, setInput] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState("");
   const [assistantTab, setAssistantTab] = useState<"chat" | "advisor">("chat");
+  const [showTemplates, setShowTemplates] = useState(false);
+  const [promptTemplatesOpenRequest] = useStoreField(stores.navigation, "promptTemplatesOpenRequest");
   const [supplementSourceByMessage, setSupplementSourceByMessage] = useState<Record<string, string>>({});
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -69,6 +72,13 @@ export function ChatPanel({
   useEffect(() => {
     if (chatOpenRequest > 0) setAssistantTab("chat");
   }, [chatOpenRequest]);
+
+  useEffect(() => {
+    if (promptTemplatesOpenRequest > 0) {
+      setAssistantTab("chat");
+      setShowTemplates(true);
+    }
+  }, [promptTemplatesOpenRequest]);
 
   function submit() {
     const value = input.trim();
@@ -163,6 +173,11 @@ export function ChatPanel({
                 </option>
               ))}
             </select>
+            {sessions.find((session) => session.id === activeSessionId)?.persona && (
+              <span className="persona-badge" title="虚构推演对话，不代表正文事实，不写入正文">
+                角色对话 · {sessions.find((session) => session.id === activeSessionId)?.persona?.name}
+              </span>
+            )}
             <button onClick={onNewSession} title="新建 AI 会话" disabled={generating}>
               新会话
             </button>
@@ -356,7 +371,10 @@ export function ChatPanel({
           </div>
 
           <div className="chat-input">
-            <label htmlFor="novel-ai-question">聊聊你的故事 <span>Ctrl + Enter 发送</span></label>
+            <div className="chat-input-head">
+              <label htmlFor="novel-ai-question">聊聊你的故事 <span>Ctrl + Enter 发送</span></label>
+              <button type="button" className="chat-templates-button" onClick={() => setShowTemplates(true)} title="打开指令模板库">模板</button>
+            </div>
             <textarea
               id="novel-ai-question"
               ref={inputRef}
@@ -374,6 +392,20 @@ export function ChatPanel({
         </div>
       ) : (
         <SidebarCreativeAdvisor state={state} selectedChapterId={selectedChapterId} selectedText={selectedText} selectedTextRevision={state.chapterRevision || ""} onStatus={onStatus} />
+      )}
+      {showTemplates && (
+        <PromptTemplatesModal
+          state={state}
+          selectedChapterId={selectedChapterId}
+          selectedText={selectedText}
+          onApply={(text) => {
+            setAssistantTab("chat");
+            setInput(text);
+            inputRef.current?.focus();
+          }}
+          onClose={() => setShowTemplates(false)}
+          onStatus={onStatus}
+        />
       )}
     </aside>
   );

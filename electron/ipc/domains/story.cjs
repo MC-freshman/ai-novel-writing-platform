@@ -1,6 +1,7 @@
 "use strict";
 const { registerIpcHandler } = require("../register.cjs");
 const {
+  aiLedger,
   ensureCurrentProject,
   getStoryOverviewForProject,
   loadConfig,
@@ -9,6 +10,16 @@ const {
 } = require("../domain-dependencies/story.cjs");
 
 function registerDomain() {
+  registerIpcHandler("ledger:get-overview", async () => {
+    const projectPath = await ensureCurrentProject();
+    return aiLedger.getOverview(projectPath);
+  });
+
+  registerIpcHandler("ledger:export-evidence", async (_event, payload) => {
+    const projectPath = await ensureCurrentProject();
+    return aiLedger.exportEvidence(projectPath, payload || {});
+  });
+
   registerIpcHandler("story:get-overview", async (_event, payload) => {
     const projectPath = await ensureCurrentProject();
     return getStoryOverviewForProject(projectPath, payload || {});

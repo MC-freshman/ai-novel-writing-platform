@@ -10,7 +10,7 @@ import type {
   ChatSession,
 } from "../types";
 import type { CreativeWorkspaceTab } from "../components/story/CreativeWorkspace";
-import type { MouseEvent } from "react";
+import type { MouseEvent, ReactNode } from "react";
 
 export type ChapterSaveDraft = {
   chapterId: string;
@@ -83,7 +83,7 @@ export type AppContext = AppBindings &
       nextMemory?: string,
     ) => void;
     updateCurrentChat: (nextMessages: ChatMessage[]) => void;
-    createChatSession: () => void;
+    createChatSession: (persona?: { characterId: string; name: string }) => void;
     switchChatSession: (sessionId: string) => void;
     clearCurrentChat: () => void;
     updateProjectMemory: (value: string) => void;
@@ -130,4 +130,7 @@ export type AppContext = AppBindings &
       kind: "preview" | "left" | "right",
       event: MouseEvent<HTMLDivElement, MouseEvent>,
     ) => void;
+    focusDialogsOpen: boolean;
+    clearFocusLock: () => void;
+    focusLockDialogs: ReactNode;
   };

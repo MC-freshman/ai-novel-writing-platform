@@ -473,3 +473,94 @@
   min-height: 28px;
 }
 
+
+/* AI 辅助台账（P78） */
+.ai-ledger-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px 16px;
+  overflow: auto;
+}
+
+.ai-ledger-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ai-ledger-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  font-size: 11px;
+}
+
+.ai-ledger-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.ai-ledger-summary {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ai-ledger-summary strong {
+  color: var(--text);
+}
+
+.ai-ledger-table-wrap {
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.ai-ledger-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.ai-ledger-table th,
+.ai-ledger-table td {
+  padding: 6px 9px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.ai-ledger-table th {
+  color: var(--muted);
+  background: var(--panel);
+}
+
+.ai-ledger-table td button {
+  font-size: 11px;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ai-ledger-norecord {
+  color: var(--muted);
+}
+
+.ai-ledger-export {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.ai-ledger-export button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+}

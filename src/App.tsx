@@ -38,6 +38,7 @@ export default function App() {
     captureSelection,
     changeView,
     chapterContent,
+    clearFocusLock,
     chapterRevision,
     chapterTitle,
     chapterVolume,
@@ -62,6 +63,7 @@ export default function App() {
     findNextInChapter,
     findText,
     focusMode,
+    focusLockDialogs,
     generateCharactersFromOutline,
     generateWorldFromOutline,
     handleRichEditorReady,
@@ -96,6 +98,7 @@ export default function App() {
     selectedChapter,
     selectedText,
     sendChat,
+    setAiChatOpenRequest,
     setAiExpanded,
     setBackgroundTasks,
     setChapterContent,
@@ -110,6 +113,7 @@ export default function App() {
     setPreview,
     setProgressOpenMode,
     setProgressOpenRequest,
+    setPromptTemplatesOpenRequest,
     setReplaceText,
     setRightWidth,
     setSelectedText,
@@ -204,6 +208,7 @@ export default function App() {
   };
 
   const applyTopBarLayout = (nextLayout: TopBarLayout) => {
+    clearFocusLock();
     if (nextLayout === "writing") {
       setLeftWidth(240);
       setRightWidth(360);
@@ -346,6 +351,7 @@ export default function App() {
           {view === "chapters" && (
             <EditorPanel
               selectedChapter={selectedChapter}
+              onOpenChapter={(chapterId) => void selectChapter(chapterId)}
               chapterTitle={chapterTitle}
               chapterVolume={chapterVolume}
               chapterContent={chapterContent}
@@ -376,6 +382,12 @@ export default function App() {
               onSave={saveCharacter}
               onDelete={deleteCharacter}
               onGenerate={() => void generateCharactersFromOutline()}
+              onChatWithCharacter={(card) => {
+                if (card.id && card.name) {
+                  createChatSession({ characterId: card.id, name: card.name });
+                  showAiChat();
+                }
+              }}
             />
           )}
 
@@ -407,6 +419,7 @@ export default function App() {
               key={state.projectPath}
               state={state}
               onRegisterSave={registerPageSave}
+              saveCurrentPage={saveCurrentPage}
               networkOpenRequest={networkOpenRequest}
               progressOpenRequest={progressOpenRequest}
               progressOpenMode={progressOpenMode}
@@ -483,6 +496,7 @@ export default function App() {
         dirty={dirty}
         currentWords={currentWords}
         todayWords={state.config.stats.todayWords}
+        dailyGoal={state.config.ui.dailyWordGoal || 0}
         totalWords={state.config.stats.totalWords}
         vectorStats={state.vectorStats}
         chatModel={state.config.api.chatModel}
@@ -506,6 +520,8 @@ export default function App() {
         />
       )}
 
+      {focusLockDialogs}
+
       <AppModals
         state={state}
         selectedChapterId={selectedChapter?.id || ""}
@@ -525,6 +541,12 @@ export default function App() {
           setShowSettings(false);
         }}
         onCloseQuickPanel={() => setShowQuickPanel(false)}
+        stores={stores}
+        onOpenTemplates={() => {
+          setShowQuickPanel(false);
+          setPromptTemplatesOpenRequest((value) => value + 1);
+          setAiChatOpenRequest((value) => value + 1);
+        }}
         onOpenView={(nextView) => {
           setShowQuickPanel(false);
           void changeView(nextView);

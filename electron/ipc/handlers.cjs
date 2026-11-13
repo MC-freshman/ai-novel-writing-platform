@@ -66,6 +66,8 @@ function registerIpcHandlers() {
 
   require("./domains/chat.cjs").registerDomain();
 
+  require("./domains/external-mcp.cjs").registerDomain();
+
   // 启动期契约自检：实际注册通道 vs shared/contracts/ipc-channels.cjs。
   verifyIpcContract({
     registered: state.registeredIpcChannels,

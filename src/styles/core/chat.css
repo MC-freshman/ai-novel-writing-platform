@@ -614,3 +614,172 @@
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
+
+/* 指令模板（P82） */
+.chat-input-head {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.chat-input-head label {
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-input .chat-templates-button {
+  height: 24px;
+  align-self: center;
+  padding: 0 9px;
+  font-size: 11px;
+  border-radius: 6px;
+}
+
+.prompt-templates-modal {
+  width: min(680px, 94vw);
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  overflow: auto;
+}
+
+.prompt-templates-modal header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.prompt-templates-modal header > div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.prompt-templates-hint {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.prompt-templates-toolbar {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.prompt-templates-toolbar input {
+  flex: 1;
+  min-width: 140px;
+}
+
+.prompt-templates-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 29px;
+}
+
+.prompt-templates-empty {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+  margin: 0;
+}
+
+.prompt-templates-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  overflow: auto;
+}
+
+.prompt-templates-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: var(--panel);
+}
+
+.prompt-templates-list li > button {
+  min-height: 28px;
+}
+
+.prompt-template-apply {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  padding: 2px 4px;
+}
+
+.prompt-template-apply strong {
+  font-size: 12px;
+}
+
+.prompt-template-apply span {
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prompt-template-delete-confirm {
+  color: var(--danger);
+  font-size: 11px;
+}
+
+.prompt-template-form {
+  display: grid;
+  gap: 8px;
+}
+
+.prompt-template-form textarea {
+  resize: vertical;
+  min-height: 120px;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.prompt-template-variables {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.prompt-template-variables button {
+  min-height: 26px;
+  font-size: 11px;
+  color: var(--accent-strong);
+}
+
+.prompt-template-form-actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* 角色对话标识（P83） */
+.persona-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent-strong);
+  font-size: 10px;
+  white-space: nowrap;
+}

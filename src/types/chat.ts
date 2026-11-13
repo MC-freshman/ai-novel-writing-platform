@@ -15,4 +15,6 @@ export interface ChatSession {
   messages: ChatMessage[];
   createdAt: string;
   updatedAt: string;
+  /** 角色对话模式（P83）：缺省=普通会话。 */
+  persona?: { characterId: string; name: string };
 }

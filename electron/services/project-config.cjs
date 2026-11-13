@@ -88,6 +88,17 @@ function configForRenderer(config) {
 }
 
 
+function mergeModuleFlags(existingModules, patchModules) {
+  if (!existingModules && !patchModules) return undefined;
+  const merged = { ...existingModules };
+  for (const [slot, value] of Object.entries(patchModules || {})) {
+    if (!/^[a-z][a-z0-9-]*$/.test(slot)) continue;
+    if (value && typeof value === "object" && typeof value.enabled === "boolean") merged[slot] = { enabled: value.enabled };
+  }
+  return merged;
+}
+
+
 function configFromRenderer(existingConfig, patch) {
   const api = patch.api || {};
   const ui = patch.ui || {};
@@ -96,6 +107,7 @@ function configFromRenderer(existingConfig, patch) {
   const nextMaxTokens = Math.floor(clampNumber(api.maxTokens ?? existingConfig.api.maxTokens, 1, MAX_CHAT_TOKENS, 8000));
   const nextTopK = Math.floor(clampNumber(api.topK ?? existingConfig.api.topK, 1, MAX_RETRIEVAL_TOP_K, 120));
   const nextScanK = Math.floor(clampNumber(api.scanK ?? existingConfig.api.scanK, nextTopK, MAX_RETRIEVAL_SCAN_K, DEFAULT_RETRIEVAL_SCAN_K));
+  const modules = mergeModuleFlags(existingConfig.modules, patch.modules);
   return {
     ...existingConfig,
     title: patch.title ?? existingConfig.title,
@@ -119,6 +131,7 @@ function configFromRenderer(existingConfig, patch) {
       ...agent,
       permissionLevel: novelAgent.normalizePermission(agent.permissionLevel ?? existingConfig.agent.permissionLevel),
     },
+    ...(modules ? { modules } : {}),
   };
 }
 
@@ -127,6 +140,45 @@ async function getDefaultProjectPath() {
   if (process.env.NOVEL_TEST_PROJECT_PATH) return path.resolve(process.env.NOVEL_TEST_PROJECT_PATH);
   const docs = app.getPath("documents");
   return path.join(docs, "AI小说创作平台", DEFAULT_PROJECT_NAME);
+}
+
+
+function getAppPreferencesPath() {
+  return path.join(app.getPath("userData"), "app-preferences.json");
+}
+
+
+async function readAppPreferences() {
+  try {
+    const parsed = JSON.parse(await fs.readFile(getAppPreferencesPath(), "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+
+async function rememberLastProjectPath(projectPath) {
+  if (process.env.NOVEL_TEST_PROJECT_PATH || process.env.NOVEL_PLATFORM_TEST === "1") return;
+  try {
+    const preferences = await readAppPreferences();
+    const preferencesPath = getAppPreferencesPath();
+    await ensureDir(path.dirname(preferencesPath));
+    await writeFileAtomic(preferencesPath, JSON.stringify({ ...preferences, lastProjectPath: path.resolve(projectPath) }, null, 2));
+  } catch {
+    // 记住上次项目只影响启动便利性，写入失败不阻断项目打开。
+  }
+}
+
+
+async function resolveStartupProjectPath() {
+  if (process.env.NOVEL_TEST_PROJECT_PATH) return path.resolve(process.env.NOVEL_TEST_PROJECT_PATH);
+  const { lastProjectPath } = await readAppPreferences();
+  if (typeof lastProjectPath === "string" && lastProjectPath.trim()) {
+    const resolved = path.resolve(lastProjectPath.trim());
+    if (existsSync(getConfigPath(resolved))) return resolved;
+  }
+  return getDefaultProjectPath();
 }
 
 
@@ -269,6 +321,7 @@ async function switchCurrentProject(projectPath, title) {
     await ensureProjectStructureUnlocked(target, title);
     await activateProjectSession(target);
     state.currentProjectPath = target;
+    await rememberLastProjectPath(target);
     return target;
   });
 }
@@ -315,6 +368,10 @@ const __moduleExports = {
   configForRenderer,
   configFromRenderer,
   getDefaultProjectPath,
+  getAppPreferencesPath,
+  readAppPreferences,
+  rememberLastProjectPath,
+  resolveStartupProjectPath,
   assertExpectedChapterRevision,
   inspectProjectHealth,
   repairProjectHealthUnlocked,

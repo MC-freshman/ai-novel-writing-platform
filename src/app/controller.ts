@@ -10,6 +10,7 @@ import { useAppEntities } from "./entities";
 import { useAppChat } from "./chat";
 import { useAppEditor } from "./editor";
 import { useAppEffects } from "./effects";
+import { useFocusLock } from "../hooks/useFocusLock";
 
 /**
  * Composes the app domain hooks in dependency order and returns the merged
@@ -27,6 +28,7 @@ export function useAppController() {
     ...lifecycle,
     ...savingController,
   });
+  const focusLock = useFocusLock({ stores: bindings.stores, state: bindings.state });
   const recovery = useAppRecovery({
     ...bindings,
     ...refs,
@@ -96,6 +98,8 @@ export function useAppController() {
     ...entities,
     ...chat,
     ...editor,
+    ...focusLock,
+    setFocusMode: focusLock.guardedSetFocusMode,
   });
   return {
     ...bindings,
@@ -109,5 +113,7 @@ export function useAppController() {
     ...entities,
     ...chat,
     ...editor,
+    ...focusLock,
+    setFocusMode: focusLock.guardedSetFocusMode,
   };
 }

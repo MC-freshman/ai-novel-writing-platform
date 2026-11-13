@@ -9,6 +9,7 @@ export function StatusBar({
   dirty,
   currentWords,
   todayWords,
+  dailyGoal = 0,
   totalWords,
   vectorStats,
   chatModel,
@@ -24,6 +25,7 @@ export function StatusBar({
   dirty: boolean;
   currentWords: number;
   todayWords: number;
+  dailyGoal?: number;
   totalWords: number;
   vectorStats: AppState["vectorStats"];
   chatModel: string;
@@ -55,7 +57,7 @@ export function StatusBar({
                 : "知识库 · 保存状态见当前面板"}
       </span>
       <span>当前章节：{currentWords.toLocaleString()} 字</span>
-      <span>今日：{todayWords.toLocaleString()} 字</span>
+      <span>今日：{todayWords.toLocaleString()} 字{dailyGoal > 0 ? ` / ${dailyGoal.toLocaleString()}` : ""}</span>
       <span>总字数：{totalWords.toLocaleString()} 字</span>
       <span>知识库：{vectorStats.chunks} 片段</span>
       {vectorStats.recovery && (

@@ -19,6 +19,7 @@ UI按钮与功能入口审计报告_*.md
 
 # Local project/user data. These may contain API settings, novel drafts, vectors, backups, or imported files.
 小说1材料/
+/项目/
 novel.config.json
 chapters/
 characters/

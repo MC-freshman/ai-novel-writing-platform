@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, Plus, Save, Trash2, UserRound, Wand2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { ChevronDown, ChevronRight, MessageSquare, Plus, Save, Trash2, UserRound, Wand2 } from "lucide-react";
 import type { CharacterCard } from "../../types";
 import { DEFAULT_CATEGORY_LABEL, groupByCategory, splitCategoryPath, type CategoryGroup } from "../../lib/categories";
 import { useEntityDraft, type EntityDraftProps } from "../../hooks/useEntityDraft";
@@ -11,18 +11,34 @@ export function CharacterManager({
   onSave,
   onDelete,
   onGenerate,
+  onChatWithCharacter,
   ...draftProps
 }: {
   cards: CharacterCard[];
   onSave: (card: Partial<CharacterCard>) => Promise<Partial<CharacterCard> | null>;
   onDelete: (id: string) => Promise<boolean>;
   onGenerate: () => void;
+  onChatWithCharacter?: (card: CharacterCard) => void;
 } & Omit<EntityDraftProps<Partial<CharacterCard>>, "onSave">) {
   const { active, update: setActive, select, save, protect, discard, dirty, saving, feedback } = useEntityDraft("character", cards, blankCard, { ...draftProps, onSave });
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
   const [draggingCardId, setDraggingCardId] = useState("");
   const [dragOverCategory, setDragOverCategory] = useState("");
   const [dragHint, setDragHint] = useState("");
+  const [avatarUrl, setAvatarUrl] = useState("");
+  useEffect(() => {
+    let activeFlag = true;
+    setAvatarUrl("");
+    const avatarPath = active.avatar;
+    if (!avatarPath) return;
+    void (async () => {
+      try {
+        const result = await window.novelAPI.readMaterialImage({ path: avatarPath });
+        if (activeFlag) setAvatarUrl(result.dataUrl);
+      } catch { /* 头像缺失时忽略 */ }
+    })();
+    return () => { activeFlag = false; };
+  }, [active.avatar]);
   const groupedCards = useMemo(() => groupByCategory(cards), [cards]);
 
   function updateField(field: keyof CharacterCard, value: string) {
@@ -128,6 +144,7 @@ export function CharacterManager({
         {groupedCards.length ? groupedCards.map((group) => renderCategoryGroup(group)) : <div className="manager-empty">暂无角色卡片</div>}
       </div>
       <div className="form-panel">
+        {avatarUrl && <img className="character-avatar" src={avatarUrl} alt={`${active.name || "角色"}头像`} />}
         <h2 className="form-title">{active.id ? `编辑角色：${active.name || "未命名角色"}` : "新建角色"}</h2>
         <label>
           姓名
@@ -167,6 +184,12 @@ export function CharacterManager({
             <button className="danger" disabled={saving} onClick={() => void (async () => { if (await onDelete(active.id!)) { await discard(); await select(cards.find((card) => card.id !== active.id) || blankCard); } })()}>
               <Trash2 size={16} />
               删除
+            </button>
+          )}
+          {active.id && onChatWithCharacter && (
+            <button disabled={saving} title="以该角色人设开始虚构推演对话（不写正文）" onClick={() => onChatWithCharacter(active as CharacterCard)}>
+              <MessageSquare size={16} />
+              角色对话
             </button>
           )}
         </div>

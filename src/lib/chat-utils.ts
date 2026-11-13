@@ -40,7 +40,7 @@ export function makeMessageId() {
   return `${Date.now().toString(36)}_${Math.random().toString(16).slice(2)}`;
 }
 
-export function makeChatSession(title = "新会话", messages: ChatMessage[] = []): ChatSession {
+export function makeChatSession(title = "新会话", messages: ChatMessage[] = [], persona?: ChatSession["persona"]): ChatSession {
   const now = new Date().toISOString();
   return {
     id: `chat_${makeMessageId()}`,
@@ -48,6 +48,7 @@ export function makeChatSession(title = "新会话", messages: ChatMessage[] = [
     messages,
     createdAt: now,
     updatedAt: now,
+    ...(persona ? { persona } : {}),
   };
 }
 

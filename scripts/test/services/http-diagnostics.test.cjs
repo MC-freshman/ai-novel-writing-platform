@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { listenSafe } = require("../../lib/safe-port.cjs");
 const test = require("node:test");
 const http = require("node:http");
 const { safeEndpointLabel, describeFetchError, fetchJsonWithDiagnostics } = require("../../../electron/services/http-diagnostics.cjs");
@@ -18,7 +19,7 @@ test("fetchJsonWithDiagnostics 成功返回响应，失败附带地址与请求�
     response.writeHead(200, { "Content-Type": "application/json" });
     response.end(JSON.stringify({ ok: true }));
   });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await listenSafe(server);
   t.after(() => new Promise((resolve) => server.close(resolve)));
   const url = `http://127.0.0.1:${server.address().port}/v1/test?secret=1`;
   const { response, bodyBytes } = await fetchJsonWithDiagnostics(url, { ping: "中文" }, { "Content-Type": "application/json" }, "合成接口");

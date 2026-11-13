@@ -255,7 +255,7 @@ export const CollapsibleHeadings = Extension.create<Record<string, never>, { fol
 
 export interface InlineReviewItem {
   id: string;
-  kind: "annotation" | "revision";
+  kind: "annotation" | "revision" | "sensitive";
   quote: string;
   label: string;
   status: string;

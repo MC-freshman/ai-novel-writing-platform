@@ -424,3 +424,138 @@
   gap: 5px;
 }
 
+
+/* TTS 朗读校对（P84） */
+.tts-player {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 7px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 11px;
+}
+
+.tts-player button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 26px;
+  font-size: 11px;
+}
+
+.tts-title {
+  font-weight: 700;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tts-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+}
+
+.tts-control select {
+  max-width: 180px;
+  font-size: 11px;
+}
+
+.tts-status {
+  color: var(--muted);
+}
+
+.tts-current {
+  flex-basis: 100%;
+  margin: 2px 0 0;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.6;
+  max-height: 3.2em;
+  overflow: auto;
+}
+
+/* 分屏参考（P87） */
+.editor-split {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.editor-split > .editor-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.reference-pane {
+  width: 38%;
+  min-width: 240px;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.reference-pane-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 9px;
+  border-bottom: 1px solid var(--line);
+}
+
+.reference-pane-head select {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+}
+
+.reference-pane-head button {
+  min-height: 26px;
+  font-size: 11px;
+}
+
+.reference-pane-body {
+  flex: 1;
+  overflow: auto;
+  padding: 10px 12px;
+}
+
+.reference-pane-body pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+.reference-pane-note {
+  margin: 0;
+  padding: 4px 9px;
+  color: var(--muted);
+  font-size: 10px;
+  border-top: 1px solid var(--line);
+}
+
+/* 敏感词高亮（P97） */
+.inline-review-sensitive {
+  background: color-mix(in srgb, #e6a23c 22%, transparent);
+  border-bottom: 2px dotted #e6a23c;
+  cursor: help;
+}
+
+/* 多参考面板（P99） */
+.editor-split.multi-reference > .editor-body {
+  flex: 1.4;
+}
+
+.editor-split.multi-reference .reference-pane {
+  width: auto;
+  flex: 1;
+  min-width: 180px;
+}

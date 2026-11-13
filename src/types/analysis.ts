@@ -207,4 +207,7 @@ export type AnalysisTab =
   | "relations"
   | "consistency"
   | "versions"
-  | "export";
+  | "export"
+  | "writing"
+  | "sensitive"
+  | "style";

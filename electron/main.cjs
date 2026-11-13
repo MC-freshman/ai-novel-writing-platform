@@ -36,7 +36,7 @@ require("./services/ipc-contract.cjs");
 require("../shared/contracts/ipc-channels.cjs");
 const { state } = require("./services/runtime-state.cjs");
 const { getConfigPath, getChapterPath, contentToPlainText, loadCharacters, loadWorldDocs, loadChapterContent, defaultConfig, getKnowledgeRole } = require("./services/project-files.cjs");
-const { getDefaultProjectPath, assertExpectedChapterRevision, inspectProjectHealth, activateProjectSession, finishProjectSessions } = require("./services/project-config.cjs");
+const { resolveStartupProjectPath, assertExpectedChapterRevision, inspectProjectHealth, activateProjectSession, finishProjectSessions } = require("./services/project-config.cjs");
 const { getKnowledgeSyncStatus, repairKnowledgeSync, getMaintenanceDiagnostics, repairMaintenance, chunkText, compatibleVectorScore, loadVectorStore, loadKnowledgeSummaries, indexSource, rebuildIndex, searchRelevantChunks } = require("./services/knowledge-index.cjs");
 const { buildProjectSourceCatalog, collectPromptMaterials, buildSystemPrompt, buildInventorySummary, buildChatRetrievalPackage } = require("./services/retrieval-pipeline.cjs");
 const { callChatApi, generateCharactersFromOutline, buildCreativeAdvice } = require("./services/ai-generate.cjs");
@@ -260,10 +260,12 @@ if (process.env.NOVEL_PLATFORM_TEST === "1") {
     log("app", "info", "startup", { version: app.getVersion(), electron: process.versions.electron, node: process.versions.node, platform: process.platform });
     setChineseApplicationMenu();
     registerIpcHandlers();
-    state.currentProjectPath = await getDefaultProjectPath();
+    state.currentProjectPath = await resolveStartupProjectPath();
+    log("app", "info", "startup.project", { projectPath: state.currentProjectPath });
     await ensureProjectStructure(state.currentProjectPath);
     await activateProjectSession(state.currentProjectPath);
     await createWindow();
+    require("./services/cloud-backup.cjs").startScheduler();
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
